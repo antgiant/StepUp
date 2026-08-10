@@ -1,0 +1,22 @@
+{
+  "tableName": "REPLACE_WITH_TABLE_NAME_FROM_DISCOVER_SCRIPT",
+  "matchColumn": "Student Full Name",
+  "statusColumn": "Automation Status",
+  "pages": [
+    {
+      "name": "Student Information",
+      "fields": [
+        { "selector": "#firstName", "source": "column", "column": "Student First Name" },
+        { "selector": "#lastName", "source": "column", "column": "Student Last Name" },
+        { "selector": "select#grade", "source": "column", "column": "Grade", "type": "select" },
+        { "selector": "#schoolYear", "source": "fixed", "value": "2026-2027" }
+      ]
+    },
+    {
+      "name": "Required Documents",
+      "fields": [
+        { "selector": "input[type=file]#idUpload", "source": "file", "fileQuery": "birth certificate" }
+      ]
+    }
+  ]
+}
