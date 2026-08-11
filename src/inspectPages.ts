@@ -10,7 +10,7 @@ import { closePrompt, waitForEnter } from "./form/pause.js";
  * config/form-config.json together against the real form.
  */
 async function main() {
-  const { browser, page } = await launchStepUpSession();
+  const { context, page } = await launchStepUpSession();
 
   console.log("Log into StepUp manually in the opened browser window.");
   while (true) {
@@ -23,7 +23,7 @@ async function main() {
   }
 
   closePrompt();
-  await browser.close();
+  await context.close();
 }
 
 main().catch((err) => {

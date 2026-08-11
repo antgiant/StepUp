@@ -1,21 +1,28 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import path from "node:path";
+import { chromium, type BrowserContext, type Page } from "playwright";
 
 const STEPUP_URL = "https://apply.stepupforstudents.org/";
 
+/** Dedicated Chrome profile for this automation only — separate from your everyday browsing.
+ *  Persists across runs (gitignored, stays local). */
+const PROFILE_DIR = path.resolve(process.cwd(), ".chrome-profile");
+
 /**
- * Launches a fresh, headed, non-persistent browser session for the StepUp site.
- * StepUp's own session handling is unreliable (even back-navigation can log you
- * out), so we deliberately do NOT reuse a persistent profile for it — every run
- * starts clean and you log in manually.
+ * Launches a headed session against your real, installed Chrome (not Playwright's bundled
+ * Chromium) using a persistent profile. This is unrelated to StepUp's own login: StepUp's
+ * session handling is unreliable (even back-navigation can log you out), so you still log into
+ * StepUp itself manually every run — only the browser profile persists.
  */
 export async function launchStepUpSession(): Promise<{
-  browser: Browser;
   context: BrowserContext;
   page: Page;
 }> {
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+    channel: "chrome",
+    headless: false,
+    viewport: null,
+  });
+  const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(STEPUP_URL);
-  return { browser, context, page };
+  return { context, page };
 }

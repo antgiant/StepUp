@@ -116,6 +116,15 @@ export async function getTableRows(ref: DriveItemRef, tableName: string): Promis
   return data.value.map((r) => r.values[0]);
 }
 
+/** Appends new rows to the end of a Table. Each entry in `rows` is one row's values in column order. */
+export async function appendTableRows(ref: DriveItemRef, tableName: string, rows: unknown[][]): Promise<void> {
+  if (rows.length === 0) return;
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(tableName)}/rows/add`,
+    { method: "POST", body: JSON.stringify({ values: rows }) }
+  );
+}
+
 /** Reads the header row + all data rows from the sheet's used range, for workbooks without a formal Table object. */
 export async function getUsedRange(
   ref: DriveItemRef,
@@ -149,6 +158,31 @@ export async function findTableRow(
   const rowIndex = rows.findIndex((r) => String(r[colIndex] ?? "").trim() === matchValue.trim());
   if (rowIndex === -1) return undefined;
   return { rowIndex, values: rows[rowIndex], headers };
+}
+
+/**
+ * Inserts a new blank column into a Table at 0-based `index`, with the given header name.
+ * Names it via a single whole-header-row PATCH rather than addressing the new column
+ * individually by index — that per-column addressing does not reliably refer to the same
+ * position used by the `columns/add` index parameter and can silently rename a different,
+ * pre-existing column instead.
+ */
+export async function insertTableColumn(
+  ref: DriveItemRef,
+  tableName: string,
+  index: number,
+  headerName: string
+): Promise<void> {
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(tableName)}/columns/add`,
+    { method: "POST", body: JSON.stringify({ index }) }
+  );
+  const headers = await getTableHeaderRow(ref, tableName);
+  headers[index] = headerName;
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(tableName)}/headerRowRange`,
+    { method: "PATCH", body: JSON.stringify({ values: [headers] }) }
+  );
 }
 
 /**
