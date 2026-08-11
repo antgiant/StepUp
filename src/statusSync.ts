@@ -13,6 +13,7 @@ interface ApiLineItem {
   LineItemNumber: string;
   ExternalStatus: string;
   Appealed: boolean;
+  ItemAmount: number;
 }
 
 interface ApiResponse {
@@ -57,6 +58,14 @@ async function setLastSyncAt(timestamp: number): Promise<void> {
  * Matches every Table1 row that has both a Reimbursement ID and Line Number (i.e. was already
  * submitted) against the API response by exact `{ReimbursementID}-{LineNumber}` match, and
  * updates Status where StepUp's current status maps to something different than what's stored.
+ *
+ * Also records the actual reimbursed dollar amount in "Reimbursed Amount", and — when the
+ * status would otherwise be Approved/Paid — uses "Adjusted" instead if that amount matches
+ * *neither* Amount nor Reim. $ (both are normal, StepUp reports the item amount with or without
+ * tax folded in depending on the case; only matching neither means an unexplained reduction,
+ * calibrated against 59 real historical rows: 45 matched Amount, 13 matched Reim. $, 1 matched
+ * neither). A genuinely denied item still maps to Denied (Initial)/(Final) regardless of amount.
+ *
  * Returns the number of rows updated.
  */
 export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: ApiResponse): Promise<number> {
@@ -72,8 +81,13 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
   const reimbIdx = headers.indexOf("Reimbursement ID");
   const lineNumIdx = headers.indexOf("Line Number");
   const statusIdx = headers.indexOf("Status");
-  if (reimbIdx === -1 || lineNumIdx === -1 || statusIdx === -1) {
-    throw new Error("Table1 is missing one of Reimbursement ID / Line Number / Status columns.");
+  const amountIdx = headers.indexOf("Amount");
+  const reimTotalIdx = headers.indexOf("Reim. $");
+  const reimbursedAmountIdx = headers.indexOf("Reimbursed Amount");
+  if (reimbIdx === -1 || lineNumIdx === -1 || statusIdx === -1 || amountIdx === -1 || reimTotalIdx === -1 || reimbursedAmountIdx === -1) {
+    throw new Error(
+      "Table1 is missing one of Reimbursement ID / Line Number / Status / Amount / Reim. $ / Reimbursed Amount columns."
+    );
   }
 
   const validStatuses = new Set(
@@ -91,8 +105,16 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
     const apiItem = lineItemsByNumber.get(`${reimbursementId}-${lineNumber}`);
     if (!apiItem) continue;
 
-    const mappedStatus = mapApiStatus(apiItem.ExternalStatus, apiItem.Appealed);
+    let mappedStatus = mapApiStatus(apiItem.ExternalStatus, apiItem.Appealed);
     if (!mappedStatus) continue;
+
+    if ((mappedStatus === "Approved" || mappedStatus === "Paid") && Number.isFinite(apiItem.ItemAmount)) {
+      const amount = Number.parseFloat(String(values[amountIdx] ?? "NaN"));
+      const total = Number.parseFloat(String(values[reimTotalIdx] ?? "NaN"));
+      const matchesAmount = Math.abs(apiItem.ItemAmount - amount) < 0.01;
+      const matchesTotal = Math.abs(apiItem.ItemAmount - total) < 0.01;
+      if (!matchesAmount && !matchesTotal) mappedStatus = "Adjusted";
+    }
 
     if (!validStatuses.has(mappedStatus)) {
       if (!warnedInvalidStatuses.has(mappedStatus)) {
@@ -104,11 +126,27 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
       continue;
     }
 
+    const changes: Record<string, unknown> = {};
     const currentStatus = String(values[statusIdx] ?? "").trim();
-    if (currentStatus === mappedStatus) continue;
+    if (currentStatus !== mappedStatus) changes.Status = mappedStatus;
 
-    await updateTableRowByIndex(excelRef, TABLE1, rowIndex, values, headers, { Status: mappedStatus });
-    console.log(`[status sync] Row ${reimbursementId}-${lineNumber}: "${currentStatus}" -> "${mappedStatus}"`);
+    // Only record an actual reimbursed amount once the item is in a finalized, paid-out state —
+    // for "Submitted" (still pending) the API's ItemAmount just reflects the request, not a
+    // real disbursement, and "Denied" items were never paid at all.
+    const isFinalizedAmount = mappedStatus === "Approved" || mappedStatus === "Paid" || mappedStatus === "Adjusted";
+    if (isFinalizedAmount && Number.isFinite(apiItem.ItemAmount)) {
+      const currentReimbursedAmount = String(values[reimbursedAmountIdx] ?? "").trim();
+      if (currentReimbursedAmount !== String(apiItem.ItemAmount)) changes["Reimbursed Amount"] = apiItem.ItemAmount;
+    }
+
+    if (Object.keys(changes).length === 0) continue;
+
+    await updateTableRowByIndex(excelRef, TABLE1, rowIndex, values, headers, changes);
+    console.log(
+      `[status sync] Row ${reimbursementId}-${lineNumber}: ${Object.entries(changes)
+        .map(([k, v]) => `${k}="${v}"`)
+        .join(", ")}`
+    );
     updated++;
   }
   return updated;

@@ -3,11 +3,13 @@ import path from "node:path";
 import { launchStepUpSession } from "./form/browser.js";
 import { waitForEnter } from "./form/pause.js";
 import {
+  clickContinue,
   fillItemDetails,
   itemDetectionFailed,
   readReimbursementId,
   selectStudent,
   uploadFile,
+  waitForScanProcessing,
 } from "./form/reimbursementFlow.js";
 import {
   downloadItem,
@@ -19,14 +21,23 @@ import {
   type FolderChild,
 } from "./graph/onedrive.js";
 import { attachCategoryTreeListener } from "./categorySync.js";
-import { buildGroups, loadUnfiledRows, type ReimbursementGroup } from "./reimbursements.js";
+import { attachPreauthSyncListener } from "./preauthSync.js";
+import {
+  buildGroups,
+  checkScholarshipEligibility,
+  loadUnfiledRows,
+  type ReimbursementGroup,
+} from "./reimbursements.js";
 import { attachStatusSyncListener } from "./statusSync.js";
+import { attachVendorListingListener } from "./vendorListingSync.js";
 
 const TABLE1 = "Table1";
 const STATUSES_TABLE = "Table3";
-// All current children are FES-UA; per your note, once other programs are supported this
-// should come from a "Program" column on the row instead of a fixed constant.
+const CHILDREN_TABLE = "Table2";
+// Fallback when a child isn't found in Table2's Scholarship column at all.
 const DEFAULT_PROGRAM = "FES-UA";
+// Status written back to Table1 once a submission actually goes through.
+const SUBMITTED_STATUS = "Submitted";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -52,6 +63,17 @@ async function main() {
     return;
   }
 
+  const mismatches = await checkScholarshipEligibility(excelRef, rows);
+  if (mismatches.length > 0) {
+    console.log(`\nWarning: ${mismatches.length} row(s) have a Category that doesn't list the child's Scholarship as eligible:`);
+    for (const m of mismatches) {
+      console.log(
+        `  ID ${m.row.data["ID"]}: ${m.child} (${m.childScholarship}) — "${m.category}" is only eligible for: ${m.eligibleScholarships.join(", ")}`
+      );
+    }
+    console.log("Not blocking — double-check these before submitting.");
+  }
+
   const groups = await buildGroups(rows, async (row, candidates) => {
     console.log(`\nRow ID ${row.data["ID"]} ("${row.data["Item"]}") has multiple documentation files with no clear match:`);
     candidates.forEach((f, i) => console.log(`  [${i}] ${f}`));
@@ -66,20 +88,26 @@ async function main() {
   const table1Headers = await getTableHeaderRow(excelRef, TABLE1);
   const dataDir = path.resolve(process.cwd(), "data");
 
+  const childrenRows = await getTableRows(excelRef, CHILDREN_TABLE);
+  const scholarshipByChild = new Map<string, string>();
+  for (const r of childrenRows) {
+    const name = String(r[0] ?? "").trim();
+    const scholarship = String(r[1] ?? "").trim();
+    if (name && scholarship) scholarshipByChild.set(name, scholarship);
+  }
+
   const { context, page } = await launchStepUpSession();
   console.log("\nBrowser opened to the StepUp site.");
 
   attachStatusSyncListener(page, excelRef);
   attachCategoryTreeListener(page, excelRef);
+  attachVendorListingListener(page);
+  attachPreauthSyncListener(page, excelRef);
 
   const statusRows = await getTableRows(excelRef, STATUSES_TABLE);
   const validStatuses = statusRows.map((r) => String(r[0] ?? "")).filter(Boolean);
-  console.log(`\nValid Status values (from ${STATUSES_TABLE}): ${validStatuses.join(" | ")}`);
-  const submittedStatus = await waitForEnter(
-    "Type the exact Status value to set on rows once actually submitted (will be reused for every group this run):"
-  );
-  if (!validStatuses.includes(submittedStatus.trim())) {
-    throw new Error(`"${submittedStatus}" isn't one of the valid Status values listed above.`);
+  if (!validStatuses.includes(SUBMITTED_STATUS)) {
+    throw new Error(`"${SUBMITTED_STATUS}" isn't one of ${STATUSES_TABLE}'s valid Status values: ${validStatuses.join(" | ")}`);
   }
 
   for (const [i, group] of groups.entries()) {
@@ -91,7 +119,7 @@ async function main() {
     const proceed = await waitForEnter('Press Enter to start this group, or type "skip" to move to the next one.');
     if (/^skip$/i.test(proceed)) continue;
 
-    await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, submittedStatus.trim(), table1Headers);
+    await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild);
   }
 
   await waitForEnter("All groups processed. Press Enter to close the browser and exit.");
@@ -105,20 +133,23 @@ async function runGroup(
   folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
   folderChildren: FolderChild[],
   dataDir: string,
-  submittedStatus: string,
-  table1Headers: string[]
+  table1Headers: string[],
+  scholarshipByChild: Map<string, string>
 ): Promise<void> {
   await waitForEnter(
     `Log in / navigate to a new reimbursement request in StepUp. Press Enter once you're on the student picker.`
   );
-  await selectStudent(page, `${group.child} : ${DEFAULT_PROGRAM}`);
+  const program =
+    group.rows[0].data["Program"]?.trim() || scholarshipByChild.get(group.child) || DEFAULT_PROGRAM;
+  await selectStudent(page, `${group.child} : ${program}`);
   await waitForEnter("Review the student selection, then click Continue yourself. Press Enter once you're on the Receipt/Invoice Upload page.");
 
   const mainReceiptChild = findFile(folderChildren, group.mainReceiptFile);
   const mainReceiptPath = path.join(dataDir, group.mainReceiptFile);
   await downloadItem(folderRef.driveId, mainReceiptChild.id, mainReceiptPath);
   await uploadFile(page, mainReceiptPath);
-  await waitForEnter("Review the upload, then click Continue yourself. Press Enter once processing finishes (or you see a 'not detected' message).");
+  await clickContinue(page);
+  await waitForScanProcessing(page);
 
   if (await itemDetectionFailed(page)) {
     console.log(
@@ -162,7 +193,7 @@ async function runGroup(
   const today = new Date().toISOString().slice(0, 10);
   for (const [idx, row] of matchedRows.entries()) {
     await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-      Status: submittedStatus,
+      Status: SUBMITTED_STATUS,
       Submitted: today,
       "Reimbursement ID": reimbursementId,
       "Line Number": String(idx + 1),

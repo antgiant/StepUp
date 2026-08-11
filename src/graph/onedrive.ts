@@ -161,8 +161,95 @@ export async function findTableRow(
 }
 
 /**
+ * Inserts a blank column at the given worksheet column letter (e.g. "C"), shifting that column
+ * and everything after it one column to the right. Unlike a Table's own `columns/add`, this is a
+ * plain worksheet-level operation, so it's allowed to displace *other* Tables that happen to sit
+ * in the way — which is exactly the situation on sheets like "Validation Criteria" where several
+ * small reference Tables are packed into adjacent columns with no gap between them. Use this to
+ * clear space before growing a Table that has another Table immediately to its right.
+ */
+export async function insertWorksheetColumn(
+  ref: DriveItemRef,
+  worksheetName: string,
+  columnLetter: string
+): Promise<void> {
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets/${encodeURIComponent(
+      worksheetName
+    )}/range(address='${columnLetter}:${columnLetter}')/insert`,
+    { method: "POST", body: JSON.stringify({ shift: "Right" }) }
+  );
+}
+
+/**
+ * Deletes the given worksheet column letter (e.g. "D"), shifting everything after it one column
+ * to the left. Symmetric counterpart to `insertWorksheetColumn` — use to close a gap.
+ */
+export async function deleteWorksheetColumn(
+  ref: DriveItemRef,
+  worksheetName: string,
+  columnLetter: string
+): Promise<void> {
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets/${encodeURIComponent(
+      worksheetName
+    )}/range(address='${columnLetter}:${columnLetter}')/delete`,
+    { method: "POST", body: JSON.stringify({ shift: "Left" }) }
+  );
+}
+
+/** Writes literal values directly into a worksheet range (e.g. "C1:C5"), bypassing any Table object. */
+export async function setRangeValues(
+  ref: DriveItemRef,
+  worksheetName: string,
+  address: string,
+  values: unknown[][]
+): Promise<void> {
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets/${encodeURIComponent(
+      worksheetName
+    )}/range(address='${address}')`,
+    { method: "PATCH", body: JSON.stringify({ values }) }
+  );
+}
+
+/** Converts a Table back to a plain range, keeping its data but dropping Table-ness (filters, banding, etc). */
+export async function convertTableToRange(ref: DriveItemRef, tableName: string): Promise<void> {
+  await graphFetch(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(tableName)}/convertToRange`,
+    { method: "POST" }
+  );
+}
+
+/** Creates a new Table over an existing range (e.g. "B1:C5") and returns its auto-generated name. */
+export async function createTable(
+  ref: DriveItemRef,
+  worksheetName: string,
+  address: string,
+  hasHeaders: boolean
+): Promise<string> {
+  const data = await graphJson<{ name: string }>(
+    `/drives/${ref.driveId}/items/${ref.itemId}/workbook/worksheets/${encodeURIComponent(worksheetName)}/tables/add`,
+    { method: "POST", body: JSON.stringify({ address: `'${worksheetName}'!${address}`, hasHeaders }) }
+  );
+  return data.name;
+}
+
+/** Renames an existing Table (e.g. after `createTable` returns an auto-generated name like "Table10"). */
+export async function renameTable(ref: DriveItemRef, currentName: string, newName: string): Promise<void> {
+  await graphFetch(`/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(currentName)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: newName }),
+  });
+}
+
+/**
  * Inserts a new blank column into a Table at 0-based `index`, with the given header name.
- * Names it via a single whole-header-row PATCH rather than addressing the new column
+ * Requires the table's *current* headers (before this insert) as `currentHeaders` — the new
+ * header row is computed in-memory by splicing into that array, rather than by re-fetching
+ * headers from the API right after the insert, because that read can come back stale (missing
+ * the just-added column) and produce a PATCH whose dimensions don't match the table anymore.
+ * Naming is done via a single whole-header-row PATCH rather than addressing the new column
  * individually by index — that per-column addressing does not reliably refer to the same
  * position used by the `columns/add` index parameter and can silently rename a different,
  * pre-existing column instead.
@@ -171,17 +258,18 @@ export async function insertTableColumn(
   ref: DriveItemRef,
   tableName: string,
   index: number,
-  headerName: string
+  headerName: string,
+  currentHeaders: string[]
 ): Promise<void> {
   await graphFetch(
     `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(tableName)}/columns/add`,
     { method: "POST", body: JSON.stringify({ index }) }
   );
-  const headers = await getTableHeaderRow(ref, tableName);
-  headers[index] = headerName;
+  const newHeaders = [...currentHeaders];
+  newHeaders.splice(index, 0, headerName);
   await graphFetch(
     `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(tableName)}/headerRowRange`,
-    { method: "PATCH", body: JSON.stringify({ values: [headers] }) }
+    { method: "PATCH", body: JSON.stringify({ values: [newHeaders] }) }
   );
 }
 
@@ -206,7 +294,7 @@ export async function updateTableRowByIndex(
   await graphFetch(
     `/drives/${ref.driveId}/items/${ref.itemId}/workbook/tables/${encodeURIComponent(
       tableName
-    )}/rows/${rowIndex}`,
+    )}/rows/itemAt(index=${rowIndex})`,
     { method: "PATCH", body: JSON.stringify({ values: [next] }) }
   );
 }

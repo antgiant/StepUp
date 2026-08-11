@@ -2,6 +2,7 @@ import "dotenv/config";
 import { launchStepUpSession } from "./form/browser.js";
 import { dumpFormFields, printFieldTable } from "./form/inspect.js";
 import { closePrompt, waitForEnter } from "./form/pause.js";
+import { attachVendorListingListener } from "./vendorListingSync.js";
 
 /**
  * Live discovery tool: opens the StepUp site, lets you log in and click through
@@ -11,6 +12,10 @@ import { closePrompt, waitForEnter } from "./form/pause.js";
  */
 async function main() {
   const { context, page } = await launchStepUpSession();
+  // Passive bonus: exploration sessions often open the "Who did you pay?" dropdown too, so
+  // may as well accumulate vendor data from that while we're here (no spreadsheet writes,
+  // just a local cache — unlike statusSync/categorySync, kept out of this lightweight tool).
+  attachVendorListingListener(page);
 
   console.log("Log into StepUp manually in the opened browser window.");
   while (true) {
