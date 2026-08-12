@@ -98,6 +98,10 @@ export async function syncPreauthFromApiResponse(excelRef: DriveItemRef, body: A
  * Passively watches for StepUp's Pre-Authorization search API, which we've seen load
  * automatically on the home page (no special navigation needed), and syncs the Pre-Auth column
  * from it — throttled to once per 2 hours, same as statusSync.
+ *
+ * The home page's call often returns an empty result set (distinct from the real
+ * Pre-Authorizations list page) — an empty response must NOT start the throttle window, or it
+ * silently blocks the next, actually-populated response for 2 hours.
  */
 export function attachPreauthSyncListener(page: Page, excelRef: DriveItemRef): void {
   page.on("response", async (response) => {
@@ -106,6 +110,7 @@ export function attachPreauthSyncListener(page: Page, excelRef: DriveItemRef): v
 
     try {
       const body = (await response.json()) as ApiResponse;
+      if (!body.Results || body.Results.length === 0) return;
       const updated = await syncPreauthFromApiResponse(excelRef, body);
       await setLastSyncAt(Date.now());
       console.log(`\n[pre-auth sync] Updated ${updated} row(s) from the Pre-Authorization list.`);

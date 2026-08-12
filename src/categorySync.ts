@@ -209,12 +209,19 @@ async function reportAndSync(excelRef: DriveItemRef, cache: Cache, label: string
  *    going to happen anyway.
  */
 export function attachCategoryTreeListener(page: Page, excelRef: DriveItemRef): void {
-  let dueThisSessionPromise: Promise<boolean> | undefined;
-  const isDueThisSession = () => {
-    if (!dueThisSessionPromise) {
-      dueThisSessionPromise = loadCache().then((cache) => Date.now() - cache.lastSyncAt >= THROTTLE_MS);
+  // Tracks the throttle in-memory so it's re-checked fresh on every call rather than memoized
+  // once for the whole process — the earlier version cached a single boolean forever, so once
+  // due, it stayed "due" for the rest of the session and re-ran the full expansion loop on
+  // *every* subsequent category click while filling out item details, not just once per 24h.
+  let lastExpansionAt: number | undefined;
+  const isDueThisSession = async () => {
+    if (lastExpansionAt === undefined) {
+      lastExpansionAt = (await loadCache()).lastSyncAt;
     }
-    return dueThisSessionPromise;
+    return Date.now() - lastExpansionAt >= THROTTLE_MS;
+  };
+  const markExpanded = () => {
+    lastExpansionAt = Date.now();
   };
 
   page.on("response", async (response) => {
@@ -252,6 +259,7 @@ export function attachCategoryTreeListener(page: Page, excelRef: DriveItemRef): 
         await route.continue();
         return;
       }
+      markExpanded();
       const cache = await loadCache();
       const originalIds = JSON.parse(route.request().postData() ?? "[]") as string[];
       const allKnownTypeIds = [...new Set(Object.values(cache.categories).flatMap((c) => c.childIds ?? []))];
@@ -290,7 +298,12 @@ export function attachCategoryTreeListener(page: Page, excelRef: DriveItemRef): 
     } catch (err) {
       console.log(`\n[category sync] typesbyids expansion failed: ${(err as Error).message}`);
     } finally {
-      await route.continue();
+      // This is a passive, best-effort background sync — it must never be able to crash the
+      // main run. route.continue() can throw "Route is already handled" if this same request
+      // somehow got resolved twice (observed in practice); swallow it rather than propagate.
+      await route.continue().catch((err) => {
+        console.log(`\n[category sync] route.continue() (typesbyids) failed: ${(err as Error).message}`);
+      });
     }
   });
 
@@ -300,6 +313,7 @@ export function attachCategoryTreeListener(page: Page, excelRef: DriveItemRef): 
         await route.continue();
         return;
       }
+      markExpanded();
       const cache = await loadCache();
       const originalIds = JSON.parse(route.request().postData() ?? "[]") as string[];
       const allKnownDetailIds = [...new Set(Object.values(cache.types).flatMap((t) => t.childIds ?? []))];
@@ -336,7 +350,9 @@ export function attachCategoryTreeListener(page: Page, excelRef: DriveItemRef): 
     } catch (err) {
       console.log(`\n[category sync] detailsbyids expansion failed: ${(err as Error).message}`);
     } finally {
-      await route.continue();
+      await route.continue().catch((err) => {
+        console.log(`\n[category sync] route.continue() (detailsbyids) failed: ${(err as Error).message}`);
+      });
     }
   });
 }

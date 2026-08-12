@@ -23,6 +23,13 @@ export async function launchStepUpSession(): Promise<{
     viewport: null,
   });
   const page = context.pages()[0] ?? (await context.newPage());
+  // Playwright's unset default is 30s for every action/navigation — far too short once a human
+  // is in the loop (login with MFA, slow page loads, etc.). The truly interactive prompts
+  // (browserPrompt.ts, waitForLogin) already pass an explicit timeout: 0 (fully unbounded) for
+  // the parts that wait on you specifically; this covers everything else (clicks, fills, goto)
+  // that would otherwise still inherit the 30s default and kill the browser on a slow moment.
+  page.setDefaultTimeout(10 * 60 * 1000);
+  page.setDefaultNavigationTimeout(10 * 60 * 1000);
   await page.goto(STEPUP_URL);
   return { context, page };
 }

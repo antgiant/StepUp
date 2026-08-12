@@ -156,6 +156,11 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
  * Passively watches for StepUp's reimbursements-list API response, which loads automatically
  * during normal navigation, and syncs Status from it — throttled to once per 2 hours so normal
  * page reloads don't hammer the spreadsheet with redundant writes.
+ *
+ * This same endpoint also fires on the home page with an empty/near-empty result set (some
+ * "recent activity" widget, distinct from the real Reimbursements list page) — an empty response
+ * must NOT start the throttle window, or it silently blocks the next, actually-populated response
+ * for 2 hours. Only a response with real data to sync counts as a sync.
  */
 export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): void {
   page.on("response", async (response) => {
@@ -164,6 +169,7 @@ export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): vo
 
     try {
       const body = (await response.json()) as ApiResponse;
+      if (!body.Results || body.Results.length === 0) return;
       const updated = await syncStatusesFromApiResponse(excelRef, body);
       await setLastSyncAt(Date.now());
       console.log(`\n[status sync] Updated ${updated} row(s) from the reimbursements list.`);

@@ -1,19 +1,10 @@
 # Step Up Automator — Outstanding Items
 
-## Next step
+## Status
 
-- [ ] Run the **end-to-end test on one real group**.
-
-## To verify during/after the end-to-end test
-
-- [ ] Confirm the **student-dropdown option click** in `selectStudent()` (`src/form/reimbursementFlow.ts`) actually lands correctly — marked `UNVERIFIED` in code, since we only ever saw that dropdown closed during discovery.
-- [ ] Confirm the **category cascading-dropdown option clicks** in `fillCategory()` (same file) actually land correctly — same reason, marked `UNVERIFIED`.
-- [ ] Confirm the **vendor/provider dropdown option click** (and the "Provider not Listed" fallback path) in `selectVendorOrProvider()` actually lands correctly — same reason, marked `UNVERIFIED`.
-- [ ] Verify whether on-screen **line-item order actually matches the `-1`/`-2`/`-3` `LineItemNumber` suffix order** for a real multi-item submission. `main.ts` currently assumes it does when writing the `Line Number` column back to the spreadsheet — left open since the test draft (Child A, sequence `NNNNNNNN`) couldn't be finished last time.
-- [ ] Confirm `statusSync.ts` actually updates `Status` correctly now that 59 rows have real `Reimbursement ID` + `Line Number` data to match against (the underlying write mechanism is confirmed working, but this module's own matching logic hasn't been exercised against a real row yet — none of those 59 rows' current `Status` should actually need changing since they're already `"Submitted"`, so watch for correct no-ops, not necessarily updates).
-- [ ] Confirm `categorySync.ts`'s request-interception rewrite (`route.fetch()` piggybacking on real Category/Type clicks) actually fires and populates Table5 during a real session.
-- [ ] Confirm `clickContinue()` (`src/form/reimbursementFlow.ts`) actually lands on the real Continue button after the main receipt upload — brand new, `UNVERIFIED`, uses a text/role locator since this flow's buttons have no stable IDs.
-- [ ] Confirm `waitForScanProcessing()` correctly detects when StepUp's AI scan finishes (item blocks rendered, or "not detected" message) rather than timing out or firing too early.
+- [ ] **Continue the real batch** — 156 more groups still queued behind the 3 already submitted. Just re-run `npm start`; a "Stop for now" option exists on each group's prompt for stopping cleanly mid-session (progress is saved incrementally, safe to resume anytime).
+- [ ] **Not yet validated: StepUp's AI successfully detecting items.** All 3 successful submissions so far went through the "not able to detect items" (AI failure) path — the *other* branch, where StepUp auto-detects item(s) and shows them as checkboxes to select, hasn't been exercised yet this session.
+- [ ] **Not yet validated: a group with more than one item on a single receipt.** All 3 successes were single-item groups. Multi-item behavior (the amount-matching/disambiguation loop in `fillItemDetails()` across several blocks from one upload) is implemented but unconfirmed against the live site.
 
 ## Blocked (not this session)
 

@@ -49,13 +49,25 @@ export interface FolderChild {
 
 interface ChildrenResponse {
   value: Array<{ id: string; name: string; size: number; folder?: unknown }>;
+  "@odata.nextLink"?: string;
 }
 
+/**
+ * Lists every child of a folder, following Graph's `@odata.nextLink` pagination until exhausted.
+ * A folder with more than 200 items (very plausible here, given ~300+ tracked rows each with
+ * multiple documents) would otherwise silently truncate at the first page — real files present
+ * in the folder would appear "not found" with no error, since nothing beyond page 1 was ever
+ * fetched.
+ */
 export async function listFolderChildren(ref: DriveItemRef): Promise<FolderChild[]> {
-  const data = await graphJson<ChildrenResponse>(
-    `/drives/${ref.driveId}/items/${ref.itemId}/children?$select=id,name,size,folder&$top=200`
-  );
-  return data.value.map((c) => ({ id: c.id, name: c.name, isFolder: Boolean(c.folder), size: c.size }));
+  const results: FolderChild[] = [];
+  let url: string | undefined = `/drives/${ref.driveId}/items/${ref.itemId}/children?$select=id,name,size,folder&$top=200`;
+  while (url) {
+    const data: ChildrenResponse = await graphJson<ChildrenResponse>(url);
+    results.push(...data.value.map((c) => ({ id: c.id, name: c.name, isFolder: Boolean(c.folder), size: c.size })));
+    url = data["@odata.nextLink"];
+  }
+  return results;
 }
 
 /** Downloads a file item's content to destPath, creating parent directories as needed. */
