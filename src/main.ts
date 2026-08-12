@@ -69,6 +69,17 @@ function summarizeRow(r: { data: Record<string, string> }): string {
   return `ID ${r.data["ID"]} · ${r.data["Child"]} · ${amount}: "${detail}"`;
 }
 
+/** Extends summarizeRow() with the fields fillItemDetails() actually set (Category, Vendor/Provider) so the
+ *  post-fill review banner has enough on its own to check against the receipt, without cross-referencing the terminal. */
+function summarizeFilledRow(r: { data: Record<string, string> }): string {
+  const parts = [summarizeRow(r)];
+  const category = r.data["Category"]?.trim();
+  if (category) parts.push(`Category: ${category}`);
+  const vendor = (r.data["Service Provider"] || r.data["Vendor"])?.trim();
+  if (vendor) parts.push(`Vendor/Provider: ${vendor}`);
+  return parts.join(" — ");
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -314,10 +325,14 @@ async function runGroup(
   await waitForStep(page, "itemDetails");
 
   const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(page, group.rows);
+  const matchedSummary = matchedRows.map((r) => `  ${summarizeFilledRow(r)}`).join("\n");
+  let reviewMessage = `Review the filled details against these row(s), then click Continue yourself in StepUp:\n${matchedSummary}`;
   if (unmatchedBlockIndexes.length > 0) {
+    const unmatchedList = unmatchedBlockIndexes.map((i) => `Item block ${i + 1}`).join(", ");
     console.log(`\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left — fill those in manually.`);
+    reviewMessage += `\n\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${unmatchedList}.`;
   }
-  await browserInfo(page, "Review the filled details, then click Continue yourself in StepUp.");
+  await browserInfo(page, reviewMessage);
   await waitForStep(page, "additionalDocuments");
 
   if (group.additionalFiles.length > 0) {
