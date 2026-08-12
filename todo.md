@@ -1,11 +1,5 @@
 # Step Up Automator — Outstanding Items
 
-## Status
-
-- [ ] **Continue the real batch** — ~153 more groups still queued behind the 3 already submitted.
-- [x] **`autoCheckDetectedItems()` fixed and fully live-validated end-to-end.** Real root cause (found by dumping the live outerHTML, not guessing): `ITEM_SELECTION_LIST` in `src/form/reimbursementFlow.ts` was one DOM level too deep (`div.right-container > div > div:nth-child(2)`), landing on the FIRST item's own row instead of the shared `div.right-container > div.line-items` list container — so checkbox/label counts always read exactly 1, deterministically, no matter how long anything waited. Not a Playwright bug, not a Blazor re-render race, not a StepUp AI detection limitation — every one of those theories was tested live and ruled out before finding this. (Side note: every item checkbox on that screen literally shares the same `id="item_0"` in StepUp's own markup — harmless for us since matching is by position, not id, but worth remembering if this selector ever needs revisiting.) Fixed the container path and simplified the function back down (dropped the stabilization/retry machinery built on the disproven race theory — no longer needed). Validated on the real 3-item "Cookie/Monster Truck/Cake Doodle" receipt: all 3 auto-checked correctly, function returned `true` (full match → auto-continue). `main.ts` calls `autoCheckDetectedItems()` and auto-continues only when every row matched, otherwise falls back to a manual banner for just the unmatched ones.
-- [ ] **Multi-item-per-receipt (Item/Service *Details*, step 3) confirmed working** — `fillItemDetails()`'s OCR-name fallback matching correctly resolved a real 3-item-on-one-receipt group.
-
 ## Blocked (not this session)
 
 - [ ] Build **Pre-Auth submission automation** — blocked, not abandoned. Confirmed a real (if not currently urgent) need; genuinely separate flow from reimbursements, not a tweak to the existing one:

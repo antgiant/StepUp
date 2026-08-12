@@ -2,16 +2,23 @@ import "dotenv/config";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { connectToStepUpSession } from "./form/browser.js";
-import { browserChoose, browserContinue, browserInfo } from "./form/browserPrompt.js";
+import {
+  browserChoose,
+  browserContinue,
+  browserInfo,
+  browserInfoHtml,
+  clearBanner,
+  startConnectionHeartbeat,
+} from "./form/browserPrompt.js";
 import {
   autoCheckDetectedItems,
   checkForDashboardModal,
+  checkItemScan,
   clickContinue,
   ensureOnNewReimbursementForm,
   fillItemDetails,
-  itemDetectionFailed,
+  parseExcelDate,
   readReimbursementId,
-  requestAnotherReimbursement,
   selectStudent,
   uploadFile,
   waitForLogin,
@@ -69,19 +76,64 @@ function summarizeRow(r: { data: Record<string, string> }): string {
   return `ID ${r.data["ID"]} · ${r.data["Child"]} · ${amount}: "${detail}"`;
 }
 
-/** Extends summarizeRow() with the fields fillItemDetails() actually set (Category, Vendor/Provider) so the
- *  post-fill review banner has enough on its own to check against the receipt, without cross-referencing the terminal. */
-function summarizeFilledRow(r: { data: Record<string, string> }): string {
-  const parts = [summarizeRow(r)];
-  const category = r.data["Category"]?.trim();
-  if (category) parts.push(`Category: ${category}`);
-  const vendor = (r.data["Service Provider"] || r.data["Vendor"])?.trim();
-  if (vendor) parts.push(`Vendor/Provider: ${vendor}`);
-  return parts.join(" — ");
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** mm/dd/yyyy — matches what StepUp's own date inputs display (the underlying value they hold is
+ *  ISO, but that's not what's shown on screen, and this banner is meant to read the same as the
+ *  real page next to it). Formatted with UTC getters, not local ones: parseExcelDate() treats bare
+ *  serial numbers as UTC and Date's own ISO-string parsing does too, so local getters could shift
+ *  the date by a day depending on the machine's timezone. */
+function excelDateDisplay(rawDate: string | undefined): string | undefined {
+  const trimmed = rawDate?.trim();
+  if (!trimmed) return undefined;
+  const parsed = parseExcelDate(trimmed);
+  if (Number.isNaN(parsed.getTime())) return trimmed;
+  const mm = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(parsed.getUTCDate()).padStart(2, "0");
+  const yyyy = parsed.getUTCFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function reviewFieldRow(label: string, value: string | undefined): string {
+  const v = value?.trim();
+  if (!v) return "";
+  return `<div><span style="opacity:.65;">${escapeHtml(label)}:</span> ${escapeHtml(v)}</div>`;
+}
+
+/**
+ * One card per matched row for the post-fill review banner, fields ordered to match the real
+ * Item/Service Details page top-to-bottom (Purchase Date -> Invoice # -> Category -> Quantity ->
+ * Cost -> Tax/Shipping -> Who did you pay -> Benefit Message -> URL) so checking the banner against
+ * the actual page reads the same direction instead of jumping around. Each field is its own line
+ * (not one long dash-joined run-on) so a long Category cascade or URL wraps cleanly rather than
+ * making the whole line unreadable — matters once there are several items each with several fields.
+ */
+function reviewItemCardHtml(r: { data: Record<string, string> }): string {
+  const amount = r.data["Amount"] ? `$${r.data["Amount"]}` : "$?";
+  const description = r.data["Description"]?.trim();
+  const detail = description ? `${r.data["Item"]} — ${description}` : r.data["Item"];
+  const vendor = r.data["Service Provider"] || r.data["Vendor"];
+
+  const fields = [
+    reviewFieldRow("Purchase Date", excelDateDisplay(r.data["Date"])),
+    reviewFieldRow("Invoice/Receipt #", r.data["Invoice #"]),
+    reviewFieldRow("Category", r.data["Category"]),
+    reviewFieldRow("Quantity", r.data["Quantity"]),
+    reviewFieldRow("Cost per Item", r.data["Amount"]),
+    reviewFieldRow("Tax, Shipping, etc", r.data["Tax, Shipping, etc."]),
+    reviewFieldRow("Who did you pay", vendor),
+    reviewFieldRow("Benefit Message", r.data["Benefit Message"]),
+    reviewFieldRow("Item/Service URL", r.data["Item/Service URL"]),
+  ].join("");
+
+  return (
+    `<div style="background:rgba(255,255,255,.08);border-radius:6px;padding:10px 12px;">` +
+    `<div style="font-weight:600;margin-bottom:4px;">ID ${escapeHtml(r.data["ID"] ?? "")} · ${escapeHtml(r.data["Child"] ?? "")} · ${escapeHtml(amount)}: "${escapeHtml(detail ?? "")}"</div>` +
+    `<div style="font-size:12.5px;line-height:1.7;">${fields}</div>` +
+    `</div>`
+  );
 }
 
 /** Downloads a candidate file and opens it in a new tab wrapped with a clear label (filename + the row it's being reviewed for), so it's obvious what you're looking at and why. */
@@ -149,6 +201,9 @@ async function main() {
 
   const { context, page } = await connectToStepUpSession();
   console.log("\nConnected to the browser server. If you haven't already, log in manually — no prompts will show until you land on the Dashboard.");
+  // So any banner still up in the browser can tell you if this process dies (crash, Ctrl+C,
+  // closed terminal) instead of just sitting there looking like it's still waiting on you.
+  startConnectionHeartbeat(page);
 
   attachStatusSyncListener(page, excelRef);
   attachCategoryTreeListener(page, excelRef);
@@ -257,7 +312,7 @@ async function main() {
     page,
     stoppedEarly
       ? "Stopped early. Everything submitted so far is already saved — just re-run \"npm start\" later to pick up the rest. Click Continue to finish."
-      : "All groups processed. Click Continue to finish. The browser stays open — re-run \"npm start\" for more rows, or click the \"All done — close browser\" button (top-right of the page) when you're fully done."
+      : "All groups processed. Click Continue to finish. The browser stays open — re-run \"npm start\" for more rows, or click the \"All done — close browser\" button (top-left of the page) when you're fully done."
   );
   // Deliberately not closing `context`/`browser` here — this process only connected to the
   // shared browser server (browserServer.ts owns its lifecycle), it didn't launch it. Force an
@@ -284,28 +339,79 @@ async function runGroup(
   await clickContinue(page);
   await waitForStep(page, "upload");
 
+  await browserInfo(page, `Downloading and uploading the receipt "${group.mainReceiptFile}"...`);
   const mainReceiptChild = findFile(folderChildren, group.mainReceiptFile);
   const mainReceiptPath = path.join(dataDir, group.mainReceiptFile);
   await downloadItem(folderRef.driveId, mainReceiptChild.id, mainReceiptPath);
   console.log(`Uploading main receipt "${group.mainReceiptFile}"...`);
   await uploadFile(page, mainReceiptPath);
+  await clearBanner(page);
   console.log("Upload done, clicking Continue and waiting for StepUp's AI scan...");
   await clickContinue(page);
   await waitForStep(page, "itemSelection");
   console.log("On the Item/Service Selection screen.");
 
-  if (await itemDetectionFailed(page)) {
+  let scanOutcome = await checkItemScan(page);
+
+  if (scanOutcome === "readError") {
+    // StepUp says it couldn't even read the document at all (distinct from reading it fine and
+    // finding nothing) — that's just as likely to mean the file itself is broken as it is a
+    // transient StepUp hiccup, so before assuming it's safe to fall back to manual entry, have a
+    // human actually look at it: open it in its own tab and ask.
+    console.log(`\nStepUp couldn't read "${group.mainReceiptFile}" at all — opening it for you to check.`);
+    const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
+    const preview = await openLabeledPreview(
+      page.context(),
+      folderRef,
+      mainReceiptChild.id,
+      mainReceiptPath,
+      group.mainReceiptFile,
+      rowsSummary
+    );
+    const OPENED_FINE = "opened_fine";
+    const BROKEN = "broken";
+    const choice = await browserChoose(
+      page,
+      `StepUp couldn't read "${group.mainReceiptFile}" at all (not just "no items found" — an actual read failure). ` +
+        `It's now open in its own tab for you to check. Did it open properly for you?\n${rowsSummary}`,
+      [
+        { label: "Yes, it opened fine — StepUp's problem, not the file's", value: OPENED_FINE },
+        { label: "No, it's broken/won't open", value: BROKEN },
+      ]
+    );
+    await preview.close();
+
+    if (choice === BROKEN) {
+      const today = new Date().toISOString().slice(0, 10);
+      const note = `[${today}] StepUp couldn't read "${group.mainReceiptFile}" and it didn't open properly for you either — needs a real fix in the spreadsheet.`;
+      for (const row of group.rows) {
+        const existingNotes = (row.data["Notes"] ?? "").trim();
+        const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
+        await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
+          Notes: updatedNotes,
+          Status: MISSING_THINGS_STATUS,
+        });
+      }
+      console.log(`Marked ${group.rows.length} row(s) as "${MISSING_THINGS_STATUS}" — document is broken.`);
+      throw new Error(`"${group.mainReceiptFile}" is broken — marked "${MISSING_THINGS_STATUS}" in the spreadsheet, skipping this group.`);
+    }
+
+    // Confirmed genuinely readable — treat exactly like the ordinary "read fine, found nothing"
+    // case below rather than duplicating that whole branch.
+    console.log("Confirmed the document opens fine — treating this like an ordinary detection failure.");
+    scanOutcome = "notDetected";
+  }
+
+  if (scanOutcome === "notDetected") {
     const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
     console.log(
-      `\nStepUp couldn't detect items on this document. Need ${group.rows.length} item block(s) for:\n${rowsSummary}`
+      `\nStepUp couldn't detect items on this document. Filling in ${group.rows.length} item block(s) directly for:\n${rowsSummary}`
     );
     console.log('Auto-clicking "Continue to Item/Service Details"...');
     await clickContinue(page);
-    await browserInfo(
-      page,
-      `StepUp couldn't detect items on this document — already clicked Continue for you.\n` +
-        `On this screen, click "Add an Item" ${group.rows.length} time(s) — one block for each of:\n${rowsSummary}`
-    );
+    // No OCR data to match against, and no manual "Add an Item" step needed either —
+    // fillItemDetails() below creates as many blocks as it needs on its own, matching each one
+    // to the next row in order (noOcrData=true) rather than prompting per block for no reason.
   } else {
     console.log("StepUp detected item(s) — attempting to auto-check the matching box(es)...");
     const allMatched = await autoCheckDetectedItems(page, group.rows);
@@ -324,34 +430,38 @@ async function runGroup(
   }
   await waitForStep(page, "itemDetails");
 
-  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(page, group.rows);
-  const matchedSummary = matchedRows.map((r) => `  ${summarizeFilledRow(r)}`).join("\n");
-  let reviewMessage = `Review the filled details against these row(s), then click Continue yourself in StepUp:\n${matchedSummary}`;
+  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(page, group.rows, scanOutcome === "notDetected");
+  let reviewHtml =
+    `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
+    `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;
   if (unmatchedBlockIndexes.length > 0) {
     const unmatchedList = unmatchedBlockIndexes.map((i) => `Item block ${i + 1}`).join(", ");
     console.log(`\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left — fill those in manually.`);
-    reviewMessage += `\n\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${unmatchedList}.`;
+    reviewHtml += `<div style="margin-top:10px;color:#ffb3b3;">${unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${escapeHtml(unmatchedList)}.</div>`;
   }
-  await browserInfo(page, reviewMessage);
+  await browserInfoHtml(page, reviewHtml);
   await waitForStep(page, "additionalDocuments");
 
+  let attachedAdditionalFiles: string[] = [];
+  const missingAdditionalFiles: string[] = [];
   if (group.additionalFiles.length > 0) {
+    await browserInfo(page, `Downloading ${group.additionalFiles.length} additional document(s)...`);
     const additionalPaths: string[] = [];
-    const missing: string[] = [];
     for (const fileName of group.additionalFiles) {
       const child = folderChildren.find((c) => c.name === fileName);
       if (!child) {
-        missing.push(fileName);
+        missingAdditionalFiles.push(fileName);
         continue;
       }
       const localPath = path.join(dataDir, fileName);
       await downloadItem(folderRef.driveId, child.id, localPath);
       additionalPaths.push(localPath);
     }
-    if (missing.length > 0) {
+    await clearBanner(page);
+    if (missingAdditionalFiles.length > 0) {
       const choice = await browserChoose(
         page,
-        `${missing.length} additional file(s) not found in the reference folder: ${missing.join(", ")}\n` +
+        `${missingAdditionalFiles.length} additional file(s) not found in the reference folder: ${missingAdditionalFiles.join(", ")}\n` +
           "Proceeding will submit this reimbursement WITHOUT these documents attached. Are you sure that's OK?",
         [
           { label: "Yes, proceed without them", value: "proceed" },
@@ -361,7 +471,7 @@ async function runGroup(
       );
       if (choice === "note") {
         const today = new Date().toISOString().slice(0, 10);
-        const note = `[${today}] Missing documentation file(s) referenced: ${missing.join(", ")} — needs fixing in spreadsheet.`;
+        const note = `[${today}] Missing documentation file(s) referenced: ${missingAdditionalFiles.join(", ")} — needs fixing in spreadsheet.`;
         for (const row of group.rows) {
           const existingNotes = (row.data["Notes"] ?? "").trim();
           const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
@@ -371,15 +481,18 @@ async function runGroup(
           });
         }
         console.log(`Marked ${group.rows.length} row(s) as "${MISSING_THINGS_STATUS}" and noted the documentation issue.`);
-        throw new Error(`Group stopped — documentation issue noted in spreadsheet for missing file(s): ${missing.join(", ")}`);
+        throw new Error(`Group stopped — documentation issue noted in spreadsheet for missing file(s): ${missingAdditionalFiles.join(", ")}`);
       }
       if (choice !== "proceed") {
-        throw new Error(`Group stopped — missing file(s) not confirmed: ${missing.join(", ")}`);
+        throw new Error(`Group stopped — missing file(s) not confirmed: ${missingAdditionalFiles.join(", ")}`);
       }
     }
     if (additionalPaths.length > 0) {
+      await browserInfo(page, `Uploading ${additionalPaths.length} additional document(s)...`);
       await uploadFile(page, additionalPaths);
-      console.log(`Uploaded ${additionalPaths.length} additional document(s): ${additionalPaths.map((p) => path.basename(p)).join(", ")}`);
+      attachedAdditionalFiles = additionalPaths.map((p) => path.basename(p));
+      console.log(`Uploaded ${attachedAdditionalFiles.length} additional document(s): ${attachedAdditionalFiles.join(", ")}`);
+      await clearBanner(page);
     }
   } else {
     console.log("No additional documents for this group.");
@@ -388,9 +501,17 @@ async function runGroup(
   await clickContinue(page);
   await waitForStep(page, "summary");
 
+  // Uploading additional documents just above happened without pausing for you (auto-clicked
+  // straight through to here), so this is the first chance to actually see what got attached.
+  const attachmentsNote =
+    [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `  ${f}`).join("\n") +
+    (missingAdditionalFiles.length > 0
+      ? `\n  (missing, not attached: ${missingAdditionalFiles.join(", ")})`
+      : "");
   await browserInfo(
     page,
-    'Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.'
+    `Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.\n\n` +
+      `File(s) attached this submission:\n${attachmentsNote}`
   );
   await waitForStep(page, "confirmation");
   const reimbursementId = await readReimbursementId(page);
@@ -407,9 +528,9 @@ async function runGroup(
   }
   console.log(`Updated ${matchedRows.length} row(s) in the spreadsheet.`);
 
-  // Positions the browser for whatever group comes next (faster than the Dashboard/Reimbursements
-  // path ensureOnNewReimbursementForm() would otherwise fall back to at the start of the next group).
-  await requestAnotherReimbursement(page);
+  // Deliberately not navigating away from the confirmation page here — it stays up so you can see
+  // it until the next group is actually selected, at which point ensureOnNewReimbursementForm()
+  // (called at the start of the next runGroup()) clicks "Request Another Reimbursement" itself.
 }
 
 main().catch((err) => {

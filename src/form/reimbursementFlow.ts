@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { parseCategoryLevels, type Table1Row } from "../reimbursements.js";
-import { browserChoose, browserContinue } from "./browserPrompt.js";
+import { browserChoose, browserContinue, browserInfo, clearBanner } from "./browserPrompt.js";
 
 // Selectors for stable, semantically-named fields (verified against the live site).
 const STUDENT_SELECT = "#Student__Select";
@@ -60,6 +60,12 @@ const ADDITIONAL_COSTS = '[placeholder="Enter Additional Costs"]';
 const QUANTITY = '[placeholder="Enter Quantity"]';
 const NOT_DETECTED_HEADING = /not able to detect items or services/i;
 const SCANNING_HEADING = /one moment while we read your document/i;
+// A genuine server-side failure to read the document at all — distinct from NOT_DETECTED_HEADING
+// (which means it DID read the document but found no items on it). Confirmed live: "Oops!
+// Something went wrong on our end. It looks like we were not able to read your document. You can
+// retry or continue to the next step to manually enter the details..." alongside its own RETRY
+// button, separate from the item-detection UI entirely.
+const READ_ERROR_HEADING = /something went wrong on our end/i;
 const CONFIRMATION_PATTERN = /reimbursement request for Reimbursement #(\d+)/i;
 const DASHBOARD_URL_PATTERN = /\/Dashboard(?:[/?]|$)/i;
 const REIMBURSEMENTS_NAV_LINK = "#sidenav > div.nav-items > div:nth-child(5) > a";
@@ -141,12 +147,17 @@ export async function requestAnotherReimbursement(page: Page): Promise<void> {
 
 /**
  * Gets you to a fresh new-reimbursement form for the next group, however you're currently
- * positioned: if you're already on the student picker (e.g. right after a prior group's
- * `requestAnotherReimbursement()`), this is a no-op; otherwise it falls back to the slower
- * Dashboard/Reimbursements-list path.
+ * positioned: a no-op if you're already on the student picker; the fast `requestAnotherReimbursement()`
+ * path if you're still sitting on the previous group's post-submit confirmation page (deliberately
+ * left there rather than navigated away from the moment it appeared — see the call site in
+ * main.ts); otherwise falls back to the slower Dashboard/Reimbursements-list path.
  */
 export async function ensureOnNewReimbursementForm(page: Page): Promise<void> {
   if (REIMBURSEMENT_STEP_PATTERNS.studentSelection.test(page.url())) return;
+  if (REIMBURSEMENT_STEP_PATTERNS.confirmation.test(page.url())) {
+    await requestAnotherReimbursement(page);
+    return;
+  }
   await goToNewReimbursement(page);
 }
 
@@ -177,26 +188,47 @@ export async function uploadFile(page: Page, localPath: string | string[]): Prom
   await page.locator(FILE_INPUT).setInputFiles(localPath);
 }
 
+export type ItemScanOutcome = "detected" | "notDetected" | "readError";
+
 /**
- * True if StepUp's OCR failed to detect any items on the uploaded receipt. Arriving at this
- * screen's URL only means StepUp has *started* reading the document — it shows its own loading
- * state ("One moment while we read your document... This could take up to 60 seconds") before
- * rendering either outcome, confirmed against a real screenshot. So this waits for that loading
- * state to clear first (covers either outcome, and resolves immediately if scanning already
- * finished by the time we check), then does a quick follow-up check for the "not detected"
- * heading specifically — a naive short timeout on the heading alone would catch the DOM mid-scan
- * and wrongly conclude detection succeeded (confirmed in practice).
+ * Checks how StepUp's OCR scan of the uploaded receipt came out. Arriving at this screen's URL
+ * only means StepUp has *started* reading the document — it shows its own loading state ("One
+ * moment while we read your document... This could take up to 60 seconds") before rendering any
+ * outcome, confirmed against a real screenshot. So this waits for that loading state to clear
+ * first (covers every outcome, and resolves immediately if scanning already finished by the time
+ * we check), then does a quick follow-up check for the two known failure headings — a naive short
+ * timeout on a heading alone would catch the DOM mid-scan and wrongly conclude success (confirmed
+ * in practice) — checked concurrently so covering both doesn't double the worst-case wait.
+ *
+ * "notDetected" ("we weren't able to detect items or services on this document") means StepUp
+ * read the document fine but found nothing on it — the existing, already-handled case. "readError"
+ * ("Oops! Something went wrong on our end... not able to read your document") is a different,
+ * newer failure mode confirmed live: a genuine server-side failure to read the document at all,
+ * with its own separate "Retry" UI. The caller (main.ts) treats these differently: the latter
+ * warrants asking you to actually look at the document before assuming it's fine to fall back to
+ * manual entry — an unreadable document could just as easily mean the file itself is broken.
  */
-export async function itemDetectionFailed(page: Page, scanTimeoutMs = 90000): Promise<boolean> {
+export async function checkItemScan(page: Page, scanTimeoutMs = 90000): Promise<ItemScanOutcome> {
+  await browserInfo(page, "Waiting for StepUp's AI to finish scanning the document for items (can take up to a minute)...");
   await page
     .getByText(SCANNING_HEADING)
     .waitFor({ state: "hidden", timeout: scanTimeoutMs })
     .catch(() => {});
-  return page
-    .getByText(NOT_DETECTED_HEADING)
-    .waitFor({ state: "visible", timeout: 5000 })
-    .then(() => true)
-    .catch(() => false);
+  const [notDetected, readError] = await Promise.all([
+    page
+      .getByText(NOT_DETECTED_HEADING)
+      .waitFor({ state: "visible", timeout: 5000 })
+      .then(() => true)
+      .catch(() => false),
+    page
+      .getByText(READ_ERROR_HEADING)
+      .waitFor({ state: "visible", timeout: 5000 })
+      .then(() => true)
+      .catch(() => false),
+  ]);
+  await clearBanner(page);
+  if (readError) return "readError";
+  return notDetected ? "notDetected" : "detected";
 }
 
 /**
@@ -306,26 +338,102 @@ async function waitForVendorFieldType(page: Page, index: number, timeoutMs = 100
 }
 
 /**
+ * Fills in one already-matched item block's fields: Category/Type/Description, Benefit Message,
+ * Item/Service URL, Vendor or Provider (whichever this category settles on), Service Date,
+ * Invoice #, Cost per Item, Quantity, Tax/Shipping, and Purchase Date — overwriting whatever
+ * StepUp pre-filled with the Excel value (warning first) per your call that Excel is the source
+ * of truth. Shared by both fillItemDetails() (OCR-based matching) and fillItemDetailsSequentially()
+ * (no OCR to match against at all) — matching a block to a row is the only part that differs
+ * between the two.
+ */
+async function fillBlockFields(page: Page, index: number, row: Table1Row): Promise<void> {
+  if (row.data["Category"]) {
+    await fillCategory(page, index, row.data["Category"]);
+  }
+  if (row.data["Benefit Message"]) {
+    await page.locator(EDUCATIONAL_BENEFIT).nth(index).fill(row.data["Benefit Message"]);
+  }
+  if (row.data["Item/Service URL"]) {
+    await page.locator(ITEM_SERVICE_URL).nth(index).fill(row.data["Item/Service URL"]);
+  }
+
+  // Vendor Name / Service Date / Provider are conditional on the category just picked above
+  // (a category requires either Vendor or Provider, never both, and Service Date only for some).
+  // Live-diagnosed: a blind fixed wait + one-shot #vendorName check isn't safe — on a real run,
+  // #vendorName briefly existed (as some kind of transient/default state right after picking the
+  // category) for an item block whose category ultimately settled on requiring Provider instead,
+  // and got permanently mistaken for the real field, silently leaving that item without any
+  // vendor/provider at all once #vendorName was later removed by StepUp itself. Poll both
+  // possibilities until whichever one is real holds steady for a beat, instead of trusting a
+  // single read at an arbitrary point in StepUp's own settling process.
+  const vendorFieldType = await waitForVendorFieldType(page, index);
+  if (vendorFieldType === "vendor" && row.data["Vendor"]) {
+    await overwriteIfDifferent(page.locator(VENDOR_NAME).last(), row.data["Vendor"], "Vendor");
+  } else if (vendorFieldType === "provider") {
+    const providerName = row.data["Service Provider"] || row.data["Vendor"];
+    if (providerName) await selectVendorOrProvider(page, providerName, index);
+  }
+  if (row.data["Service Date"]) {
+    await page.locator(SERVICE_DATE).first().waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
+    if ((await page.locator(SERVICE_DATE).count()) > 0) {
+      await overwriteDateIfDifferent(page.locator(SERVICE_DATE).last(), row.data["Service Date"]);
+    }
+  }
+  await overwriteIfDifferent(page.locator(INVOICE_NUMBER).nth(index), row.data["Invoice #"], "Invoice #");
+  await overwriteIfDifferent(page.locator(COST_PER_ITEM).nth(index), row.data["Amount"], "Cost per Item");
+  await overwriteIfDifferent(page.locator(QUANTITY).nth(index), row.data["Quantity"], "Quantity");
+  await overwriteIfDifferent(
+    page.locator(ADDITIONAL_COSTS).nth(index),
+    row.data["Tax, Shipping, etc."],
+    "Tax/Shipping"
+  );
+  await overwriteDateIfDifferent(page.locator(PURCHASE_DATE).nth(index), row.data["Date"]);
+}
+
+const ADD_ITEM_BUTTON_TEXT = "Add an Item";
+
+/**
  * Walks each "Item N" detail block on the Item/Service Details screen, matches it to one of
  * `candidateRows` by comparing the OCR-filled Cost per Item against each row's Amount (asking
- * you to confirm or correct via the terminal), then fills Category/Type/Description (the three
- * separate cascading dropdown buttons), Benefit Message, and Item/Service URL from that row.
- * Also compares Date/Vendor/Service Date/Invoice #/Tax/Quantity against what StepUp pre-filled
- * (or, for Vendor/Service Date, whether the field is even present — depends on the category)
- * and overwrites with the Excel value (warning first) per your call that Excel is the source of
- * truth. Service Provider selection isn't wired in yet — logs a reminder to do it manually.
+ * you to confirm or correct via the terminal when it's genuinely ambiguous), then fills its
+ * fields via fillBlockFields(). If StepUp hands us fewer blocks than there are candidate rows —
+ * whether because AI detection failed entirely (one blank default block) or only partially
+ * detected some items — clicks "Add an Item" ourselves to create more as needed rather than
+ * asking you to pre-create them up front (a non-blocking banner asking you to do that used to let
+ * this function start processing before you'd added anything).
+ *
+ * `noOcrData`, when true (pass this after itemDetectionFailed() returns true), skips straight to
+ * matching each block to the next remaining row in order instead of ever asking you to disambiguate:
+ * with zero OCR data on every block, there's no real signal to prompt about — StepUp gave you no
+ * indication which row is which, so the natural, only-sensible assignment is the same one a human
+ * filling this in by hand would use, top to bottom. Without this flag, a 2+ row group with no
+ * detection would still hit a real prompt per block for no useful reason.
  */
-export async function fillItemDetails(page: Page, candidateRows: Table1Row[]): Promise<FillResult> {
-  const count = await page.locator(CATEGORY_BUTTON).count();
+export async function fillItemDetails(page: Page, candidateRows: Table1Row[], noOcrData = false): Promise<FillResult> {
+  let count = await page.locator(CATEGORY_BUTTON).count();
   console.log(`\nFound ${count} item detail block(s) on this screen.`);
 
   const remaining = [...candidateRows];
   const matchedRows: Table1Row[] = [];
   const unmatchedBlockIndexes: number[] = [];
 
-  for (let i = 0; i < count; i++) {
-    const costLocator = page.locator(COST_PER_ITEM).nth(i);
-    const rawCost = await costLocator.inputValue().catch(() => "");
+  for (let i = 0; i < count || remaining.length > 0; i++) {
+    if (i >= count) {
+      console.log(`\nNeed another item block for the remaining candidate row(s) — clicking "Add an Item"...`);
+      await browserInfo(page, "Waiting for StepUp to add a new item block...");
+      await page.getByRole("button", { name: ADD_ITEM_BUTTON_TEXT, exact: true }).click();
+      const deadline = Date.now() + 15000;
+      while ((await page.locator(CATEGORY_BUTTON).count()) <= i && Date.now() < deadline) {
+        await page.waitForTimeout(300);
+      }
+      count = await page.locator(CATEGORY_BUTTON).count();
+      await clearBanner(page);
+      if (count <= i) {
+        throw new Error(`Clicked "Add an Item" for block ${i + 1} but it never appeared within 15000ms.`);
+      }
+    }
+
+    const rawCost = await page.locator(COST_PER_ITEM).nth(i).inputValue().catch(() => "");
     const ocrCost = Number.parseFloat(rawCost.replace(/[^0-9.]/g, ""));
 
     // OCR often reads the item's name reliably even when it can't read the amount (e.g. "$0.00")
@@ -364,6 +472,9 @@ export async function fillItemDetails(page: Page, candidateRows: Table1Row[]): P
     } else if (remaining.length === 1) {
       matchedRow = remaining[0];
       console.log(`  Only one candidate row left — matched to ID ${matchedRow.data["ID"]} ("${matchedRow.data["Item"]}").`);
+    } else if (noOcrData) {
+      matchedRow = remaining[0];
+      console.log(`  No OCR data to match against — assigning by row order: ID ${matchedRow.data["ID"]} ("${matchedRow.data["Item"]}").`);
     } else {
       const answer = await browserChoose(
         page,
@@ -375,48 +486,7 @@ export async function fillItemDetails(page: Page, candidateRows: Table1Row[]): P
 
     remaining.splice(remaining.indexOf(matchedRow), 1);
     matchedRows.push(matchedRow);
-
-    if (matchedRow.data["Category"]) {
-      await fillCategory(page, i, matchedRow.data["Category"]);
-    }
-    if (matchedRow.data["Benefit Message"]) {
-      await page.locator(EDUCATIONAL_BENEFIT).nth(i).fill(matchedRow.data["Benefit Message"]);
-    }
-    if (matchedRow.data["Item/Service URL"]) {
-      await page.locator(ITEM_SERVICE_URL).nth(i).fill(matchedRow.data["Item/Service URL"]);
-    }
-
-    // Vendor Name / Service Date / Provider are conditional on the category just picked above
-    // (a category requires either Vendor or Provider, never both, and Service Date only for some).
-    // Live-diagnosed: a blind fixed wait + one-shot #vendorName check isn't safe — on a real run,
-    // #vendorName briefly existed (as some kind of transient/default state right after picking the
-    // category) for an item block whose category ultimately settled on requiring Provider instead,
-    // and got permanently mistaken for the real field, silently leaving that item without any
-    // vendor/provider at all once #vendorName was later removed by StepUp itself. Poll both
-    // possibilities until whichever one is real holds steady for a beat, instead of trusting a
-    // single read at an arbitrary point in StepUp's own settling process.
-    const vendorFieldType = await waitForVendorFieldType(page, i);
-    if (vendorFieldType === "vendor" && matchedRow.data["Vendor"]) {
-      await overwriteIfDifferent(page.locator(VENDOR_NAME).last(), matchedRow.data["Vendor"], "Vendor");
-    } else if (vendorFieldType === "provider") {
-      const providerName = matchedRow.data["Service Provider"] || matchedRow.data["Vendor"];
-      if (providerName) await selectVendorOrProvider(page, providerName, i);
-    }
-    if (matchedRow.data["Service Date"]) {
-      await page.locator(SERVICE_DATE).first().waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
-      if ((await page.locator(SERVICE_DATE).count()) > 0) {
-        await overwriteDateIfDifferent(page.locator(SERVICE_DATE).last(), matchedRow.data["Service Date"]);
-      }
-    }
-    await overwriteIfDifferent(page.locator(INVOICE_NUMBER).nth(i), matchedRow.data["Invoice #"], "Invoice #");
-    await overwriteIfDifferent(costLocator, matchedRow.data["Amount"], "Cost per Item");
-    await overwriteIfDifferent(page.locator(QUANTITY).nth(i), matchedRow.data["Quantity"], "Quantity");
-    await overwriteIfDifferent(
-      page.locator(ADDITIONAL_COSTS).nth(i),
-      matchedRow.data["Tax, Shipping, etc."],
-      "Tax/Shipping"
-    );
-    await overwriteDateIfDifferent(page.locator(PURCHASE_DATE).nth(i), matchedRow.data["Date"]);
+    await fillBlockFields(page, i, matchedRow);
   }
 
   return { matchedRows, unmatchedBlockIndexes };
@@ -443,7 +513,7 @@ async function overwriteIfDifferent(
 /** Graph returns date cells as raw Excel serial numbers (e.g. "45888"), not formatted strings —
  *  days since the Excel epoch of 1899-12-30. Converts that to a real Date; falls through to
  *  normal Date parsing for anything that isn't a bare integer (already-ISO strings, etc.). */
-function parseExcelDate(value: string): Date {
+export function parseExcelDate(value: string): Date {
   if (/^\d+$/.test(value.trim())) {
     return new Date(Date.UTC(1899, 11, 30) + Number(value) * 86400000);
   }
@@ -465,6 +535,23 @@ async function overwriteDateIfDifferent(locator: ReturnType<Page["locator"]>, ex
 }
 
 /**
+ * Clicks `locator` by dispatching a raw DOM `.click()` inside the browser (via Locator.evaluate())
+ * instead of Playwright's own coordinate-based click. Live-diagnosed as necessary for StepUp's
+ * dropdown option lists specifically: they can render via `position: fixed` and open *upward* with
+ * their own internal scroll, so a real, genuinely-clickable, exact-matching option can simultaneously
+ * (a) never satisfy Playwright's actionability/stability polling (observed live: a hang lasting
+ * 10+ minutes, with the list's internal scroll position visibly bouncing between two values,
+ * never converging) and, once that's bypassed with `force: true`, (b) still be physically outside
+ * the actual browser window's visible bounds ("Element is outside of the viewport") even after
+ * being scrolled into the *list's own* view. A raw DOM click needs neither stability nor on-screen
+ * coordinates, sidestepping both — confirmed live: this exact sequence, tried on the exact element
+ * Playwright was stuck on, succeeded instantly and StepUp's own UI updated correctly.
+ */
+async function rawClick(locator: Locator): Promise<void> {
+  await locator.evaluate((el) => (el as HTMLElement).click());
+}
+
+/**
  * Opens the "Who did you pay?" dropdown and selects the option matching `name`. Tries an exact
  * match first, then falls back to a substring match — but only when it's unambiguous (exactly
  * one hit) — since Excel's Vendor value is sometimes a shorter/looser form of StepUp's actual
@@ -478,7 +565,7 @@ async function selectVendorOrProvider(page: Page, name: string, index: number): 
 
   const exactOption = dropdown.getByText(name, { exact: true });
   if (await exactOption.isVisible().catch(() => false)) {
-    await exactOption.click();
+    await rawClick(exactOption);
     return;
   }
 
@@ -487,14 +574,14 @@ async function selectVendorOrProvider(page: Page, name: string, index: number): 
   if (partialCount === 1) {
     const matchedText = await partialMatches.first().textContent();
     console.log(`  "${name}" matched "${matchedText?.trim()}" in the provider list (partial match).`);
-    await partialMatches.first().click();
+    await rawClick(partialMatches.first());
     return;
   }
 
   console.log(
     `  "${name}" not found (or ambiguous — ${partialCount} partial match(es)) in the provider list — falling back to manual Vendor Name entry.`
   );
-  await dropdown.getByText(PROVIDER_NOT_LISTED_TEXT, { exact: true }).click();
+  await rawClick(dropdown.getByText(PROVIDER_NOT_LISTED_TEXT, { exact: true }));
   await page.locator(VENDOR_NAME).last().fill(name);
 }
 
@@ -525,6 +612,21 @@ async function selectVendorOrProvider(page: Page, name: string, index: number): 
  * bottom order they sit in the DOM, so by the time item block `index` is being processed, exactly
  * `index` earlier copies of the field should already exist — `index + 1` is what confirms *this*
  * block's own copy has genuinely landed, not just some earlier block's.
+ *
+ * The option click dispatches a raw DOM `.click()` via `Locator.evaluate()` instead of Playwright's
+ * own coordinate-based click. Live-diagnosed in two rounds: first a genuine hang (10+ minutes, not
+ * a timeout) where the target option's exact text existed and was visibly on screen but
+ * Playwright's own actionability/stability polling never settled (observable live: the dropdown's
+ * internal scroll position kept flipping between two values in a loop, never converging) — a raw
+ * `element.click()` on that same element via page.evaluate() succeeded instantly and StepUp's own
+ * UI updated correctly, proving the element genuinely was clickable. Switching to `{ force: true }`
+ * fixed that hang but immediately hit a second, more specific failure: "Element is outside of the
+ * viewport" — this dropdown renders via `position: fixed` and opens *upward* with its own internal
+ * scroll (that's what was bouncing), so the target can be scrolled into the *list's own* view while
+ * still being physically outside the actual browser window, which even `force: true` can't click
+ * since Playwright still needs real on-screen coordinates. A raw DOM `.click()` needs neither
+ * stability nor visible coordinates, sidestepping both failure modes at once — confirmed as the
+ * right fix by the same manual test that found the first problem.
  */
 async function clickDropdownOptionAndVerify(
   page: Page,
@@ -536,7 +638,7 @@ async function clickDropdownOptionAndVerify(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await button.click();
     const openMenu = page.locator(".dropdown-menu.show");
-    await openMenu.getByText(optionText, { exact: true }).last().click();
+    await rawClick(openMenu.getByText(optionText, { exact: true }).last());
 
     const currentText = (await button.textContent().catch(() => null))?.trim() ?? "";
     let ok = currentText.includes(optionText);
@@ -592,6 +694,15 @@ async function fillCategory(page: Page, index: number, categoryValue: string): P
  * it were real. "0" is treated the same as no match at all — never a genuine reimbursement ID.
  */
 export async function readReimbursementId(page: Page, timeoutMs = 15000): Promise<string> {
+  await browserInfo(page, "Waiting for StepUp to generate your Reimbursement ID...");
+  try {
+    return await readReimbursementIdOnce(page, timeoutMs);
+  } finally {
+    await clearBanner(page);
+  }
+}
+
+async function readReimbursementIdOnce(page: Page, timeoutMs: number): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   let lastHeading: string | null = null;
   while (Date.now() < deadline) {
