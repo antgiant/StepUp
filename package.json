@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "browser": "tsx src/browserServer.ts",
     "discover": "tsx src/discover.ts",
     "inspect": "tsx src/inspectPages.ts",
     "start": "tsx src/main.ts",

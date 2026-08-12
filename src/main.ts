@@ -1,9 +1,10 @@
 import "dotenv/config";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { launchStepUpSession } from "./form/browser.js";
+import { connectToStepUpSession } from "./form/browser.js";
 import { browserChoose, browserContinue, browserInfo } from "./form/browserPrompt.js";
 import {
+  autoCheckDetectedItems,
   checkForDashboardModal,
   clickContinue,
   ensureOnNewReimbursementForm,
@@ -74,7 +75,7 @@ function escapeHtml(s: string): string {
 
 /** Downloads a candidate file and opens it in a new tab wrapped with a clear label (filename + the row it's being reviewed for), so it's obvious what you're looking at and why. */
 async function openLabeledPreview(
-  context: Awaited<ReturnType<typeof launchStepUpSession>>["context"],
+  context: Awaited<ReturnType<typeof connectToStepUpSession>>["context"],
   folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
   fileId: string,
   localPath: string,
@@ -135,8 +136,8 @@ async function main() {
     if (name && scholarship) scholarshipByChild.set(name, scholarship);
   }
 
-  const { context, page } = await launchStepUpSession();
-  console.log("\nBrowser opened to the StepUp site. Log in manually — no prompts will show until you land on the Dashboard.");
+  const { context, page } = await connectToStepUpSession();
+  console.log("\nConnected to the browser server. If you haven't already, log in manually — no prompts will show until you land on the Dashboard.");
 
   attachStatusSyncListener(page, excelRef);
   attachCategoryTreeListener(page, excelRef);
@@ -244,14 +245,17 @@ async function main() {
   await browserContinue(
     page,
     stoppedEarly
-      ? "Stopped early. Everything submitted so far is already saved — just re-run later to pick up the rest. Click Continue to close the browser and exit."
-      : "All groups processed. Click Continue to close the browser and exit."
+      ? "Stopped early. Everything submitted so far is already saved — just re-run \"npm start\" later to pick up the rest. Click Continue to finish."
+      : "All groups processed. Click Continue to finish. The browser stays open — re-run \"npm start\" for more rows, or click the \"All done — close browser\" button (top-right of the page) when you're fully done."
   );
-  await context.close();
+  // Deliberately not closing `context`/`browser` here — this process only connected to the
+  // shared browser server (browserServer.ts owns its lifecycle), it didn't launch it. Force an
+  // explicit clean exit instead of letting the CDP connection's open socket keep the process alive.
+  process.exit(0);
 }
 
 async function runGroup(
-  page: Awaited<ReturnType<typeof launchStepUpSession>>["page"],
+  page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
   excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
   folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
@@ -292,10 +296,20 @@ async function runGroup(
         `On this screen, click "Add an Item" ${group.rows.length} time(s) — one block for each of:\n${rowsSummary}`
     );
   } else {
-    console.log("\nManually check the box(es) for these row(s) on the Item/Service Selection screen:");
-    group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
-    const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
-    await browserInfo(page, `Check the box(es) for these row(s), then click Continue yourself in StepUp:\n${rowsSummary}`);
+    console.log("StepUp detected item(s) — attempting to auto-check the matching box(es)...");
+    const allMatched = await autoCheckDetectedItems(page, group.rows);
+    if (allMatched) {
+      console.log("All detected item(s) matched and checked — auto-continuing.");
+      await clickContinue(page);
+    } else {
+      console.log("\nSome item(s) couldn't be auto-matched — check/fix the box(es) for these row(s) yourself:");
+      group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
+      const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
+      await browserInfo(
+        page,
+        `Some item(s) couldn't be auto-matched. Check/fix the box(es) for these row(s), then click Continue yourself in StepUp:\n${rowsSummary}`
+      );
+    }
   }
   await waitForStep(page, "itemDetails");
 
