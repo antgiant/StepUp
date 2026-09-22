@@ -527,8 +527,9 @@ async function runGroup(
   await browserInfo(
     page,
     `Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.\n\n` +
-      `Total expected reimbursement: ${totalFormatted}\n\n` +
-      `File(s) attached this submission:\n${attachmentsNote}`
+      `Child: ${escapeHtml(group.child)}\n\n` +
+      `File(s) attached this submission:\n${attachmentsNote}\n\n` +
+      `Total expected reimbursement: ${totalFormatted}`
   );
   await waitForStep(page, "confirmation");
   const reimbursementId = await readReimbursementId(page);
