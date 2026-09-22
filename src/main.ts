@@ -500,7 +500,6 @@ async function runGroup(
   console.log('Auto-clicking "Continue to Summary"...');
   await clickContinue(page);
   await waitForStep(page, "summary");
-
   // Uploading additional documents just above happened without pausing for you (auto-clicked
   // straight through to here), so this is the first chance to actually see what got attached.
   const attachmentsNote =
@@ -508,9 +507,27 @@ async function runGroup(
     (missingAdditionalFiles.length > 0
       ? `\n  (missing, not attached: ${missingAdditionalFiles.join(", ")})`
       : "");
+
+  // Compute total expected reimbursement from matched rows: Amount * Quantity + Tax/Shipping.
+  const totalExpected = matchedRows.reduce((sum, r) => {
+    const parseNum = (s: string | undefined) => {
+      if (!s) return 0;
+      const cleaned = String(s).replace(/[^0-9.\-]/g, "");
+      const n = Number.parseFloat(cleaned);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const amount = parseNum(r.data["Amount"]);
+    const qtyRaw = (r.data["Quantity"] || "").trim();
+    const quantity = qtyRaw === "" ? 1 : parseNum(qtyRaw) || 1;
+    const additional = parseNum(r.data["Tax, Shipping, etc."]);
+    return sum + amount * quantity + additional;
+  }, 0);
+  const totalFormatted = `$${totalExpected.toFixed(2)}`;
+
   await browserInfo(
     page,
     `Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.\n\n` +
+      `Total expected reimbursement: ${totalFormatted}\n\n` +
       `File(s) attached this submission:\n${attachmentsNote}`
   );
   await waitForStep(page, "confirmation");
