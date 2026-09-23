@@ -190,6 +190,10 @@ export async function buildGroups(
   };
 
   for (const row of rows) {
+    if (row.documentationFiles.length === 0) {
+      console.warn(`Skipping row ID ${row.data["ID"]} (${row.data["Item"]}): no documentation files listed.`);
+      continue;
+    }
     const mainReceipt = await determineMainReceipt(row, cachedResolveAmbiguous);
     if (mainReceipt === null) continue; // flagged as unresolvable; already recorded in the spreadsheet
     const child = row.data["Child"] ?? "";
