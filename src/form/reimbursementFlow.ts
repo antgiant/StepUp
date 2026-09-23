@@ -346,9 +346,9 @@ async function waitForVendorFieldType(page: Page, index: number, timeoutMs = 100
  * (no OCR to match against at all) — matching a block to a row is the only part that differs
  * between the two.
  */
-async function fillBlockFields(page: Page, index: number, row: Table1Row): Promise<void> {
+async function fillBlockFields(page: Page, index: number, row: Table1Row, allRows: Table1Row[]): Promise<void> {
   if (row.data["Category"]) {
-    await fillCategory(page, index, row.data["Category"]);
+    await fillCategory(page, index, row.data["Category"], row, allRows);
   }
   if (row.data["Benefit Message"]) {
     await page.locator(EDUCATIONAL_BENEFIT).nth(index).fill(row.data["Benefit Message"]);
@@ -408,8 +408,19 @@ const ADD_ITEM_BUTTON_TEXT = "Add an Item";
  * indication which row is which, so the natural, only-sensible assignment is the same one a human
  * filling this in by hand would use, top to bottom. Without this flag, a 2+ row group with no
  * detection would still hit a real prompt per block for no useful reason.
+ *
+ * `allRows`, if given, is the full set of rows for the whole run (not just this group) — used
+ * purely so a Category dropdown mismatch (see fillCategory()) can offer to apply its fix to other
+ * rows elsewhere in the run that share the exact same Category value, instead of just this one.
+ * Defaults to `candidateRows` when omitted, so a mismatch still resolves fine — it just won't know
+ * about any sibling rows outside this one group.
  */
-export async function fillItemDetails(page: Page, candidateRows: Table1Row[], noOcrData = false): Promise<FillResult> {
+export async function fillItemDetails(
+  page: Page,
+  candidateRows: Table1Row[],
+  noOcrData = false,
+  allRows: Table1Row[] = candidateRows
+): Promise<FillResult> {
   let count = await page.locator(CATEGORY_BUTTON).count();
   console.log(`\nFound ${count} item detail block(s) on this screen.`);
 
@@ -486,7 +497,7 @@ export async function fillItemDetails(page: Page, candidateRows: Table1Row[], no
 
     remaining.splice(remaining.indexOf(matchedRow), 1);
     matchedRows.push(matchedRow);
-    await fillBlockFields(page, i, matchedRow);
+    await fillBlockFields(page, i, matchedRow, allRows);
   }
 
   return { matchedRows, unmatchedBlockIndexes };
@@ -662,28 +673,251 @@ async function clickDropdownOptionAndVerify(
   throw new Error(`Couldn't select "${optionText}" from the dropdown after ${maxAttempts} attempt(s).`);
 }
 
+const CATEGORY_LEVEL_LABELS = ["Category", "Type", "Description"];
+
+/**
+ * Once a Category dropdown mismatch has been resolved for a given raw Excel "Category" string
+ * (see fillCategory()), the working level texts are remembered here for the rest of this process's
+ * lifetime — keyed by the exact raw string, so any other row/block sharing that identical value
+ * (elsewhere in the same run) skips straight past the mismatch-handling below instead of hitting
+ * (and re-prompting for) the same dead end again. Deliberately in-memory only, not persisted to
+ * disk: it's a same-run convenience, not a record of what StepUp's real categories are (that's
+ * categorySync.ts's job).
+ */
+const categoryOverrides = new Map<string, string[]>();
+
+/**
+ * Waits (briefly, not Playwright's 10-minute default) for at least one option matching `text` to
+ * exist in `openMenu`, to absorb ordinary rendering lag without mistaking a slow-to-render-but-real
+ * option for a genuinely missing one. Returns the match count once it stops being 0, or once
+ * `timeoutMs` elapses — whichever first.
+ */
+async function waitForOptionCount(openMenu: Locator, text: string, exact: boolean, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let count = await openMenu.getByText(text, { exact }).count();
+  while (count === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    count = await openMenu.getByText(text, { exact }).count();
+  }
+  return count;
+}
+
+async function waitForFieldCount(page: Page, selector: string, minCount: number, timeoutMs = 8000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let count = await page.locator(selector).count();
+  while (count < minCount && Date.now() < deadline) {
+    await page.waitForTimeout(300);
+    count = await page.locator(selector).count();
+  }
+  return count >= minCount;
+}
+
+/**
+ * Clicks `optionText` in the dropdown menu that's already open (from the caller's own probing) and
+ * verifies the button's displayed text updated to reflect it, retrying (reopening the dropdown) a
+ * few times if it didn't — same raw-DOM-click/verify/waitForDependent technique as the original
+ * clickDropdownOptionAndVerify() above, just split out so the caller can probe the open menu's
+ * actual contents first instead of trusting `optionText` blindly. Doesn't click the button on the
+ * first attempt (unlike clickDropdownOptionAndVerify) because the caller already opened it to
+ * inspect its options — clicking a Bootstrap dropdown toggle a second time closes it instead of
+ * being a harmless no-op, which would otherwise strand the very next line waiting on a menu that
+ * just disappeared.
+ */
+async function clickOpenOptionAndVerify(
+  page: Page,
+  button: Locator,
+  optionText: string,
+  waitForDependent?: { selector: string; minCount: number },
+  maxAttempts = 3
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) await button.click();
+    const openMenu = page.locator(".dropdown-menu.show");
+    await rawClick(openMenu.getByText(optionText, { exact: true }).last());
+
+    const currentText = (await button.textContent().catch(() => null))?.trim() ?? "";
+    let ok = currentText.includes(optionText);
+    if (ok && waitForDependent) {
+      ok = await waitForFieldCount(page, waitForDependent.selector, waitForDependent.minCount);
+    }
+    if (ok) return;
+    if (attempt < maxAttempts) {
+      console.log(`  Dropdown selection "${optionText}" didn't fully register (attempt ${attempt}/${maxAttempts}) — retrying...`);
+      await page.waitForTimeout(500);
+    }
+  }
+  throw new Error(`Couldn't select "${optionText}" from the dropdown after ${maxAttempts} attempt(s).`);
+}
+
+/**
+ * Pauses so you can pick the right option yourself directly in StepUp's own dropdown — it's
+ * already open, and our banner doesn't block the page (see browserPrompt.ts), so this works
+ * without closing it first — then confirms via a banner button once you're done, rather than
+ * letting Playwright hang against its 10-minute default timeout searching for option text that
+ * genuinely isn't there. Compares the button's displayed text before/after to catch "I picked it"
+ * being clicked without anything actually having been picked, and asks again instead of silently
+ * carrying on with a stale/wrong value.
+ */
+async function resolveCategoryMismatchManually(
+  page: Page,
+  button: Locator,
+  beforeText: string,
+  desiredText: string,
+  levelLabel: string,
+  row: Table1Row
+): Promise<string> {
+  const rowSummary = `ID ${row.data["ID"] ?? "?"} ("${row.data["Item"] ?? ""}")`;
+  const PICKED = "picked";
+  const SKIP = "skip";
+  let message =
+    `${rowSummary}: couldn't find "${desiredText}" (or an unambiguous partial match) in the ${levelLabel} dropdown. ` +
+    `It's open now — click the correct option yourself in StepUp, then click "I picked it" below.`;
+
+  while (true) {
+    const choice = await browserChoose(page, message, [
+      { label: "I picked it — continue", value: PICKED },
+      { label: "Skip this row (leave for manual entry later)", value: SKIP },
+    ]);
+    if (choice === SKIP) {
+      throw new Error(`Skipped — couldn't match ${levelLabel} "${desiredText}" for ${rowSummary}, and you chose to skip it.`);
+    }
+    const currentText = (await button.textContent().catch(() => null))?.trim() ?? "";
+    if (currentText && currentText !== beforeText) return currentText;
+    message =
+      `${rowSummary}: the ${levelLabel} selection doesn't look like it changed yet (still shows "${currentText || "(blank)"}"). ` +
+      `Pick an option in the dropdown (reopen it if it closed), then click "I picked it" again.`;
+  }
+}
+
+/**
+ * Opens `button`'s dropdown and resolves `desiredText` against whatever options are actually
+ * there: an exact match (the common case) is clicked immediately; failing that, an unambiguous
+ * partial match (same "only trust it if there's exactly one hit" caution as selectVendorOrProvider's
+ * own substring fallback) is used instead; failing that too — a genuine mismatch between the Excel
+ * Category column and StepUp's real dropdown options — hands off to
+ * resolveCategoryMismatchManually() rather than letting Playwright's default 10-minute action
+ * timeout make this look like the whole process has hung.
+ */
+async function selectCategoryLevel(
+  page: Page,
+  button: Locator,
+  desiredText: string,
+  levelLabel: string,
+  row: Table1Row,
+  waitForDependent?: { selector: string; minCount: number }
+): Promise<{ text: string; wasRepaired: boolean }> {
+  const beforeText = (await button.textContent().catch(() => null))?.trim() ?? "";
+  await button.click();
+  const openMenu = page.locator(".dropdown-menu.show");
+  await openMenu.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+
+  const exactCount = await waitForOptionCount(openMenu, desiredText, true, 3000);
+  if (exactCount > 0) {
+    await clickOpenOptionAndVerify(page, button, desiredText, waitForDependent);
+    return { text: desiredText, wasRepaired: false };
+  }
+
+  const partialMatches = openMenu.getByText(desiredText, { exact: false });
+  const partialCount = await partialMatches.count();
+  if (partialCount === 1) {
+    const matchedText = (await partialMatches.first().textContent())?.trim() || desiredText;
+    console.log(`  ${levelLabel} "${desiredText}" not found exactly in the dropdown — using partial match "${matchedText}".`);
+    await clickOpenOptionAndVerify(page, button, matchedText, waitForDependent);
+    return { text: matchedText, wasRepaired: true };
+  }
+
+  console.log(
+    `  ${levelLabel} "${desiredText}" not found in the dropdown (${partialCount === 0 ? "no" : `${partialCount} ambiguous`} partial match(es)) — pausing for you to pick it manually.`
+  );
+  const manualText = await resolveCategoryMismatchManually(page, button, beforeText, desiredText, levelLabel, row);
+  if (waitForDependent) await waitForFieldCount(page, waitForDependent.selector, waitForDependent.minCount);
+  return { text: manualText, wasRepaired: true };
+}
+
+/**
+ * After a Category mismatch gets fixed (auto partial-match or manual) for `row`, checks whether
+ * any other row in `allRows` has the exact same raw Category string — a mismatch is usually
+ * StepUp-side (a renamed/removed category) rather than a one-off typo, so it's likely to hit every
+ * other row that used the same value. If any are found, offers to remember this fix for them too
+ * (via `categoryOverrides`) so they sail through instead of stopping to ask again.
+ */
+async function offerToFixOtherRows(
+  page: Page,
+  categoryValue: string,
+  resolvedLevels: string[],
+  row: Table1Row,
+  allRows: Table1Row[]
+): Promise<void> {
+  const others = allRows.filter((r) => r !== row && (r.data["Category"] ?? "").trim() === categoryValue.trim());
+  if (others.length === 0) return;
+
+  const idList = others.map((r) => `ID ${r.data["ID"] ?? "?"} ("${r.data["Item"] ?? ""}")`).join(", ");
+  const choice = await browserChoose(
+    page,
+    `Fixed Category "${categoryValue}" -> "${resolvedLevels.join(" - ")}". ${others.length} other item(s) in this run use the exact same Category value: ${idList}. Apply this same fix automatically when they come up, instead of asking again?`,
+    [
+      { label: `Yes, apply to all ${others.length}`, value: "yes" },
+      { label: "No, ask me again for each one", value: "no" },
+    ]
+  );
+  if (choice === "yes") {
+    categoryOverrides.set(categoryValue, resolvedLevels);
+    console.log(`  Will auto-apply this fix to ${others.length} other row(s) with Category "${categoryValue}".`);
+  }
+}
+
 /**
  * Selects each cascading level parsed from the Excel "Category" column (e.g. "Bob - Smith - Widget")
  * across StepUp's three separate dropdown buttons: Category (#category, exists per item block from
  * the start) -> Type (#categoryType) -> Description (#categoryDetail) — the latter two only appear
  * in the DOM once their parent level has been picked, so they're targeted with .last() rather than
  * .nth(index).
+ *
+ * Graceful degradation for a level whose Excel text doesn't match any real dropdown option (the
+ * spreadsheet drifting out of sync with StepUp's own category list is a real, recurring failure
+ * mode — previously this hung for up to Playwright's 10-minute default timeout, indistinguishable
+ * from the whole process having frozen): try an unambiguous partial-string match first, then fall
+ * back to pausing for you to pick it manually — see selectCategoryLevel(). Once fixed, offers to
+ * apply the same fix to every other row elsewhere in this run with the identical raw Category value
+ * (see offerToFixOtherRows()) — a mismatch is almost always StepUp-side, so it tends to hit every
+ * row that shares that value, not just this one. A value already resolved this way (or already
+ * confirmed correct via the exact-match fast path) is cached in `categoryOverrides` and reused
+ * directly for the rest of this process's lifetime.
  */
-async function fillCategory(page: Page, index: number, categoryValue: string): Promise<void> {
-  const levels = parseCategoryLevels(categoryValue);
-  if (levels.length === 0) return;
+async function fillCategory(page: Page, index: number, categoryValue: string, row: Table1Row, allRows: Table1Row[]): Promise<void> {
+  const rawLevels = parseCategoryLevels(categoryValue);
+  if (rawLevels.length === 0) return;
 
-  await clickDropdownOptionAndVerify(page, page.locator(CATEGORY_BUTTON).nth(index), levels[0], {
-    waitForDependent: levels.length > 1 ? { selector: CATEGORY_TYPE_BUTTON, minCount: index + 1 } : undefined,
-  });
-  if (levels.length === 1) return;
+  const cachedLevels = categoryOverrides.get(categoryValue);
+  const levelsToSelect = cachedLevels ?? rawLevels;
+  const resolvedLevels: string[] = [];
+  let repaired = false;
 
-  await clickDropdownOptionAndVerify(page, page.locator(CATEGORY_TYPE_BUTTON).last(), levels[1], {
-    waitForDependent: levels.length > 2 ? { selector: CATEGORY_DETAIL_BUTTON, minCount: index + 1 } : undefined,
-  });
-  if (levels.length === 2) return;
+  for (let i = 0; i < levelsToSelect.length; i++) {
+    const button =
+      i === 0 ? page.locator(CATEGORY_BUTTON).nth(index) : page.locator(i === 1 ? CATEGORY_TYPE_BUTTON : CATEGORY_DETAIL_BUTTON).last();
+    const hasNext = i < levelsToSelect.length - 1;
+    const waitForDependent = hasNext
+      ? { selector: i === 0 ? CATEGORY_TYPE_BUTTON : CATEGORY_DETAIL_BUTTON, minCount: index + 1 }
+      : undefined;
 
-  await clickDropdownOptionAndVerify(page, page.locator(CATEGORY_DETAIL_BUTTON).last(), levels[2]);
+    if (cachedLevels) {
+      // Already confirmed to be real, clickable options earlier in this run — go straight to
+      // clicking them (dropdown starts closed here, so the original click-fresh-each-attempt
+      // helper is safe to reuse) rather than re-running the exact/partial-match search.
+      await clickDropdownOptionAndVerify(page, button, levelsToSelect[i], { waitForDependent });
+      resolvedLevels.push(levelsToSelect[i]);
+      continue;
+    }
+
+    const result = await selectCategoryLevel(page, button, levelsToSelect[i], CATEGORY_LEVEL_LABELS[i] ?? `Level ${i + 1}`, row, waitForDependent);
+    resolvedLevels.push(result.text);
+    if (result.wasRepaired) repaired = true;
+  }
+
+  if (repaired) {
+    await offerToFixOtherRows(page, categoryValue, resolvedLevels, row, allRows);
+  }
 }
 
 /**

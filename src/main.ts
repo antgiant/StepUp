@@ -40,6 +40,7 @@ import {
   checkScholarshipEligibility,
   loadUnfiledRows,
   type ReimbursementGroup,
+  type Table1Row,
 } from "./reimbursements.js";
 import { attachStatusSyncListener } from "./statusSync.js";
 import { attachVendorListingListener } from "./vendorListingSync.js";
@@ -290,7 +291,7 @@ async function main() {
     }
 
     try {
-      await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild);
+      await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, rows);
     } catch (err) {
       const message = (err as Error).message;
       console.error(`\nGroup ${i + 1} failed: ${message}`);
@@ -328,7 +329,8 @@ async function runGroup(
   folderChildren: FolderChild[],
   dataDir: string,
   table1Headers: string[],
-  scholarshipByChild: Map<string, string>
+  scholarshipByChild: Map<string, string>,
+  allRows: Table1Row[]
 ): Promise<void> {
   console.log(`\nNavigating to a new reimbursement request for ${group.child}...`);
   await ensureOnNewReimbursementForm(page);
@@ -430,7 +432,7 @@ async function runGroup(
   }
   await waitForStep(page, "itemDetails");
 
-  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(page, group.rows, scanOutcome === "notDetected");
+  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows);
   let reviewHtml =
     `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
     `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;
