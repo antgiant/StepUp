@@ -23,6 +23,7 @@ import {
   uploadFile,
   waitForLogin,
   waitForStep,
+  type CategoryFixHooks,
 } from "./form/reimbursementFlow.js";
 import {
   downloadItem,
@@ -33,7 +34,7 @@ import {
   updateTableRowByIndex,
   type FolderChild,
 } from "./graph/onedrive.js";
-import { attachCategoryTreeListener } from "./categorySync.js";
+import { applyCategoryRename, attachCategoryTreeListener } from "./categorySync.js";
 import { attachPreauthSyncListener } from "./preauthSync.js";
 import {
   buildGroups,
@@ -432,7 +433,33 @@ async function runGroup(
   }
   await waitForStep(page, "itemDetails");
 
-  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows);
+  // Wired so a live Category dropdown mismatch (see fillCategory() in reimbursementFlow.ts) gets
+  // persisted the moment it's resolved, instead of only living in that file's in-memory
+  // categoryOverrides for this process's lifetime: the corrected value is written back to Table1
+  // for every affected row, and Table5 (the categories reference table) is renamed to match.
+  const categoryIdx = table1Headers.indexOf("Category");
+  const categoryFixHooks: CategoryFixHooks = {
+    onRenamed: (oldPath, newPath) => applyCategoryRename(excelRef, oldPath, newPath),
+    onRowsFixed: async (rowsToFix, newValue) => {
+      for (const r of rowsToFix) {
+        await updateTableRowByIndex(excelRef, TABLE1, r.rowIndex, r.rawValues, table1Headers, { Category: newValue });
+        // Keep this row's own in-memory copies in sync immediately: later write-backs for the same
+        // row (Status/Submitted/Notes, below and in the catch-block error path) reuse this same
+        // rawValues array as updateTableRowByIndex's "currentValues" and would otherwise silently
+        // revert this fix by re-sending the stale Category value alongside their own changes.
+        if (categoryIdx !== -1) r.rawValues[categoryIdx] = newValue;
+        r.data["Category"] = newValue;
+      }
+    },
+  };
+
+  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(
+    page,
+    group.rows,
+    scanOutcome === "notDetected",
+    allRows,
+    categoryFixHooks
+  );
   let reviewHtml =
     `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
     `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;

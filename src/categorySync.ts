@@ -137,11 +137,15 @@ export function buildPathEntriesFromCache(cache: Cache): CategoryPathEntry[] {
  * Adds any category paths missing from Table5, and backfills "Eligible Scholarships" on existing
  * rows whose value is now known but wasn't previously recorded. Never deletes or overwrites a
  * non-blank eligibility value — just reports what's no longer found upstream.
+ *
+ * `stale` (existing Table5 paths not reconstructable from `entries`) is report-only, not acted on
+ * here — see reportAndSync()'s use of it for why this can't safely be turned into an auto-rename
+ * or auto-delete.
  */
 async function syncCategoriesTable(
   excelRef: DriveItemRef,
   entries: CategoryPathEntry[]
-): Promise<{ added: string[]; updated: string[] }> {
+): Promise<{ added: string[]; updated: string[]; stale: string[] }> {
   const headers = await getTableHeaderRow(excelRef, TABLE5);
   const rows = await getTableRows(excelRef, TABLE5);
   const eligibleIdx = headers.indexOf("Eligible Scholarships");
@@ -178,12 +182,15 @@ async function syncCategoriesTable(
     });
   }
 
-  return { added: toAdd.map((e) => e.path), updated: toUpdate.map((u) => u.path) };
+  const livePaths = new Set(entries.map((e) => e.path));
+  const stale = [...existingByPath.keys()].filter((p) => !livePaths.has(p));
+
+  return { added: toAdd.map((e) => e.path), updated: toUpdate.map((u) => u.path), stale };
 }
 
 async function reportAndSync(excelRef: DriveItemRef, cache: Cache, label: string): Promise<void> {
   const entries = buildPathEntriesFromCache(cache);
-  const { added, updated } = await syncCategoriesTable(excelRef, entries);
+  const { added, updated, stale } = await syncCategoriesTable(excelRef, entries);
   console.log(
     `\n[category sync] (${label}) ${entries.length} path(s) from ${Object.keys(cache.categories).length} categories / ` +
       `${Object.keys(cache.types).length} types / ${Object.keys(cache.details).length} details. ` +
@@ -191,6 +198,58 @@ async function reportAndSync(excelRef: DriveItemRef, cache: Cache, label: string
   );
   if (added.length > 0) added.forEach((p) => console.log(`  + ${p}`));
   if (updated.length > 0) updated.forEach((p) => console.log(`  ~ ${p}`));
+  if (stale.length > 0) {
+    // Report-only: this cache is a passively-observed snapshot (whatever's been clicked through
+    // so far), not an authoritative export of StepUp's full category list — a path missing from
+    // `entries` just as often means "not yet expanded this cycle" as "actually renamed/deactivated
+    // upstream". Auto-renaming or auto-deleting from here would risk guessing wrong; only the live
+    // mismatch-resolution flow in reimbursementFlow.ts (which knows a real old->new mapping with
+    // certainty, from your own manual pick) is allowed to rename a Table5 row — see
+    // applyCategoryRename().
+    console.log(
+      `  ${stale.length} existing Table5 row(s) no longer reconstructable from the current cache — ` +
+        `may be renamed/deactivated upstream, or just not yet observed this cycle; check before assuming they're gone:`
+    );
+    stale.forEach((p) => console.log(`  ? ${p}`));
+  }
+}
+
+/**
+ * Renames an existing Table5 row's path (column 0) from `oldPath` to `newPath`, preserving its
+ * "Eligible Scholarships" value untouched. Called from reimbursementFlow.ts the moment a live
+ * Category dropdown mismatch is actually resolved (manually or via partial match) — unlike the
+ * passive, cache-driven sync above, this has a real, certain old->new mapping (you just picked it),
+ * so it's safe to mutate directly rather than only report.
+ *
+ * If `oldPath` isn't found in Table5 at all, falls back to just making sure `newPath` is recorded
+ * (same "ensure it's there" behavior syncCategoriesTable() uses for brand-new paths), so the rename
+ * is still captured even if the stale path was never in Table5 to begin with.
+ *
+ * Idempotent — a repeat call with the same (oldPath, newPath) pair after the first rename is a
+ * cheap no-op (oldPath no longer matches anything, newPath already exists).
+ */
+export async function applyCategoryRename(excelRef: DriveItemRef, oldPath: string, newPath: string): Promise<void> {
+  const trimmedOld = oldPath.trim();
+  const trimmedNew = newPath.trim();
+  if (!trimmedOld || !trimmedNew || trimmedOld === trimmedNew) return;
+
+  const headers = await getTableHeaderRow(excelRef, TABLE5);
+  const rows = await getTableRows(excelRef, TABLE5);
+  const rowIndex = rows.findIndex((values) => String(values[0] ?? "").trim() === trimmedOld);
+
+  if (rowIndex !== -1) {
+    await updateTableRowByIndex(excelRef, TABLE5, rowIndex, rows[rowIndex], headers, {
+      [headers[0]]: trimmedNew,
+    });
+    console.log(`\n[category sync] Table5: renamed "${trimmedOld}" -> "${trimmedNew}"`);
+    return;
+  }
+
+  const alreadyPresent = rows.some((values) => String(values[0] ?? "").trim() === trimmedNew);
+  if (!alreadyPresent) {
+    await appendTableRows(excelRef, TABLE5, [[trimmedNew, ""]]);
+    console.log(`\n[category sync] Table5: "${trimmedOld}" not found — added "${trimmedNew}" instead.`);
+  }
 }
 
 /**

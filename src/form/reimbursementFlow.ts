@@ -346,9 +346,15 @@ async function waitForVendorFieldType(page: Page, index: number, timeoutMs = 100
  * (no OCR to match against at all) — matching a block to a row is the only part that differs
  * between the two.
  */
-async function fillBlockFields(page: Page, index: number, row: Table1Row, allRows: Table1Row[]): Promise<void> {
+async function fillBlockFields(
+  page: Page,
+  index: number,
+  row: Table1Row,
+  allRows: Table1Row[],
+  hooks: CategoryFixHooks = noopCategoryFixHooks
+): Promise<void> {
   if (row.data["Category"]) {
-    await fillCategory(page, index, row.data["Category"], row, allRows);
+    await fillCategory(page, index, row.data["Category"], row, allRows, hooks);
   }
   if (row.data["Benefit Message"]) {
     await page.locator(EDUCATIONAL_BENEFIT).nth(index).fill(row.data["Benefit Message"]);
@@ -419,7 +425,8 @@ export async function fillItemDetails(
   page: Page,
   candidateRows: Table1Row[],
   noOcrData = false,
-  allRows: Table1Row[] = candidateRows
+  allRows: Table1Row[] = candidateRows,
+  hooks: CategoryFixHooks = noopCategoryFixHooks
 ): Promise<FillResult> {
   let count = await page.locator(CATEGORY_BUTTON).count();
   console.log(`\nFound ${count} item detail block(s) on this screen.`);
@@ -497,7 +504,7 @@ export async function fillItemDetails(
 
     remaining.splice(remaining.indexOf(matchedRow), 1);
     matchedRows.push(matchedRow);
-    await fillBlockFields(page, i, matchedRow, allRows);
+    await fillBlockFields(page, i, matchedRow, allRows, hooks);
   }
 
   return { matchedRows, unmatchedBlockIndexes };
@@ -676,6 +683,23 @@ async function clickDropdownOptionAndVerify(
 const CATEGORY_LEVEL_LABELS = ["Category", "Type", "Description"];
 
 /**
+ * Lets a resolved Category mismatch (see fillCategory()) get persisted outside this file without
+ * this file taking on any Graph API concerns itself — the caller (main.ts) wires these up to
+ * actually write to Table1/Table5, this file just calls them at the moment of resolution.
+ */
+export interface CategoryFixHooks {
+  /** Fires once per resolved mismatch, immediately — persists the rename into Table5. */
+  onRenamed: (oldPath: string, newPath: string) => Promise<void>;
+  /** Fires once per batch of Table1 rows whose Category cell needs correcting to `newValue`. */
+  onRowsFixed: (rows: Table1Row[], newValue: string) => Promise<void>;
+}
+
+const noopCategoryFixHooks: CategoryFixHooks = {
+  onRenamed: async () => {},
+  onRowsFixed: async () => {},
+};
+
+/**
  * Once a Category dropdown mismatch has been resolved for a given raw Excel "Category" string
  * (see fillCategory()), the working level texts are remembered here for the rest of this process's
  * lifetime — keyed by the exact raw string, so any other row/block sharing that identical value
@@ -846,7 +870,8 @@ async function offerToFixOtherRows(
   categoryValue: string,
   resolvedLevels: string[],
   row: Table1Row,
-  allRows: Table1Row[]
+  allRows: Table1Row[],
+  hooks: CategoryFixHooks
 ): Promise<void> {
   const others = allRows.filter((r) => r !== row && (r.data["Category"] ?? "").trim() === categoryValue.trim());
   if (others.length === 0) return;
@@ -863,6 +888,7 @@ async function offerToFixOtherRows(
   if (choice === "yes") {
     categoryOverrides.set(categoryValue, resolvedLevels);
     console.log(`  Will auto-apply this fix to ${others.length} other row(s) with Category "${categoryValue}".`);
+    await hooks.onRowsFixed(others, resolvedLevels.join(" - "));
   }
 }
 
@@ -884,7 +910,14 @@ async function offerToFixOtherRows(
  * confirmed correct via the exact-match fast path) is cached in `categoryOverrides` and reused
  * directly for the rest of this process's lifetime.
  */
-async function fillCategory(page: Page, index: number, categoryValue: string, row: Table1Row, allRows: Table1Row[]): Promise<void> {
+async function fillCategory(
+  page: Page,
+  index: number,
+  categoryValue: string,
+  row: Table1Row,
+  allRows: Table1Row[],
+  hooks: CategoryFixHooks = noopCategoryFixHooks
+): Promise<void> {
   const rawLevels = parseCategoryLevels(categoryValue);
   if (rawLevels.length === 0) return;
 
@@ -916,7 +949,10 @@ async function fillCategory(page: Page, index: number, categoryValue: string, ro
   }
 
   if (repaired) {
-    await offerToFixOtherRows(page, categoryValue, resolvedLevels, row, allRows);
+    const newCategoryValue = resolvedLevels.join(" - ");
+    await hooks.onRenamed(categoryValue, newCategoryValue);
+    await hooks.onRowsFixed([row], newCategoryValue);
+    await offerToFixOtherRows(page, categoryValue, resolvedLevels, row, allRows, hooks);
   }
 }
 
