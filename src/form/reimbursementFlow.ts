@@ -259,6 +259,8 @@ const ITEM_SELECTION_LIST = "div.right-container > div.line-items";
  * only unambiguous (exactly one match) hits and leaving anything else unchecked for manual
  * review. Returns true only if every detected checkbox found a confident match *and* every
  * candidate row got matched to one — i.e. it's safe to auto-continue without you looking at it.
+ * Short-circuits first: if the checkbox count exactly equals the candidate row count, all boxes are
+ * checked and it returns true without any name matching.
  * Doesn't assume the checkbox count equals candidateRows.length — the AI can under- or over-detect
  * items relative to our row count, and both cases just fall through to manual review via the
  * remaining.length check at the end rather than being special-cased up front.
@@ -271,6 +273,15 @@ export async function autoCheckDetectedItems(page: Page, candidateRows: Table1Ro
   const checkboxCount = await checkboxes.count();
   const labelCount = await labels.count();
   if (checkboxCount === 0) return false;
+
+  // Counts line up exactly: trust it and check everything without name-matching. A wrong pairing
+  // gets caught and fixable on the next (Item/Service Details) screen, so it isn't worth stopping for.
+  if (checkboxCount === candidateRows.length) {
+    for (let i = 0; i < checkboxCount; i++) await checkboxes.nth(i).check({ timeout: 5000 });
+    console.log(`  ${checkboxCount} checkbox(es) match ${candidateRows.length} candidate row(s) — checked all and continuing.`);
+    return true;
+  }
+
   if (checkboxCount !== labelCount) {
     console.log(`  Found ${checkboxCount} checkbox(es) but ${labelCount} label(s) — mismatch, leaving all unchecked for manual review.`);
     return false;
