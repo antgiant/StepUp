@@ -397,12 +397,13 @@ async function fillBlockFields(
     }
   }
   await overwriteIfDifferent(page.locator(INVOICE_NUMBER).nth(index), row.data["Invoice #"], "Invoice #");
-  await overwriteIfDifferent(page.locator(COST_PER_ITEM).nth(index), row.data["Amount"], "Cost per Item");
+  await overwriteIfDifferent(page.locator(COST_PER_ITEM).nth(index), formatMoney(row.data["Amount"]), "Cost per Item", true);
   await overwriteIfDifferent(page.locator(QUANTITY).nth(index), row.data["Quantity"], "Quantity");
   await overwriteIfDifferent(
     page.locator(ADDITIONAL_COSTS).nth(index),
-    row.data["Tax, Shipping, etc."],
-    "Tax/Shipping"
+    formatMoney(row.data["Tax, Shipping, etc."]),
+    "Tax/Shipping",
+    true
   );
   await overwriteDateIfDifferent(page.locator(PURCHASE_DATE).nth(index), row.data["Date"]);
 }
@@ -527,14 +528,24 @@ function findRowById(rows: Table1Row[], id: string): Table1Row {
   return row;
 }
 
+/** Rounds a dollar value from Excel to two decimal places (e.g. "12.345" -> "12.35"); leaves blanks and non-numbers untouched. */
+export function formatMoney(value: string | undefined): string | undefined {
+  if (!value) return value;
+  const n = Number.parseFloat(String(value).replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) ? (Math.round((n + Number.EPSILON) * 100) / 100).toFixed(2) : value;
+}
+
 async function overwriteIfDifferent(
   locator: ReturnType<Page["locator"]>,
   excelValue: string | undefined,
-  label: string
+  label: string,
+  numeric = false
 ): Promise<void> {
   if (!excelValue) return;
   const current = await locator.inputValue().catch(() => "");
   if (current.trim() === excelValue.trim()) return;
+  // "12.5" and "12.50" are the same money value, so don't flag/overwrite over formatting alone.
+  if (numeric && Math.abs(Number.parseFloat(current.replace(/[^0-9.\-]/g, "")) - Number.parseFloat(excelValue)) < 0.005) return;
   console.log(`  ${label} mismatch: StepUp has "${current}", Excel has "${excelValue}" — overwriting with Excel's value.`);
   await locator.fill(excelValue);
 }

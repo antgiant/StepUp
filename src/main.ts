@@ -566,7 +566,8 @@ async function runGroup(
     const qtyRaw = (r.data["Quantity"] || "").trim();
     const quantity = qtyRaw === "" ? 1 : parseNum(qtyRaw) || 1;
     const additional = parseNum(r.data["Tax, Shipping, etc."]);
-    return sum + amount * quantity + additional;
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    return sum + round2(amount) * quantity + round2(additional);
   }, 0);
   const totalFormatted = `$${totalExpected.toFixed(2)}`;
 
