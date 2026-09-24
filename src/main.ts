@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { connectToStepUpSession } from "./form/browser.js";
 import {
   browserChoose,
@@ -158,11 +159,11 @@ async function openLabeledPreview(
       <div style="font-weight:400;font-size:13px;opacity:.85;margin-top:2px;">For: ${escapeHtml(itemSummary)}</div>
     </span>
   </div>
-  <iframe src="file://${localPath}" style="width:100%;height:calc(100vh - 62px);border:none;display:block;"></iframe>
+  <iframe src="${escapeHtml(pathToFileURL(localPath).href)}" style="width:100%;height:calc(100vh - 62px);border:none;display:block;"></iframe>
 </body></html>`;
   await writeFile(wrapperPath, html, "utf-8");
   const previewPage = await context.newPage();
-  await previewPage.goto(`file://${wrapperPath}`);
+  await previewPage.goto(pathToFileURL(wrapperPath).href);
   return previewPage;
 }
 
@@ -230,22 +231,38 @@ async function main() {
     // and wire a "Use this document" button right into that tab's own header so it can be
     // picked directly from there instead of switching back to the main page.
     const previewByFile = new Map<string, Awaited<ReturnType<typeof openLabeledPreview>>>();
+    const unopenable: string[] = [];
     for (const fileName of candidates) {
-      const fileChild = folderChildren.find((c) => c.name === fileName);
-      if (!fileChild) continue;
-      const localPath = path.join(dataDir, fileName);
-      previewByFile.set(
-        fileName,
-        await openLabeledPreview(context, folderRef, fileChild.id, localPath, fileName, summarizeRow(row))
-      );
+      const wanted = fileName.trim().toLowerCase();
+      const fileChild =
+        folderChildren.find((c) => c.name === fileName) ??
+        folderChildren.find((c) => c.name.trim().toLowerCase() === wanted);
+      if (!fileChild) {
+        console.warn(`  Couldn't find "${fileName}" in the OneDrive folder — no preview tab for it.`);
+        unopenable.push(fileName);
+        continue;
+      }
+      const localPath = path.join(dataDir, fileChild.name);
+      try {
+        previewByFile.set(
+          fileName,
+          await openLabeledPreview(context, folderRef, fileChild.id, localPath, fileName, summarizeRow(row))
+        );
+      } catch (err) {
+        console.warn(`  Couldn't open a preview tab for "${fileName}": ${err instanceof Error ? err.message : err}`);
+        unopenable.push(fileName);
+      }
     }
 
     const WRONG_DOCUMENTATION = "__wrong_documentation__";
     const choice = await browserChoose(
       page,
-      `${summarizeRow(row)} has multiple documentation files — each is now open in its own labeled tab for review. Which one should be uploaded first (the main receipt)?`,
+      `${summarizeRow(row)} has multiple documentation files — each is now open in its own labeled tab for review. Which one should be uploaded first (the main receipt)?` +
+        (unopenable.length
+          ? `\n\nWarning: not listed below because they couldn't be found/opened in the OneDrive folder (check the spreadsheet for typos): ${unopenable.join(", ")}`
+          : ""),
       [
-        ...candidates.map((f) => ({ label: f, value: f, page: previewByFile.get(f) })),
+        ...candidates.filter((f) => !unopenable.includes(f)).map((f) => ({ label: f, value: f, page: previewByFile.get(f) })),
         { label: "None of these — documentation is wrong, I'll fix it in the spreadsheet", value: WRONG_DOCUMENTATION },
       ]
     );
