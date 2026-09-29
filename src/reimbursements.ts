@@ -164,8 +164,9 @@ export interface ReimbursementGroup {
 }
 
 /**
- * Groups unfiled rows into one-per-StepUp-submission units: rows sharing the same child and main
- * receipt file get submitted together (matching how one uploaded receipt can cover several line items).
+ * Groups unfiled rows into one-per-StepUp-submission units: rows sharing the same child, vendor and
+ * main receipt file get submitted together (matching how one uploaded receipt can cover several
+ * line items). Rows from different vendors are never grouped.
  */
 export async function buildGroups(
   rows: Table1Row[],
@@ -197,7 +198,10 @@ export async function buildGroups(
     const mainReceipt = await determineMainReceipt(row, cachedResolveAmbiguous);
     if (mainReceipt === null) continue; // flagged as unresolvable; already recorded in the spreadsheet
     const child = row.data["Child"] ?? "";
-    const key = `${child}::${mainReceipt}`;
+    // Transactions from different vendors must never share a submission, even with the same
+    // child and receipt file.
+    const vendor = (row.data["Service Provider"] || row.data["Vendor"] || "").trim().toLowerCase();
+    const key = `${child}::${mainReceipt}::${vendor}`;
 
     let group = groups.get(key);
     if (!group) {
@@ -213,6 +217,26 @@ export async function buildGroups(
     const paymentFile = (row.data["Payment File"] ?? "").trim();
     if (paymentFile && !group.additionalFiles.includes(paymentFile)) {
       group.additionalFiles.push(paymentFile);
+    }
+  }
+
+  // A receipt belongs to one vendor; the same main receipt under several vendors means a data
+  // entry mistake (wrong vendor or wrong file), and each vendor ends up in its own group.
+  const vendorsByReceipt = new Map<string, Set<string>>();
+  for (const g of groups.values()) {
+    for (const r of g.rows) {
+      const v = (r.data["Service Provider"] || r.data["Vendor"] || "").trim();
+      const set = vendorsByReceipt.get(g.mainReceiptFile) ?? new Set<string>();
+      set.add(v || "(blank)");
+      vendorsByReceipt.set(g.mainReceiptFile, set);
+    }
+  }
+  for (const [file, vendors] of vendorsByReceipt) {
+    if (vendors.size > 1) {
+      console.warn(
+        `Warning: receipt "${file}" is used by multiple vendors (${[...vendors].join(", ")}). ` +
+          `Receipt files should be unique to a vendor — check the spreadsheet.`
+      );
     }
   }
 
