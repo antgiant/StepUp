@@ -522,6 +522,19 @@ export async function fillItemDetails(
   return { matchedRows, unmatchedBlockIndexes };
 }
 
+/** Scrolls so the first "Item 1" block's heading is at the top of the view (the page may scroll inside an inner container, so window.scrollTo isn't enough); falls back to the window top if it isn't found. */
+export async function scrollToFirstItem(page: Page): Promise<void> {
+  const heading = page.locator(itemHeading(0));
+  if ((await heading.count()) > 0) {
+    await heading.evaluate((el) => {
+      (el as HTMLElement).style.scrollMarginTop = "90px";
+      el.scrollIntoView({ block: "start" });
+    }).catch(() => {});
+  } else {
+    await page.evaluate("window.scrollTo(0, 0)").catch(() => {});
+  }
+}
+
 function findRowById(rows: Table1Row[], id: string): Table1Row {
   const row = rows.find((r) => r.data["ID"] === id);
   if (!row) throw new Error(`No remaining candidate row with ID "${id}".`);

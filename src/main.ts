@@ -18,6 +18,7 @@ import {
   clickContinue,
   ensureOnNewReimbursementForm,
   fillItemDetails,
+  scrollToFirstItem,
   formatMoney,
   parseExcelDate,
   readReimbursementId,
@@ -486,9 +487,9 @@ async function runGroup(
     console.log(`\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left — fill those in manually.`);
     reviewHtml += `<div style="margin-top:10px;color:#ffb3b3;">${unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${escapeHtml(unmatchedList)}.</div>`;
   }
-  // Filling the blocks leaves the page scrolled to the last one; jump back to the top so the
-  // page lines up with the review box instead of showing the bottom of the form.
-  await page.evaluate("window.scrollTo(0, 0)").catch(() => {});
+  // Filling the blocks leaves the page scrolled to the last one; jump back to the first item so
+  // the page lines up with the review box instead of showing the bottom of the form.
+  await scrollToFirstItem(page);
   await browserInfoHtml(page, reviewHtml);
   await waitForStep(page, "additionalDocuments");
 
