@@ -490,7 +490,7 @@ export async function fillItemDetails(
       : [];
 
     console.log("Remaining candidate row(s) for this group:");
-    remaining.forEach((r) => console.log(`  ID ${r.data["ID"]}: "${r.data["Item"]}" — $${r.data["Amount"] || "?"}`));
+    remaining.forEach((r) => console.log(`  ID ${r.data["ID"]}: "${r.data["Item"]}" — $${formatMoney(r.data["Amount"]) || "?"}`));
 
     let matchedRow: Table1Row;
     if (autoMatchIndex !== -1) {
@@ -509,7 +509,7 @@ export async function fillItemDetails(
       const answer = await browserChoose(
         page,
         `Item block ${i + 1} of ${count} (OCR cost: ${rawCost || "(blank)"}, OCR name: "${ocrName || "(blank)"}") — no automatic match. Which row does this correspond to?`,
-        remaining.map((r) => ({ label: `ID ${r.data["ID"]}: "${r.data["Item"]}" — $${r.data["Amount"] || "?"}`, value: r.data["ID"] }))
+        remaining.map((r) => ({ label: `ID ${r.data["ID"]}: "${r.data["Item"]}" — $${formatMoney(r.data["Amount"]) || "?"}`, value: r.data["ID"] }))
       );
       matchedRow = findRowById(remaining, answer.trim());
     }

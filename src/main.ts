@@ -18,6 +18,7 @@ import {
   clickContinue,
   ensureOnNewReimbursementForm,
   fillItemDetails,
+  formatMoney,
   parseExcelDate,
   readReimbursementId,
   selectStudent,
@@ -72,7 +73,7 @@ function findFile(children: FolderChild[], name: string): FolderChild {
 
 /** One-line summary (student, item/description, cost) shown across every group-related prompt. */
 function summarizeRow(r: { data: Record<string, string> }): string {
-  const amount = r.data["Amount"] ? `$${r.data["Amount"]}` : "$?";
+  const amount = r.data["Amount"] ? `$${formatMoney(r.data["Amount"])}` : "$?";
   const description = r.data["Description"]?.trim();
   const truncated = description && description.length > 80 ? `${description.slice(0, 80)}…` : description;
   const detail = truncated ? `${r.data["Item"]} — ${truncated}` : r.data["Item"];
@@ -114,7 +115,7 @@ function reviewFieldRow(label: string, value: string | undefined): string {
  * making the whole line unreadable — matters once there are several items each with several fields.
  */
 function reviewItemCardHtml(r: { data: Record<string, string> }): string {
-  const amount = r.data["Amount"] ? `$${r.data["Amount"]}` : "$?";
+  const amount = r.data["Amount"] ? `$${formatMoney(r.data["Amount"])}` : "$?";
   const description = r.data["Description"]?.trim();
   const detail = description ? `${r.data["Item"]} — ${description}` : r.data["Item"];
   const vendor = r.data["Service Provider"] || r.data["Vendor"];
@@ -124,8 +125,8 @@ function reviewItemCardHtml(r: { data: Record<string, string> }): string {
     reviewFieldRow("Invoice/Receipt #", r.data["Invoice #"]),
     reviewFieldRow("Category", r.data["Category"]),
     reviewFieldRow("Quantity", r.data["Quantity"]),
-    reviewFieldRow("Cost per Item", r.data["Amount"]),
-    reviewFieldRow("Tax, Shipping, etc", r.data["Tax, Shipping, etc."]),
+    reviewFieldRow("Cost per Item", formatMoney(r.data["Amount"])),
+    reviewFieldRow("Tax, Shipping, etc", formatMoney(r.data["Tax, Shipping, etc."])),
     reviewFieldRow("Who did you pay", vendor),
     reviewFieldRow("Benefit Message", r.data["Benefit Message"]),
     reviewFieldRow("Item/Service URL", r.data["Item/Service URL"]),
@@ -485,6 +486,9 @@ async function runGroup(
     console.log(`\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left — fill those in manually.`);
     reviewHtml += `<div style="margin-top:10px;color:#ffb3b3;">${unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${escapeHtml(unmatchedList)}.</div>`;
   }
+  // Filling the blocks leaves the page scrolled to the last one; jump back to the top so the
+  // page lines up with the review box instead of showing the bottom of the form.
+  await page.evaluate("window.scrollTo(0, 0)").catch(() => {});
   await browserInfoHtml(page, reviewHtml);
   await waitForStep(page, "additionalDocuments");
 
@@ -547,12 +551,7 @@ async function runGroup(
   await clickContinue(page);
   await waitForStep(page, "summary");
   // Uploading additional documents just above happened without pausing for you (auto-clicked
-  // straight through to here), so this is the first chance to actually see what got attached.
-  const attachmentsNote =
-    [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `  ${f}`).join("\n") +
-    (missingAdditionalFiles.length > 0
-      ? `\n  (missing, not attached: ${missingAdditionalFiles.join(", ")})`
-      : "");
+  // straight through to here), so the list below is the first chance to see what got attached.
 
   // Compute total expected reimbursement from matched rows: Amount * Quantity + Tax/Shipping.
   const totalExpected = matchedRows.reduce((sum, r) => {
@@ -571,12 +570,16 @@ async function runGroup(
   }, 0);
   const totalFormatted = `$${totalExpected.toFixed(2)}`;
 
-  await browserInfo(
+  const attachmentItems = [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `<li>${escapeHtml(f)}</li>`);
+  missingAdditionalFiles.forEach((f) => attachmentItems.push(`<li>${escapeHtml(f)} (missing, not attached)</li>`));
+  await browserInfoHtml(
     page,
-    `Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.\n\n` +
-      `Child: ${escapeHtml(group.child)}\n\n` +
-      `File(s) attached this submission:\n${attachmentsNote}\n\n` +
-      `Total expected reimbursement: ${totalFormatted}`
+    `<div style="font-weight:600;margin-bottom:4px;">Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.</div>` +
+      `<ul style="margin:0;padding-left:20px;line-height:1.35;">` +
+      `<li>Child: ${escapeHtml(group.child)}</li>` +
+      `<li>File(s) attached this submission:<ul style="margin:0;padding-left:20px;">${attachmentItems.join("")}</ul></li>` +
+      `<li>Total expected reimbursement: ${escapeHtml(totalFormatted)}</li>` +
+      `</ul>`
   );
   await waitForStep(page, "confirmation");
   const reimbursementId = await readReimbursementId(page);
