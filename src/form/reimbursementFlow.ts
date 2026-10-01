@@ -453,6 +453,52 @@ async function fillBlockFields(
 }
 
 const ADD_ITEM_BUTTON_TEXT = "Add an Item";
+const ITEM_BLOCK = ".accordion-item.accordion-card-container";
+
+/**
+ * Handles the leftover from an earlier attempt that failed AI detection (so a blank block got
+ * filled in by hand) followed by one that succeeded: the page then holds MORE blocks than there are
+ * rows, a manual/blank one plus the real AI-detected one(s). The AI-detected block is the keeper —
+ * its heading reads "Item N : {OCR name}", while a manual/default block's heading has no name — so
+ * surplus unnamed blocks are deleted (via each block's own Delete button) until the counts line up
+ * or no unnamed block is left. Does nothing unless there's a surplus AND at least one named block
+ * to keep, so an ordinary all-blank failed-detection page is never touched.
+ */
+async function removeSurplusManualBlocks(page: Page, rowCount: number): Promise<void> {
+  for (let guard = 0; guard < 10; guard++) {
+    const blocks = page.locator(ITEM_BLOCK);
+    const count = await blocks.count();
+    if (count <= rowCount) return;
+
+    const named: boolean[] = [];
+    for (let i = 0; i < count; i++) {
+      const heading = (await blocks.nth(i).locator("h3").first().textContent().catch(() => "")) ?? "";
+      named.push(heading.includes(":") && heading.split(":").slice(1).join(":").trim().length > 0);
+    }
+    const unnamedIndex = named.indexOf(false);
+    if (unnamedIndex === -1 || !named.includes(true)) return;
+
+    console.log(
+      `  ${count} item blocks for ${rowCount} row(s) — deleting unnamed block ${unnamedIndex + 1} (keeping the AI-detected one).`
+    );
+    await blocks.nth(unnamedIndex).locator(".accordion-right-content button", { hasText: /^\s*delete\s*$/i }).first().click();
+
+    // Confirmed live: Delete opens a Bootstrap modal ("Are you sure you want to delete "Item N"?")
+    // whose #confirm-button ("Delete Item") must be clicked before anything is actually removed.
+    const confirm = page.locator("#confirm-button");
+    await confirm.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    if ((await confirm.count()) > 0) await confirm.click();
+    let gone = false;
+    for (let i = 0; i < 15 && !gone; i++) {
+      await page.waitForTimeout(300);
+      gone = (await page.locator(ITEM_BLOCK).count()) < count;
+    }
+    if (!gone) {
+      console.log("  Couldn't delete the unnamed block — leaving it for you to remove manually.");
+      return;
+    }
+  }
+}
 
 /**
  * Walks each "Item N" detail block on the Item/Service Details screen, matches it to one of
@@ -484,6 +530,7 @@ export async function fillItemDetails(
   allRows: Table1Row[] = candidateRows,
   hooks: CategoryFixHooks = noopCategoryFixHooks
 ): Promise<FillResult> {
+  await removeSurplusManualBlocks(page, candidateRows.length);
   let count = await page.locator(CATEGORY_BUTTON).count();
   console.log(`\nFound ${count} item detail block(s) on this screen.`);
 
