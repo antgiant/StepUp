@@ -316,19 +316,20 @@ async function main() {
 
     // Checked before the Start prompt, so a group that's already submitted (or was left as a draft)
     // is recognized up front instead of being offered as if it were brand new.
-    const existing = await resolveExistingDraft(page, group, excelRef, table1Headers).catch((err) => {
+    const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
+    const groupHeader = `Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`;
+    const existing = await resolveExistingDraft(page, group, excelRef, table1Headers, groupHeader).catch((err) => {
       console.warn(`Couldn't check for an existing draft: ${(err as Error).message} — treating as a new request.`);
       return { action: "fresh" } as const;
     });
     if (existing.action === "done") continue;
 
-    const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
     const choice =
       existing.action === "resume"
         ? ""
         : await browserChoose(
             page,
-            `Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`,
+            groupHeader,
             [
               { label: "Start this group", value: "" },
               { label: "Skip", value: "skip" },
@@ -427,7 +428,8 @@ async function resolveExistingDraft(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
   excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
-  table1Headers: string[]
+  table1Headers: string[],
+  groupHeader: string
 ): Promise<{ action: "fresh" } | { action: "done" } | { action: "resume"; guid: string; snapshot: DraftSnapshot; record: DraftRecord }> {
   const rowIds = group.rows.map((r) => r.data["ID"]);
   const record = await loadDraftRecord(rowIds);
@@ -437,7 +439,7 @@ async function resolveExistingDraft(
   if (!snapshot) {
     const choice = await browserChoose(
       page,
-      `An earlier run started a StepUp draft for these row(s) (Reimbursement #${record.sequenceNumber ?? "unknown"}), but its current state couldn't be checked. ` +
+      `${groupHeader}\n\nAn earlier run started a StepUp draft for these row(s) (Reimbursement #${record.sequenceNumber ?? "unknown"}), but its current state couldn't be checked. ` +
         `Check in StepUp whether it was already submitted before starting a new one.`,
       [
         { label: "Start a new request anyway", value: "fresh" },
@@ -468,7 +470,7 @@ async function resolveExistingDraft(
 
   const choice = await browserChoose(
     page,
-    `${record.skipped ? "You skipped this group earlier, leaving" : "An earlier run left"} an unsubmitted StepUp draft for these row(s) (Reimbursement #${snapshot.sequenceNumber ?? "unknown"}, status "${snapshot.externalStatus ?? "?"}"). ` +
+    `${groupHeader}\n\n${record.skipped ? "You skipped this group earlier, leaving" : "An earlier run left"} an unsubmitted StepUp draft for these row(s) (Reimbursement #${snapshot.sequenceNumber ?? "unknown"}, status "${snapshot.externalStatus ?? "?"}"). ` +
       (record.skipped
         ? "Resuming re-fills it from the spreadsheet, so your data fixes apply. If the receipt itself was the problem, start a new request instead."
         : "Resume it, or start a new request?"),
