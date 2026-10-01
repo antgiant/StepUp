@@ -448,7 +448,9 @@ async function fillBlockFields(
   }
   await overwriteIfDifferent(page.locator(INVOICE_NUMBER).nth(index), row.data["Invoice #"], "Invoice #");
   await overwriteIfDifferent(page.locator(COST_PER_ITEM).nth(index), formatMoney(row.data["Amount"]), "Cost per Item", true);
-  await overwriteIfDifferent(page.locator(QUANTITY).nth(index), row.data["Quantity"], "Quantity");
+  // A blank Quantity in Excel means 1 (same as the total calculation in main.ts) — without this the
+  // AI's guess (e.g. 2 for a pair of shoes) would be left in place and bounce the submission.
+  await overwriteIfDifferent(page.locator(QUANTITY).nth(index), row.data["Quantity"]?.trim() || "1", "Quantity", true);
   await overwriteIfDifferent(
     page.locator(ADDITIONAL_COSTS).nth(index),
     formatMoney(row.data["Tax, Shipping, etc."]),
