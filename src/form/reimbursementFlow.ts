@@ -652,6 +652,10 @@ async function overwriteIfDifferent(
   if (numeric && Math.abs(Number.parseFloat(current.replace(/[^0-9.\-]/g, "")) - Number.parseFloat(excelValue)) < 0.005) return;
   console.log(`  ${label} mismatch: StepUp has "${current}", Excel has "${excelValue}" — overwriting with Excel's value.`);
   await locator.fill(excelValue);
+  // Confirmed live: StepUp only commits a typed value (and recomputes the item total) on blur — a
+  // tax value that was the last field edited showed "0.49" on screen but was still saved as the old
+  // $0.46, giving a wrong Summary total.
+  await locator.blur();
 }
 
 /** Graph returns date cells as raw Excel serial numbers (e.g. "45888"), not formatted strings —
@@ -676,6 +680,7 @@ async function overwriteDateIfDifferent(locator: ReturnType<Page["locator"]>, ex
   if (current === iso) return;
   console.log(`  Purchase Date mismatch: StepUp has "${current}", Excel has "${excelDate}" — overwriting with Excel's value.`);
   await locator.fill(iso);
+  await locator.blur();
 }
 
 /**
@@ -710,6 +715,22 @@ async function selectVendorOrProvider(page: Page, name: string, index: number): 
   const exactOption = dropdown.getByText(name, { exact: true });
   if (await exactOption.isVisible().catch(() => false)) {
     await rawClick(exactOption);
+    return;
+  }
+
+  // Punctuation/case-insensitive match: the spreadsheet's "Walmart" vs StepUp's "Wal-mart" used to
+  // miss both checks above and end up as a custom "Provider not Listed" entry.
+  const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const wanted = normalize(name);
+  const optionTexts = (
+    await dropdown.locator("*").evaluateAll((els) =>
+      els.filter((e) => e.children.length === 0).map((e) => (e.textContent ?? "").trim())
+    )
+  ).filter((t, i, all) => t && t !== PROVIDER_NOT_LISTED_TEXT && all.indexOf(t) === i);
+  const normalizedHits = optionTexts.filter((t) => wanted && normalize(t) === wanted);
+  if (normalizedHits.length === 1) {
+    console.log(`  "${name}" matched "${normalizedHits[0]}" in the provider list (ignoring punctuation/case).`);
+    await rawClick(dropdown.getByText(normalizedHits[0], { exact: true }).first());
     return;
   }
 
@@ -1122,7 +1143,7 @@ async function readReimbursementIdOnce(page: Page, timeoutMs: number): Promise<s
  * don't act). The Summary DOM is unverified, so this reads the page's visible text for "Total"
  * followed by a dollar amount rather than relying on a selector.
  */
-export async function summaryTotalIsZero(page: Page, settleMs = 4000): Promise<boolean> {
+export async function readSummaryTotal(page: Page, settleMs = 4000): Promise<number | null> {
   const readTotals = async (): Promise<number[]> => {
     // Scoped to the page's own content wrapper so our own banner (which also says "Total expected
     // reimbursement: $X") can never be mistaken for StepUp's total.
@@ -1135,14 +1156,19 @@ export async function summaryTotalIsZero(page: Page, settleMs = 4000): Promise<b
   let zeroSince: number | null = null;
   while (Date.now() - start < 8000) {
     const totals = await readTotals();
-    if (totals.some((t) => t > 0)) return false;
+    const positive = totals.find((t) => t > 0);
+    if (positive !== undefined) return positive;
     if (totals.length > 0) {
       zeroSince ??= Date.now();
-      if (Date.now() - zeroSince >= settleMs) return true;
+      if (Date.now() - zeroSince >= settleMs) return 0;
     }
     await page.waitForTimeout(500);
   }
-  return false;
+  return null;
+}
+
+export async function summaryTotalIsZero(page: Page, settleMs = 4000): Promise<boolean> {
+  return (await readSummaryTotal(page, settleMs)) === 0;
 }
 
 /** Steps back through StepUp's own Back button (falling back to browser history) until `target` is showing. */

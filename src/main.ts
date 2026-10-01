@@ -29,7 +29,7 @@ import {
   waitForLogin,
   goBackToStep,
   stepIndex,
-  summaryTotalIsZero,
+  readSummaryTotal,
   waitForStepChange,
   type CategoryFixHooks,
   type ItemScanOutcome,
@@ -54,6 +54,7 @@ import {
   latestSnapshot,
   loadDraftRecord,
   saveDraftRecord,
+  type DraftRecord,
   type DraftSnapshot,
 } from "./draftTracker.js";
 import { attachPreauthSyncListener } from "./preauthSync.js";
@@ -421,7 +422,7 @@ async function resolveExistingDraft(
   group: ReimbursementGroup,
   excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
   table1Headers: string[]
-): Promise<{ action: "fresh" } | { action: "done" } | { action: "resume"; guid: string; snapshot: DraftSnapshot }> {
+): Promise<{ action: "fresh" } | { action: "done" } | { action: "resume"; guid: string; snapshot: DraftSnapshot; record: DraftRecord }> {
   const rowIds = group.rows.map((r) => r.data["ID"]);
   const record = await loadDraftRecord(rowIds);
   if (!record) return { action: "fresh" };
@@ -473,7 +474,7 @@ async function resolveExistingDraft(
     await deleteDraftRecord(rowIds);
     return { action: "fresh" };
   }
-  return { action: "resume", guid: record.guid, snapshot };
+  return { action: "resume", guid: record.guid, snapshot, record };
 }
 
 async function runGroup(
@@ -493,16 +494,26 @@ async function runGroup(
   if (existing.action === "resume") {
     console.log(`\nResuming the existing draft for ${group.child}...`);
     const base = new URL(page.url()).origin;
-    // StepUp remembers the draft's selected items: once lineItems exist, Item/Service Selection has
-    // already been passed (its checkboxes come back pre-checked), so re-enter at Item/Service
-    // Details — re-filling there is idempotent. With no line items yet, re-enter at Item/Service
-    // Selection (the receipt is already uploaded and read). Fall back to Selection if StepUp
-    // refuses to open Details directly.
-    const entrySteps = existing.snapshot.lineItemCount > 0 ? [3, 2] : [2];
-    for (const n of entrySteps) {
-      await page.goto(`${base}/SubmitReimbursement/${existing.guid}/${n}`).catch(() => {});
+    // Re-open the draft on the step it was last on (recorded as the run went), falling back to
+    // Item/Service Details if items were already selected (StepUp remembers them), then to
+    // Item/Service Selection. Each wizard step is addressable by number in the URL.
+    const stepNumbers: Partial<Record<ReimbursementStep, number>> = {
+      upload: 1,
+      itemSelection: 2,
+      itemDetails: 3,
+      additionalDocuments: 4,
+      summary: 5,
+    };
+    const wanted: ReimbursementStep[] = [];
+    const lastStep = existing.record.lastStep as ReimbursementStep | undefined;
+    if (lastStep && stepNumbers[lastStep]) wanted.push(lastStep);
+    if (existing.snapshot.lineItemCount > 0) wanted.push("itemDetails");
+    wanted.push("itemSelection");
+    for (const target of [...new Set(wanted)]) {
+      await page.goto(`${base}/SubmitReimbursement/${existing.guid}/${stepNumbers[target]}`).catch(() => {});
       resumedAtStep = detectStep(page.url()) ?? undefined;
-      if (resumedAtStep === (n === 3 ? "itemDetails" : "itemSelection")) break;
+      if (resumedAtStep === target) break;
+      console.log(`  StepUp wouldn't open "${target}" directly (landed on "${resumedAtStep ?? "somewhere else"}") — trying an earlier step.`);
     }
     // Confirmed live: opening Details directly takes well over 5s to render its item blocks, and the
     // block-counting code downstream reads them immediately, so wait for the first one here.
@@ -544,18 +555,24 @@ async function runGroup(
 
   // State carried across steps, since going back in StepUp means a step can be visited more than once.
   let receiptUploaded = resumedAtStep !== undefined;
-  let scanOutcome: ItemScanOutcome = "detected";
+  const resumeRecord = existing.action === "resume" ? existing.record : undefined;
+  let scanOutcome: ItemScanOutcome = (resumeRecord?.scanOutcome as ItemScanOutcome | undefined) ?? "detected";
   // Resuming straight into Item/Service Details skips the scan check, so infer it: AI-detected
   // blocks have a named heading ("Item 1 : name"), a failed detection leaves them all unnamed.
-  if (resumedAtStep === "itemDetails") {
+  if (resumedAtStep === "itemDetails" && !resumeRecord?.scanOutcome) {
     const headings = await page.locator(".accordion-item.accordion-card-container h3").allTextContents();
     if (!headings.some((h) => h.split(":").slice(1).join(":").trim().length > 0)) scanOutcome = "notDetected";
   }
-  let matchedRows: Table1Row[] = [];
+  // A resumed run rebuilds which rows became which line items from the saved order.
+  let matchedRows: Table1Row[] = resumeRecord
+    ? (resumeRecord.rowOrder ?? groupRowIds)
+        .map((id) => group.rows.find((r) => r.data["ID"] === id))
+        .filter((r): r is Table1Row => Boolean(r))
+    : [];
   let reviewHtml = "";
   let additionalUploaded = existing.action === "resume" && (existing.snapshot.hasAdditionalDocuments || group.additionalFiles.length === 0);
-  let attachedAdditionalFiles: string[] = [];
-  let missingAdditionalFiles: string[] = [];
+  let attachedAdditionalFiles: string[] = resumeRecord?.attachedFiles ?? [];
+  let missingAdditionalFiles: string[] = resumeRecord?.missingFiles ?? [];
 
   const mainReceiptChild = findFile(folderChildren, group.mainReceiptFile);
   const mainReceiptPath = path.join(dataDir, group.mainReceiptFile);
@@ -703,9 +720,7 @@ async function runGroup(
     }
     const result = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows, categoryFixHooks);
     matchedRows = result.matchedRows;
-    if (draftGuid) {
-      await saveDraftRecord({ guid: draftGuid, rowIds: groupRowIds, sequenceNumber: draftSeq, rowOrder: matchedRows.map((r) => r.data["ID"]) });
-    }
+    await persist();
     reviewHtml =
       `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
       `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;
@@ -796,15 +811,15 @@ async function runGroup(
     await clickContinue(page);
   };
 
-  const handleSummary = async (zeroTotalWarning = false) => {
+  const handleSummary = async (totalWarning?: string) => {
     // Uploading additional documents happened without pausing for you (auto-clicked straight
     // through to here), so the list below is the first chance to see what got attached.
     const attachmentItems = [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `<li>${escapeHtml(f)}</li>`);
     missingAdditionalFiles.forEach((f) => attachmentItems.push(`<li>${escapeHtml(f)} (missing, not attached)</li>`));
     await browserInfoHtml(
       page,
-      (zeroTotalWarning
-        ? `<div style="margin-bottom:8px;color:#ffb3b3;font-weight:600;">Warning: StepUp's total still shows $0.00 after re-filling the item details. Don't submit until it's fixed.</div>`
+      (totalWarning
+        ? `<div style="margin-bottom:8px;color:#ffb3b3;font-weight:600;">Warning: ${escapeHtml(totalWarning)}, even after re-filling the item details. Don't submit until it's fixed.</div>`
         : "") +
       `<div style="font-weight:600;margin-bottom:4px;">Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.</div>` +
         `<ul style="margin:0;padding-left:20px;line-height:1.35;">` +
@@ -822,40 +837,55 @@ async function runGroup(
   // Records the draft's GUID (so a crashed run can find it again) and, as soon as StepUp reports
   // it, writes the draft's Reimbursement # onto this group's rows — Status stays Unfiled until
   // the submission is actually confirmed.
-  let draftGuid: string | undefined = existing.action === "resume" ? existing.guid : undefined;
-  let draftSeq: string | undefined = existing.action === "resume" ? existing.snapshot.sequenceNumber : undefined;
-  const trackDraft = async () => {
+  const record: DraftRecord = resumeRecord ?? { guid: "", rowIds: groupRowIds };
+  let draftSeq: string | undefined = resumeRecord ? existing.action === "resume" ? existing.snapshot.sequenceNumber : undefined : undefined;
+  const persist = async () => {
+    if (!record.guid) return;
+    if (matchedRows.length > 0) record.rowOrder = matchedRows.map((r) => r.data["ID"]);
+    record.sequenceNumber = draftSeq ?? record.sequenceNumber;
+    record.scanOutcome = scanOutcome;
+    record.attachedFiles = attachedAdditionalFiles;
+    record.missingFiles = missingAdditionalFiles;
+    await saveDraftRecord(record);
+  };
+  const trackDraft = async (currentStep: ReimbursementStep) => {
     const guid = guidFromUrl(page.url());
     if (!guid) return;
-    if (guid !== draftGuid) {
-      draftGuid = guid;
+    if (guid !== record.guid) {
+      Object.assign(record, { guid, rowIds: groupRowIds, rowOrder: undefined, sequenceNumber: undefined, lastStep: undefined });
       draftSeq = undefined;
-      await saveDraftRecord({ guid, rowIds: groupRowIds });
       console.log(`[draft] Started draft ${guid}.`);
     }
-    if (draftSeq) return;
-    let seq = latestSnapshot(guid)?.sequenceNumber;
-    for (let i = 0; !seq && i < 6; i++) {
-      await page.waitForTimeout(500);
-      seq = latestSnapshot(guid)?.sequenceNumber;
+    // The step the page is actually on right now (a handler may have auto-clicked Continue past `currentStep`).
+    const onStep = detectStep(page.url()) ?? currentStep;
+    if (onStep !== "studentSelection" && onStep !== "confirmation") record.lastStep = onStep;
+    if (!draftSeq) {
+      let seq = latestSnapshot(guid)?.sequenceNumber;
+      for (let i = 0; !seq && i < 6; i++) {
+        await page.waitForTimeout(500);
+        seq = latestSnapshot(guid)?.sequenceNumber;
+      }
+      if (seq) {
+        draftSeq = seq;
+        const idCol = table1Headers.indexOf("Reimbursement ID");
+        for (const row of group.rows) {
+          if ((row.data["Reimbursement ID"] ?? "").trim() === seq) continue;
+          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, { "Reimbursement ID": seq });
+          if (idCol !== -1) row.rawValues[idCol] = seq;
+          row.data["Reimbursement ID"] = seq;
+        }
+        console.log(`[draft] Recorded Reimbursement #${seq} on ${group.rows.length} row(s).`);
+      }
     }
-    if (!seq) return;
-    draftSeq = seq;
-    const idCol = table1Headers.indexOf("Reimbursement ID");
-    for (const row of group.rows) {
-      if ((row.data["Reimbursement ID"] ?? "").trim() === seq) continue;
-      await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, { "Reimbursement ID": seq });
-      if (idCol !== -1) row.rawValues[idCol] = seq;
-      row.data["Reimbursement ID"] = seq;
-    }
-    await saveDraftRecord({ guid, rowIds: groupRowIds, sequenceNumber: seq, rowOrder: matchedRows.map((r) => r.data["ID"]) });
-    console.log(`[draft] Recorded Reimbursement #${seq} on ${group.rows.length} row(s).`);
+    await persist();
   };
 
   let zeroTotalFixes = 0;
   let step: ReimbursementStep = resumedAtStep ?? "studentSelection";
   let mode: StepMode = "auto";
   while (step !== "confirmation") {
+    // Recorded on arrival too (not just after the handler) so a crash mid-step still resumes here.
+    await trackDraft(step);
     let resync: ResyncHandle | undefined;
     switch (step) {
       case "studentSelection":
@@ -874,24 +904,31 @@ async function runGroup(
         resync = await handleAdditionalDocuments(mode);
         break;
       case "summary": {
-        // StepUp sometimes renders a $0.00 total here even though every earlier step looked fine
-        // (seen twice). Going back and re-filling the item details has fixed it, so do that
-        // automatically (a couple of tries at most, then warn instead of looping forever).
-        const zeroTotal = mode !== "passive" && (await summaryTotalIsZero(page));
-        if (zeroTotal && zeroTotalFixes < 2) {
+        // StepUp sometimes renders a wrong total here even though every earlier step looked fine — a
+        // $0.00 total (seen twice) or one that doesn't match the spreadsheet (a tax edit that never
+        // committed). Going back and re-filling the item details fixes it, so do that automatically
+        // (a couple of tries at most, then warn instead of looping forever).
+        const onScreenTotal = mode !== "passive" ? await readSummaryTotal(page) : null;
+        const expected = Number.parseFloat(expectedTotal(matchedRows).slice(1));
+        const wrongTotal =
+          onScreenTotal !== null && (onScreenTotal === 0 || (matchedRows.length > 0 && Math.abs(onScreenTotal - expected) > 0.005));
+        const totalProblem = wrongTotal
+          ? `StepUp's total shows $${onScreenTotal!.toFixed(2)} but the spreadsheet expects $${expected.toFixed(2)}`
+          : undefined;
+        if (totalProblem && zeroTotalFixes < 2) {
           zeroTotalFixes++;
-          console.log(`\nSummary total shows $0.00 — going back to Item/Service Details to re-fill (attempt ${zeroTotalFixes} of 2).`);
-          await browserInfo(page, "The Summary total shows $0.00. Going back to Item/Service Details to re-fill the fields...");
+          console.log(`\n${totalProblem} — going back to Item/Service Details to re-fill (attempt ${zeroTotalFixes} of 2).`);
+          await browserInfo(page, `${totalProblem}. Going back to Item/Service Details to re-fill the fields...`);
           await goBackToStep(page, "itemDetails");
           step = "itemDetails";
           mode = "resync";
           continue;
         }
-        await handleSummary(zeroTotal);
+        await handleSummary(totalProblem);
         break;
       }
     }
-    await trackDraft();
+    await trackDraft(step);
     const next = await waitForStepChange(page, step, resync?.clicked);
     if (next === "resync") {
       mode = "resync";

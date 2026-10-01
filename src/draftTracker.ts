@@ -28,6 +28,12 @@ export interface DraftRecord {
   /** Row IDs in the order they became line items 1..n (known once item details were filled). */
   rowOrder?: string[];
   sequenceNumber?: string;
+  /** The wizard step the draft was last seen on, so a resumed run can re-open it right there. */
+  lastStep?: string;
+  /** How StepUp's AI scan came out ("detected" | "notDetected" | "readError"). */
+  scanOutcome?: string;
+  attachedFiles?: string[];
+  missingFiles?: string[];
 }
 
 const snapshots = new Map<string, DraftSnapshot>();
