@@ -312,16 +312,27 @@ async function main() {
     console.log(`\n=== Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile} ===`);
     group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
 
+    // Checked before the Start prompt, so a group that's already submitted (or was left as a draft)
+    // is recognized up front instead of being offered as if it were brand new.
+    const existing = await resolveExistingDraft(page, group, excelRef, table1Headers).catch((err) => {
+      console.warn(`Couldn't check for an existing draft: ${(err as Error).message} — treating as a new request.`);
+      return { action: "fresh" } as const;
+    });
+    if (existing.action === "done") continue;
+
     const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
-    const choice = await browserChoose(
-      page,
-      `Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`,
-      [
-        { label: "Start this group", value: "" },
-        { label: "Skip", value: "skip" },
-        { label: "Stop for now", value: "exit" },
-      ]
-    );
+    const choice =
+      existing.action === "resume"
+        ? ""
+        : await browserChoose(
+            page,
+            `Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`,
+            [
+              { label: "Start this group", value: "" },
+              { label: "Skip", value: "skip" },
+              { label: "Stop for now", value: "exit" },
+            ]
+          );
     if (choice === "skip") continue;
     if (choice === "exit") {
       console.log(`\nStopping early at group ${i + 1} of ${groups.length}, per your choice.`);
@@ -330,7 +341,7 @@ async function main() {
     }
 
     try {
-      await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, rows);
+      await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, rows, existing);
     } catch (err) {
       const message = (err as Error).message;
       console.error(`\nGroup ${i + 1} failed: ${message}`);
@@ -474,10 +485,9 @@ async function runGroup(
   dataDir: string,
   table1Headers: string[],
   scholarshipByChild: Map<string, string>,
-  allRows: Table1Row[]
+  allRows: Table1Row[],
+  existing: Exclude<Awaited<ReturnType<typeof resolveExistingDraft>>, { action: "done" }>
 ): Promise<void> {
-  const existing = await resolveExistingDraft(page, group, excelRef, table1Headers);
-  if (existing.action === "done") return;
   const groupRowIds = group.rows.map((r) => r.data["ID"]);
   let resumedAtStep: ReimbursementStep | undefined;
   if (existing.action === "resume") {

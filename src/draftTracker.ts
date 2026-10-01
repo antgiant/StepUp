@@ -69,11 +69,25 @@ export function latestSnapshot(guid: string): DraftSnapshot | undefined {
   return snapshots.get(guid.toLowerCase());
 }
 
+/**
+ * The Authorization header is only learned from StepUp's own API traffic, so a run that starts on
+ * an already-loaded page may not have seen any yet — wait briefly, then reload once to make the
+ * page fire its own API calls (the Dashboard/list pages do on load).
+ */
+async function ensureAuthHeader(page: Page): Promise<boolean> {
+  for (let attempt = 0; attempt < 2 && !authHeader; attempt++) {
+    for (let i = 0; i < 16 && !authHeader; i++) await page.waitForTimeout(500);
+    if (!authHeader && attempt === 0) await page.reload().catch(() => {});
+  }
+  return Boolean(authHeader);
+}
+
 /** Fetches a draft's current state directly (reusing the page's own auth); null if that isn't possible. */
 export async function fetchDraftSnapshot(page: Page, guid: string): Promise<DraftSnapshot | null> {
-  if (!authHeader) return null;
+  if (!(await ensureAuthHeader(page)) || !authHeader) return null;
+  const auth = authHeader;
   try {
-    const res = await page.request.get(`${API_ORIGIN}/api/reimbursements/v2/${guid}`, { headers: { authorization: authHeader } });
+    const res = await page.request.get(`${API_ORIGIN}/api/reimbursements/v2/${guid}`, { headers: { authorization: auth } });
     if (!res.ok()) return null;
     const snapshot = toSnapshot(guid.toLowerCase(), (await res.json()) as Record<string, unknown>);
     snapshots.set(snapshot.guid, snapshot);
@@ -83,9 +97,15 @@ export async function fetchDraftSnapshot(page: Page, guid: string): Promise<Draf
   }
 }
 
-/** A submitted request has a submit date and a non-draft status; anything else is treated as still a draft. */
+/**
+ * Confirmed live: an unsubmitted request reports externalStatus "Draft" with the placeholder
+ * submitDate "0001-01-01T00:00:00" (truthy, so it can't be used as a bare existence check), while
+ * a submitted one has a real submit date and status "Submitted" (or a later status).
+ */
 export function isSubmitted(snapshot: DraftSnapshot): boolean {
-  return Boolean(snapshot.submitDate) && !/draft|incomplete|unsubmitted/i.test(snapshot.externalStatus ?? "");
+  if (/draft|incomplete|unsubmitted/i.test(snapshot.externalStatus ?? "")) return false;
+  const submitted = snapshot.submitDate ? new Date(snapshot.submitDate) : undefined;
+  return Boolean(submitted && submitted.getUTCFullYear() > 1900);
 }
 
 export function groupKey(rowIds: string[]): string {
