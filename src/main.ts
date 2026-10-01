@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { connectToStepUpSession } from "./form/browser.js";
 import {
+  addResyncButton,
   browserChoose,
   browserContinue,
   browserInfo,
@@ -25,8 +26,11 @@ import {
   selectStudent,
   uploadFile,
   waitForLogin,
-  waitForStep,
+  stepIndex,
+  waitForStepChange,
   type CategoryFixHooks,
+  type ItemScanOutcome,
+  type ReimbursementStep,
 } from "./form/reimbursementFlow.js";
 import {
   downloadItem,
@@ -341,6 +345,26 @@ async function main() {
   process.exit(0);
 }
 
+/** How a wizard step's handler is being run: forward arrival (do the work, maybe auto-continue), back arrival (just show the page), or a resync button press (redo the work, never auto-continue). */
+type StepMode = "auto" | "passive" | "resync";
+// An object (not a bare promise) so returning it from an async function doesn't make the caller await the click itself.
+type ResyncHandle = { clicked: Promise<void> };
+
+function expectedTotal(rows: Table1Row[]): string {
+  const parseNum = (s: string | undefined) => {
+    if (!s) return 0;
+    const n = Number.parseFloat(String(s).replace(/[^0-9.\-]/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const total = rows.reduce((sum, r) => {
+    const qtyRaw = (r.data["Quantity"] || "").trim();
+    const quantity = qtyRaw === "" ? 1 : parseNum(qtyRaw) || 1;
+    return sum + round2(parseNum(r.data["Amount"])) * quantity + round2(parseNum(r.data["Tax, Shipping, etc."]));
+  }, 0);
+  return `$${total.toFixed(2)}`;
+}
+
 async function runGroup(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
@@ -356,101 +380,6 @@ async function runGroup(
   await ensureOnNewReimbursementForm(page);
   const program =
     group.rows[0].data["Program"]?.trim() || scholarshipByChild.get(group.child) || DEFAULT_PROGRAM;
-  console.log(`Selecting student "${group.child} : ${program}"...`);
-  await selectStudent(page, group.child, program);
-  await clickContinue(page);
-  await waitForStep(page, "upload");
-
-  await browserInfo(page, `Downloading and uploading the receipt "${group.mainReceiptFile}"...`);
-  const mainReceiptChild = findFile(folderChildren, group.mainReceiptFile);
-  const mainReceiptPath = path.join(dataDir, group.mainReceiptFile);
-  await downloadItem(folderRef.driveId, mainReceiptChild.id, mainReceiptPath);
-  console.log(`Uploading main receipt "${group.mainReceiptFile}"...`);
-  await uploadFile(page, mainReceiptPath);
-  await clearBanner(page);
-  console.log("Upload done, clicking Continue and waiting for StepUp's AI scan...");
-  await clickContinue(page);
-  await waitForStep(page, "itemSelection");
-  console.log("On the Item/Service Selection screen.");
-
-  let scanOutcome = await checkItemScan(page);
-
-  if (scanOutcome === "readError") {
-    // StepUp says it couldn't even read the document at all (distinct from reading it fine and
-    // finding nothing) — that's just as likely to mean the file itself is broken as it is a
-    // transient StepUp hiccup, so before assuming it's safe to fall back to manual entry, have a
-    // human actually look at it: open it in its own tab and ask.
-    console.log(`\nStepUp couldn't read "${group.mainReceiptFile}" at all — opening it for you to check.`);
-    const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
-    const preview = await openLabeledPreview(
-      page.context(),
-      folderRef,
-      mainReceiptChild.id,
-      mainReceiptPath,
-      group.mainReceiptFile,
-      rowsSummary
-    );
-    const OPENED_FINE = "opened_fine";
-    const BROKEN = "broken";
-    const choice = await browserChoose(
-      page,
-      `StepUp couldn't read "${group.mainReceiptFile}" at all (not just "no items found" — an actual read failure). ` +
-        `It's now open in its own tab for you to check. Did it open properly for you?\n${rowsSummary}`,
-      [
-        { label: "Yes, it opened fine — StepUp's problem, not the file's", value: OPENED_FINE },
-        { label: "No, it's broken/won't open", value: BROKEN },
-      ]
-    );
-    await preview.close();
-
-    if (choice === BROKEN) {
-      const today = new Date().toISOString().slice(0, 10);
-      const note = `[${today}] StepUp couldn't read "${group.mainReceiptFile}" and it didn't open properly for you either — needs a real fix in the spreadsheet.`;
-      for (const row of group.rows) {
-        const existingNotes = (row.data["Notes"] ?? "").trim();
-        const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
-        await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-          Notes: updatedNotes,
-          Status: MISSING_THINGS_STATUS,
-        });
-      }
-      console.log(`Marked ${group.rows.length} row(s) as "${MISSING_THINGS_STATUS}" — document is broken.`);
-      throw new Error(`"${group.mainReceiptFile}" is broken — marked "${MISSING_THINGS_STATUS}" in the spreadsheet, skipping this group.`);
-    }
-
-    // Confirmed genuinely readable — treat exactly like the ordinary "read fine, found nothing"
-    // case below rather than duplicating that whole branch.
-    console.log("Confirmed the document opens fine — treating this like an ordinary detection failure.");
-    scanOutcome = "notDetected";
-  }
-
-  if (scanOutcome === "notDetected") {
-    const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
-    console.log(
-      `\nStepUp couldn't detect items on this document. Filling in ${group.rows.length} item block(s) directly for:\n${rowsSummary}`
-    );
-    console.log('Auto-clicking "Continue to Item/Service Details"...');
-    await clickContinue(page);
-    // No OCR data to match against, and no manual "Add an Item" step needed either —
-    // fillItemDetails() below creates as many blocks as it needs on its own, matching each one
-    // to the next row in order (noOcrData=true) rather than prompting per block for no reason.
-  } else {
-    console.log("StepUp detected item(s) — attempting to auto-check the matching box(es)...");
-    const allMatched = await autoCheckDetectedItems(page, group.rows);
-    if (allMatched) {
-      console.log("All detected item(s) matched and checked — auto-continuing.");
-      await clickContinue(page);
-    } else {
-      console.log("\nSome item(s) couldn't be auto-matched — check/fix the box(es) for these row(s) yourself:");
-      group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
-      const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
-      await browserInfo(
-        page,
-        `Some item(s) couldn't be auto-matched. Check/fix the box(es) for these row(s), then click Continue yourself in StepUp:\n${rowsSummary}`
-      );
-    }
-  }
-  await waitForStep(page, "itemDetails");
 
   // Wired so a live Category dropdown mismatch (see fillCategory() in reimbursementFlow.ts) gets
   // persisted the moment it's resolved, instead of only living in that file's in-memory
@@ -472,30 +401,179 @@ async function runGroup(
     },
   };
 
-  const { matchedRows, unmatchedBlockIndexes } = await fillItemDetails(
-    page,
-    group.rows,
-    scanOutcome === "notDetected",
-    allRows,
-    categoryFixHooks
-  );
-  let reviewHtml =
-    `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
-    `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;
-  if (unmatchedBlockIndexes.length > 0) {
-    const unmatchedList = unmatchedBlockIndexes.map((i) => `Item block ${i + 1}`).join(", ");
-    console.log(`\n${unmatchedBlockIndexes.length} item block(s) had no candidate row left — fill those in manually.`);
-    reviewHtml += `<div style="margin-top:10px;color:#ffb3b3;">${unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${escapeHtml(unmatchedList)}.</div>`;
-  }
-  // Filling the blocks leaves the page scrolled to the last one; jump back to the first item so
-  // the page lines up with the review box instead of showing the bottom of the form.
-  await scrollToFirstItem(page);
-  await browserInfoHtml(page, reviewHtml);
-  await waitForStep(page, "additionalDocuments");
-
+  // State carried across steps, since going back in StepUp means a step can be visited more than once.
+  let receiptUploaded = false;
+  let scanOutcome: ItemScanOutcome = "detected";
+  let matchedRows: Table1Row[] = [];
+  let reviewHtml = "";
+  let additionalUploaded = false;
   let attachedAdditionalFiles: string[] = [];
-  const missingAdditionalFiles: string[] = [];
-  if (group.additionalFiles.length > 0) {
+  let missingAdditionalFiles: string[] = [];
+
+  const mainReceiptChild = findFile(folderChildren, group.mainReceiptFile);
+  const mainReceiptPath = path.join(dataDir, group.mainReceiptFile);
+  const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
+
+  /** Shows a passive/finished banner with a resync button and returns that button's click promise. */
+  const bannerWithResync = async (message: string, label: string | undefined): Promise<ResyncHandle | undefined> => {
+    await browserInfo(page, message);
+    return label ? addResyncButton(page, label) : undefined;
+  };
+
+  const handleStudentSelection = async (mode: StepMode): Promise<ResyncHandle | undefined> => {
+    if (mode === "passive") {
+      return bannerWithResync(
+        `Back on student selection. Pick the student yourself and click Continue, or let the automation re-select "${group.child} : ${program}".`,
+        "Re-select student"
+      );
+    }
+    console.log(`Selecting student "${group.child} : ${program}"...`);
+    await selectStudent(page, group.child, program);
+    if (mode === "auto") await clickContinue(page);
+    else await browserInfo(page, "Student re-selected. Click Continue yourself in StepUp.");
+  };
+
+  const uploadReceipt = async () => {
+    await browserInfo(page, `Downloading and uploading the receipt "${group.mainReceiptFile}"...`);
+    await downloadItem(folderRef.driveId, mainReceiptChild.id, mainReceiptPath);
+    console.log(`Uploading main receipt "${group.mainReceiptFile}"...`);
+    await uploadFile(page, mainReceiptPath);
+    receiptUploaded = true;
+    await clearBanner(page);
+  };
+
+  // StepUp keeps uploaded files when you navigate backwards, so neither upload step ever re-uploads
+  // (or offers a resync button for it) — that would only create duplicates.
+  const handleUpload = async (mode: StepMode): Promise<ResyncHandle | undefined> => {
+    if (mode !== "auto" || receiptUploaded) {
+      return bannerWithResync("Back on the upload step. The receipt is already uploaded — click Continue when ready.", undefined);
+    }
+    await uploadReceipt();
+    console.log("Upload done, clicking Continue and waiting for StepUp's AI scan...");
+    await clickContinue(page);
+  };
+
+  const handleItemSelection = async (mode: StepMode): Promise<ResyncHandle | undefined> => {
+    const resyncLabel = "Re-check detected items";
+    if (mode === "passive") {
+      return bannerWithResync(
+        `Back on Item/Service Selection. Fix the box(es) yourself, or let the automation re-check them for:\n${rowsSummary}`,
+        resyncLabel
+      );
+    }
+    console.log("On the Item/Service Selection screen.");
+    scanOutcome = await checkItemScan(page);
+
+    if (scanOutcome === "readError") {
+      // StepUp says it couldn't even read the document at all (distinct from reading it fine and
+      // finding nothing) — that's just as likely to mean the file itself is broken as it is a
+      // transient StepUp hiccup, so before assuming it's safe to fall back to manual entry, have a
+      // human actually look at it: open it in its own tab and ask.
+      console.log(`\nStepUp couldn't read "${group.mainReceiptFile}" at all — opening it for you to check.`);
+      const preview = await openLabeledPreview(
+        page.context(),
+        folderRef,
+        mainReceiptChild.id,
+        mainReceiptPath,
+        group.mainReceiptFile,
+        rowsSummary
+      );
+      const OPENED_FINE = "opened_fine";
+      const BROKEN = "broken";
+      const choice = await browserChoose(
+        page,
+        `StepUp couldn't read "${group.mainReceiptFile}" at all (not just "no items found" — an actual read failure). ` +
+          `It's now open in its own tab for you to check. Did it open properly for you?\n${rowsSummary}`,
+        [
+          { label: "Yes, it opened fine — StepUp's problem, not the file's", value: OPENED_FINE },
+          { label: "No, it's broken/won't open", value: BROKEN },
+        ]
+      );
+      await preview.close();
+
+      if (choice === BROKEN) {
+        const today = new Date().toISOString().slice(0, 10);
+        const note = `[${today}] StepUp couldn't read "${group.mainReceiptFile}" and it didn't open properly for you either — needs a real fix in the spreadsheet.`;
+        for (const row of group.rows) {
+          const existingNotes = (row.data["Notes"] ?? "").trim();
+          const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
+          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
+            Notes: updatedNotes,
+            Status: MISSING_THINGS_STATUS,
+          });
+        }
+        console.log(`Marked ${group.rows.length} row(s) as "${MISSING_THINGS_STATUS}" — document is broken.`);
+        throw new Error(`"${group.mainReceiptFile}" is broken — marked "${MISSING_THINGS_STATUS}" in the spreadsheet, skipping this group.`);
+      }
+
+      // Confirmed genuinely readable — treat exactly like the ordinary "read fine, found nothing"
+      // case below rather than duplicating that whole branch.
+      console.log("Confirmed the document opens fine — treating this like an ordinary detection failure.");
+      scanOutcome = "notDetected";
+    }
+
+    if (scanOutcome === "notDetected") {
+      console.log(
+        `\nStepUp couldn't detect items on this document. Filling in ${group.rows.length} item block(s) directly for:\n${rowsSummary}`
+      );
+      // No OCR data to match against, and no manual "Add an Item" step needed either —
+      // fillItemDetails() creates as many blocks as it needs on its own, matching each one
+      // to the next row in order (noOcrData=true) rather than prompting per block for no reason.
+      if (mode === "auto") {
+        console.log('Auto-clicking "Continue to Item/Service Details"...');
+        await clickContinue(page);
+        return;
+      }
+      return bannerWithResync("StepUp detected no items, so there's nothing to check. Click Continue yourself in StepUp.", resyncLabel);
+    }
+
+    console.log("StepUp detected item(s) — attempting to auto-check the matching box(es)...");
+    const allMatched = await autoCheckDetectedItems(page, group.rows);
+    if (allMatched) {
+      if (mode === "auto") {
+        console.log("All detected item(s) matched and checked — auto-continuing.");
+        await clickContinue(page);
+        return;
+      }
+      return bannerWithResync("All detected item(s) matched and checked. Click Continue yourself in StepUp.", resyncLabel);
+    }
+    console.log("\nSome item(s) couldn't be auto-matched — check/fix the box(es) for these row(s) yourself:");
+    group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
+    return bannerWithResync(
+      `Some item(s) couldn't be auto-matched. Check/fix the box(es) for these row(s), then click Continue yourself in StepUp:\n${rowsSummary}`,
+      resyncLabel
+    );
+  };
+
+  const handleItemDetails = async (mode: StepMode): Promise<ResyncHandle | undefined> => {
+    const resyncLabel = "Re-fill these fields";
+    if (mode === "passive" && reviewHtml) {
+      await browserInfoHtml(page, reviewHtml);
+      return addResyncButton(page, resyncLabel);
+    }
+    if (mode === "passive") {
+      return bannerWithResync("Back on Item/Service Details. Edit as needed, or let the automation fill the fields from the spreadsheet.", resyncLabel);
+    }
+    const result = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows, categoryFixHooks);
+    matchedRows = result.matchedRows;
+    reviewHtml =
+      `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
+      `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;
+    if (result.unmatchedBlockIndexes.length > 0) {
+      const unmatchedList = result.unmatchedBlockIndexes.map((i) => `Item block ${i + 1}`).join(", ");
+      console.log(`\n${result.unmatchedBlockIndexes.length} item block(s) had no candidate row left — fill those in manually.`);
+      reviewHtml += `<div style="margin-top:10px;color:#ffb3b3;">${result.unmatchedBlockIndexes.length} item block(s) had no candidate row left and need filling in manually: ${escapeHtml(unmatchedList)}.</div>`;
+    }
+    // Filling the blocks leaves the page scrolled to the last one; jump back to the first item so
+    // the page lines up with the review box instead of showing the bottom of the form.
+    await scrollToFirstItem(page);
+    await browserInfoHtml(page, reviewHtml);
+    return addResyncButton(page, resyncLabel);
+  };
+
+  const uploadAdditionalDocuments = async () => {
+    attachedAdditionalFiles = [];
+    missingAdditionalFiles = [];
     await browserInfo(page, `Downloading ${group.additionalFiles.length} additional document(s)...`);
     const additionalPaths: string[] = [];
     for (const fileName of group.additionalFiles) {
@@ -545,46 +623,88 @@ async function runGroup(
       console.log(`Uploaded ${attachedAdditionalFiles.length} additional document(s): ${attachedAdditionalFiles.join(", ")}`);
       await clearBanner(page);
     }
-  } else {
-    console.log("No additional documents for this group.");
+    additionalUploaded = true;
+  };
+
+  const handleAdditionalDocuments = async (mode: StepMode): Promise<ResyncHandle | undefined> => {
+    const hasFiles = group.additionalFiles.length > 0;
+    if (mode !== "auto" || additionalUploaded) {
+      return bannerWithResync(
+        hasFiles
+          ? "Back on Additional Documents. They're already uploaded — click Continue when ready."
+          : "Back on Additional Documents. There are none for this group — click Continue when ready.",
+        undefined
+      );
+    }
+    if (hasFiles) {
+      await uploadAdditionalDocuments();
+    } else {
+      console.log("No additional documents for this group.");
+      additionalUploaded = true;
+    }
+    console.log('Auto-clicking "Continue to Summary"...');
+    await clickContinue(page);
+  };
+
+  const handleSummary = async () => {
+    // Uploading additional documents happened without pausing for you (auto-clicked straight
+    // through to here), so the list below is the first chance to see what got attached.
+    const attachmentItems = [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `<li>${escapeHtml(f)}</li>`);
+    missingAdditionalFiles.forEach((f) => attachmentItems.push(`<li>${escapeHtml(f)} (missing, not attached)</li>`));
+    await browserInfoHtml(
+      page,
+      `<div style="font-weight:600;margin-bottom:4px;">Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.</div>` +
+        `<ul style="margin:0;padding-left:20px;line-height:1.35;">` +
+        `<li>Child: ${escapeHtml(group.child)}</li>` +
+        `<li>File(s) attached this submission:<ul style="margin:0;padding-left:20px;">${attachmentItems.join("")}</ul></li>` +
+        `<li>Total expected reimbursement: ${escapeHtml(expectedTotal(matchedRows))}</li>` +
+        `</ul>`
+    );
+  };
+
+  // Drive the wizard as a loop over whichever step the page is actually on, rather than a fixed
+  // forward-only sequence: going Back in StepUp lands on an earlier step, which then just gets
+  // handled as that step again (passively, so it doesn't bounce you forward), and the resync
+  // button on a step's banner redoes that step's field-filling on demand.
+  let step: ReimbursementStep = "studentSelection";
+  let mode: StepMode = "auto";
+  while (step !== "confirmation") {
+    let resync: ResyncHandle | undefined;
+    switch (step) {
+      case "studentSelection":
+        resync = await handleStudentSelection(mode);
+        break;
+      case "upload":
+        resync = await handleUpload(mode);
+        break;
+      case "itemSelection":
+        resync = await handleItemSelection(mode);
+        break;
+      case "itemDetails":
+        resync = await handleItemDetails(mode);
+        break;
+      case "additionalDocuments":
+        resync = await handleAdditionalDocuments(mode);
+        break;
+      case "summary":
+        await handleSummary();
+        break;
+    }
+    const next = await waitForStepChange(page, step, resync?.clicked);
+    if (next === "resync") {
+      mode = "resync";
+      continue;
+    }
+    if (stepIndex(next) < stepIndex(step)) console.log(`\nYou went back to "${next}" — switching to that step.`);
+    mode = stepIndex(next) > stepIndex(step) ? "auto" : "passive";
+    step = next;
   }
-  console.log('Auto-clicking "Continue to Summary"...');
-  await clickContinue(page);
-  await waitForStep(page, "summary");
-  // Uploading additional documents just above happened without pausing for you (auto-clicked
-  // straight through to here), so the list below is the first chance to see what got attached.
 
-  // Compute total expected reimbursement from matched rows: Amount * Quantity + Tax/Shipping.
-  const totalExpected = matchedRows.reduce((sum, r) => {
-    const parseNum = (s: string | undefined) => {
-      if (!s) return 0;
-      const cleaned = String(s).replace(/[^0-9.\-]/g, "");
-      const n = Number.parseFloat(cleaned);
-      return Number.isFinite(n) ? n : 0;
-    };
-    const amount = parseNum(r.data["Amount"]);
-    const qtyRaw = (r.data["Quantity"] || "").trim();
-    const quantity = qtyRaw === "" ? 1 : parseNum(qtyRaw) || 1;
-    const additional = parseNum(r.data["Tax, Shipping, etc."]);
-    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-    return sum + round2(amount) * quantity + round2(additional);
-  }, 0);
-  const totalFormatted = `$${totalExpected.toFixed(2)}`;
-
-  const attachmentItems = [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `<li>${escapeHtml(f)}</li>`);
-  missingAdditionalFiles.forEach((f) => attachmentItems.push(`<li>${escapeHtml(f)} (missing, not attached)</li>`));
-  await browserInfoHtml(
-    page,
-    `<div style="font-weight:600;margin-bottom:4px;">Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.</div>` +
-      `<ul style="margin:0;padding-left:20px;line-height:1.35;">` +
-      `<li>Child: ${escapeHtml(group.child)}</li>` +
-      `<li>File(s) attached this submission:<ul style="margin:0;padding-left:20px;">${attachmentItems.join("")}</ul></li>` +
-      `<li>Total expected reimbursement: ${escapeHtml(totalFormatted)}</li>` +
-      `</ul>`
-  );
-  await waitForStep(page, "confirmation");
   const reimbursementId = await readReimbursementId(page);
   console.log(`Captured Reimbursement #${reimbursementId}.`);
+  if (matchedRows.length === 0) {
+    throw new Error(`Submitted as Reimbursement #${reimbursementId}, but no item details were ever filled in by this run — update the spreadsheet rows manually.`);
+  }
 
   const today = new Date().toISOString().slice(0, 10);
   for (const [idx, row] of matchedRows.entries()) {

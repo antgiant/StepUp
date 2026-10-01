@@ -468,6 +468,48 @@ export async function browserInfoHtml(page: Page, html: string): Promise<void> {
   })()`);
 }
 
+let resyncCounter = 0;
+
+/**
+ * Adds a button labeled `label` to the banner that's currently showing (call right after
+ * browserInfo()/browserInfoHtml(); does nothing visible if there's no banner). `clicked` resolves
+ * the first time it's pressed — race it against a page navigation to offer "redo this step" while
+ * waiting for you to move on by yourself. Never blocks on its own.
+ */
+export async function addResyncButton(page: Page, label: string): Promise<{ clicked: Promise<void> }> {
+  const fnName = `__stepupResync${resyncCounter++}`;
+  let resolveClick!: () => void;
+  const clicked = new Promise<void>((resolve) => {
+    resolveClick = resolve;
+  });
+  await page.exposeFunction(fnName, () => resolveClick());
+  await page.evaluate(`(() => {
+    const content = document.querySelector("[data-stepup-prompt] [data-stepup-content]");
+    if (!content) return;
+    const fnName = ${JSON.stringify(fnName)};
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = ${JSON.stringify(label)};
+    btn.style.cssText =
+      "display:inline-block !important;width:auto !important;max-width:max-content !important;" +
+      "box-sizing:border-box !important;white-space:nowrap !important;float:none !important;" +
+      "padding:9px 16px !important;border:none !important;border-radius:4px !important;" +
+      "background:#3576d3 !important;color:#fff !important;font-size:14px !important;font-weight:600 !important;cursor:pointer !important;";
+    btn.addEventListener("mouseenter", () => { btn.style.setProperty("background", "#2a5cab", "important"); });
+    btn.addEventListener("mouseleave", () => { btn.style.setProperty("background", "#3576d3", "important"); });
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      btn.textContent = "Working...";
+      window[fnName]();
+    });
+    const row = document.createElement("div");
+    row.style.cssText = "margin-top:10px;";
+    row.appendChild(btn);
+    content.appendChild(row);
+  })()`);
+  return { clicked };
+}
+
 /**
  * Removes whatever banner is currently showing (from browserInfo/browserContinue/browserChoose),
  * without putting up a replacement. For a status message shown during an automated wait that has

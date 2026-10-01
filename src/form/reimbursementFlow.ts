@@ -100,6 +100,50 @@ export async function waitForStep(page: Page, step: ReimbursementStep): Promise<
   await page.waitForURL(REIMBURSEMENT_STEP_PATTERNS[step], { timeout: 0 });
 }
 
+/** The wizard's steps in the order they're normally visited, so "forward" vs "backward" can be compared. */
+const STEP_ORDER: ReimbursementStep[] = [
+  "studentSelection",
+  "upload",
+  "itemSelection",
+  "itemDetails",
+  "additionalDocuments",
+  "summary",
+  "confirmation",
+];
+
+export function stepIndex(step: ReimbursementStep): number {
+  return STEP_ORDER.indexOf(step);
+}
+
+/** Which wizard step `url` is on, or null if it isn't a reimbursement wizard URL at all. */
+export function detectStep(url: string): ReimbursementStep | null {
+  return STEP_ORDER.find((step) => REIMBURSEMENT_STEP_PATTERNS[step].test(url)) ?? null;
+}
+
+/**
+ * Waits (unbounded) until the page is on a wizard step other than `from` — forward OR backward —
+ * and returns it, so a click on StepUp's own Back button is noticed instead of the flow waiting
+ * forever for a forward step that's never coming. If `resync` is given and resolves first (see
+ * addResyncButton() in browserPrompt.ts), returns "resync" instead so the caller can redo the
+ * current step's work.
+ */
+export async function waitForStepChange(
+  page: Page,
+  from: ReimbursementStep,
+  resync?: Promise<void>
+): Promise<ReimbursementStep | "resync"> {
+  let resyncRequested = false;
+  resync?.then(() => {
+    resyncRequested = true;
+  });
+  while (true) {
+    if (resyncRequested) return "resync";
+    const step = detectStep(page.url());
+    if (step && step !== from) return step;
+    await page.waitForTimeout(250);
+  }
+}
+
 /**
  * Waits for you to finish logging in — detected by landing on /Dashboard — with no timeout at
  * all, since a real login (possibly with MFA) can easily take longer than Playwright's default
