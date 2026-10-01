@@ -493,10 +493,22 @@ async function runGroup(
   if (existing.action === "resume") {
     console.log(`\nResuming the existing draft for ${group.child}...`);
     const base = new URL(page.url()).origin;
-    // The Item/Service Selection screen is the safest re-entry point: the receipt is already
-    // uploaded and read, and everything after it is idempotent (check boxes, then re-fill fields).
-    await page.goto(`${base}/SubmitReimbursement/${existing.guid}/2`).catch(() => {});
-    resumedAtStep = detectStep(page.url()) ?? undefined;
+    // StepUp remembers the draft's selected items: once lineItems exist, Item/Service Selection has
+    // already been passed (its checkboxes come back pre-checked), so re-enter at Item/Service
+    // Details — re-filling there is idempotent. With no line items yet, re-enter at Item/Service
+    // Selection (the receipt is already uploaded and read). Fall back to Selection if StepUp
+    // refuses to open Details directly.
+    const entrySteps = existing.snapshot.lineItemCount > 0 ? [3, 2] : [2];
+    for (const n of entrySteps) {
+      await page.goto(`${base}/SubmitReimbursement/${existing.guid}/${n}`).catch(() => {});
+      resumedAtStep = detectStep(page.url()) ?? undefined;
+      if (resumedAtStep === (n === 3 ? "itemDetails" : "itemSelection")) break;
+    }
+    // Confirmed live: opening Details directly takes well over 5s to render its item blocks, and the
+    // block-counting code downstream reads them immediately, so wait for the first one here.
+    if (resumedAtStep === "itemDetails") {
+      await page.locator(".accordion-item.accordion-card-container").first().waitFor({ state: "visible", timeout: 45000 }).catch(() => {});
+    }
     if (!resumedAtStep || resumedAtStep === "studentSelection") {
       console.log("Couldn't re-open the draft — starting a new request instead.");
       resumedAtStep = undefined;
@@ -533,6 +545,12 @@ async function runGroup(
   // State carried across steps, since going back in StepUp means a step can be visited more than once.
   let receiptUploaded = resumedAtStep !== undefined;
   let scanOutcome: ItemScanOutcome = "detected";
+  // Resuming straight into Item/Service Details skips the scan check, so infer it: AI-detected
+  // blocks have a named heading ("Item 1 : name"), a failed detection leaves them all unnamed.
+  if (resumedAtStep === "itemDetails") {
+    const headings = await page.locator(".accordion-item.accordion-card-container h3").allTextContents();
+    if (!headings.some((h) => h.split(":").slice(1).join(":").trim().length > 0)) scanOutcome = "notDetected";
+  }
   let matchedRows: Table1Row[] = [];
   let reviewHtml = "";
   let additionalUploaded = existing.action === "resume" && (existing.snapshot.hasAdditionalDocuments || group.additionalFiles.length === 0);
