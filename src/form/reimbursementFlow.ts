@@ -1066,3 +1066,45 @@ async function readReimbursementIdOnce(page: Page, timeoutMs: number): Promise<s
     `Couldn't find a real (non-zero) Reimbursement # on the confirmation screen within ${timeoutMs}ms. Last heading text: "${lastHeading}"`
   );
 }
+
+/**
+ * Checks whether the Summary screen is showing a $0.00 total despite real items having been filled
+ * in (a recurring StepUp glitch, confirmed twice live). Waits for a "Total ... $X" figure to render
+ * and returns true only if every such figure stays $0.00 for a few seconds — a non-zero total
+ * returns false immediately, and no total showing up at all also returns false (can't tell, so
+ * don't act). The Summary DOM is unverified, so this reads the page's visible text for "Total"
+ * followed by a dollar amount rather than relying on a selector.
+ */
+export async function summaryTotalIsZero(page: Page, settleMs = 4000): Promise<boolean> {
+  const readTotals = async (): Promise<number[]> => {
+    // Scoped to the page's own content wrapper so our own banner (which also says "Total expected
+    // reimbursement: $X") can never be mistaken for StepUp's total.
+    const text = String(
+      await page.evaluate(`(document.querySelector("#Content__Wrapper") || document.body).innerText`).catch(() => "")
+    );
+    return [...text.matchAll(/total[^\n$]*\n?\s*\$\s*([\d,]+(?:\.\d+)?)/gi)].map((m) => Number.parseFloat(m[1].replace(/,/g, "")));
+  };
+  const start = Date.now();
+  let zeroSince: number | null = null;
+  while (Date.now() - start < 8000) {
+    const totals = await readTotals();
+    if (totals.some((t) => t > 0)) return false;
+    if (totals.length > 0) {
+      zeroSince ??= Date.now();
+      if (Date.now() - zeroSince >= settleMs) return true;
+    }
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
+
+/** Steps back through StepUp's own Back button (falling back to browser history) until `target` is showing. */
+export async function goBackToStep(page: Page, target: ReimbursementStep): Promise<void> {
+  for (let i = 0; i < 8 && detectStep(page.url()) !== target; i++) {
+    const backControl = page.getByRole("button", { name: /^\s*back\s*$/i }).or(page.getByRole("link", { name: /^\s*back\s*$/i })).first();
+    if ((await backControl.count()) > 0) await backControl.click();
+    else await page.goBack();
+    await page.waitForTimeout(1000);
+  }
+  if (detectStep(page.url()) !== target) throw new Error(`Couldn't navigate back to the "${target}" step.`);
+}

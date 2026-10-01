@@ -26,7 +26,9 @@ import {
   selectStudent,
   uploadFile,
   waitForLogin,
+  goBackToStep,
   stepIndex,
+  summaryTotalIsZero,
   waitForStepChange,
   type CategoryFixHooks,
   type ItemScanOutcome,
@@ -42,6 +44,7 @@ import {
   type FolderChild,
 } from "./graph/onedrive.js";
 import { applyCategoryRename, attachCategoryTreeListener } from "./categorySync.js";
+import { attachDraftIdDiscovery, scanPageForReimbursementId } from "./draftIdDiscovery.js";
 import { attachPreauthSyncListener } from "./preauthSync.js";
 import {
   buildGroups,
@@ -218,6 +221,7 @@ async function main() {
   attachCategoryTreeListener(page, excelRef);
   attachVendorListingListener(page);
   attachPreauthSyncListener(page, excelRef);
+  attachDraftIdDiscovery(page);
 
   const statusRows = await getTableRows(excelRef, STATUSES_TABLE);
   const validStatuses = statusRows.map((r) => String(r[0] ?? "")).filter(Boolean);
@@ -646,13 +650,16 @@ async function runGroup(
     await clickContinue(page);
   };
 
-  const handleSummary = async () => {
+  const handleSummary = async (zeroTotalWarning = false) => {
     // Uploading additional documents happened without pausing for you (auto-clicked straight
     // through to here), so the list below is the first chance to see what got attached.
     const attachmentItems = [group.mainReceiptFile, ...attachedAdditionalFiles].map((f) => `<li>${escapeHtml(f)}</li>`);
     missingAdditionalFiles.forEach((f) => attachmentItems.push(`<li>${escapeHtml(f)} (missing, not attached)</li>`));
     await browserInfoHtml(
       page,
+      (zeroTotalWarning
+        ? `<div style="margin-bottom:8px;color:#ffb3b3;font-weight:600;">Warning: StepUp's total still shows $0.00 after re-filling the item details. Don't submit until it's fixed.</div>`
+        : "") +
       `<div style="font-weight:600;margin-bottom:4px;">Review everything on the Summary page carefully, then click "Submit for approval" yourself when ready.</div>` +
         `<ul style="margin:0;padding-left:20px;line-height:1.35;">` +
         `<li>Child: ${escapeHtml(group.child)}</li>` +
@@ -666,6 +673,7 @@ async function runGroup(
   // forward-only sequence: going Back in StepUp lands on an earlier step, which then just gets
   // handled as that step again (passively, so it doesn't bounce you forward), and the resync
   // button on a step's banner redoes that step's field-filling on demand.
+  let zeroTotalFixes = 0;
   let step: ReimbursementStep = "studentSelection";
   let mode: StepMode = "auto";
   while (step !== "confirmation") {
@@ -686,10 +694,25 @@ async function runGroup(
       case "additionalDocuments":
         resync = await handleAdditionalDocuments(mode);
         break;
-      case "summary":
-        await handleSummary();
+      case "summary": {
+        // StepUp sometimes renders a $0.00 total here even though every earlier step looked fine
+        // (seen twice). Going back and re-filling the item details has fixed it, so do that
+        // automatically (a couple of tries at most, then warn instead of looping forever).
+        const zeroTotal = mode !== "passive" && (await summaryTotalIsZero(page));
+        if (zeroTotal && zeroTotalFixes < 2) {
+          zeroTotalFixes++;
+          console.log(`\nSummary total shows $0.00 — going back to Item/Service Details to re-fill (attempt ${zeroTotalFixes} of 2).`);
+          await browserInfo(page, "The Summary total shows $0.00. Going back to Item/Service Details to re-fill the fields...");
+          await goBackToStep(page, "itemDetails");
+          step = "itemDetails";
+          mode = "resync";
+          continue;
+        }
+        await handleSummary(zeroTotal);
         break;
+      }
     }
+    await scanPageForReimbursementId(page, step);
     const next = await waitForStepChange(page, step, resync?.clicked);
     if (next === "resync") {
       mode = "resync";
