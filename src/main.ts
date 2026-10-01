@@ -17,6 +17,7 @@ import {
   checkForDashboardModal,
   checkItemScan,
   clickContinue,
+  detectStep,
   ensureOnNewReimbursementForm,
   fillItemDetails,
   scrollToFirstItem,
@@ -44,7 +45,17 @@ import {
   type FolderChild,
 } from "./graph/onedrive.js";
 import { applyCategoryRename, attachCategoryTreeListener } from "./categorySync.js";
-import { attachDraftIdDiscovery, scanPageForReimbursementId } from "./draftIdDiscovery.js";
+import {
+  attachDraftTracker,
+  deleteDraftRecord,
+  fetchDraftSnapshot,
+  guidFromUrl,
+  isSubmitted,
+  latestSnapshot,
+  loadDraftRecord,
+  saveDraftRecord,
+  type DraftSnapshot,
+} from "./draftTracker.js";
 import { attachPreauthSyncListener } from "./preauthSync.js";
 import {
   buildGroups,
@@ -221,7 +232,7 @@ async function main() {
   attachCategoryTreeListener(page, excelRef);
   attachVendorListingListener(page);
   attachPreauthSyncListener(page, excelRef);
-  attachDraftIdDiscovery(page);
+  attachDraftTracker(page);
 
   const statusRows = await getTableRows(excelRef, STATUSES_TABLE);
   const validStatuses = statusRows.map((r) => String(r[0] ?? "")).filter(Boolean);
@@ -369,6 +380,91 @@ function expectedTotal(rows: Table1Row[]): string {
   return `$${total.toFixed(2)}`;
 }
 
+/** Writes the "submitted" bookkeeping for `rows` (already in line-item order) back to Table1. */
+async function markRowsSubmitted(
+  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  table1Headers: string[],
+  rows: Table1Row[],
+  reimbursementId: string,
+  submittedDate: string
+): Promise<void> {
+  for (const [idx, row] of rows.entries()) {
+    await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
+      Status: SUBMITTED_STATUS,
+      Submitted: submittedDate,
+      "Reimbursement ID": reimbursementId,
+      "Line Number": String(idx + 1),
+    });
+  }
+}
+
+/**
+ * Before starting a group, checks whether an earlier run already created a StepUp draft for these
+ * exact rows (remembered in .cache/drafts.json, keyed by the group's row IDs). If StepUp says it
+ * was actually submitted — e.g. the automator died while you were on the Summary screen and you
+ * submitted by hand — the rows are marked Submitted with the real Reimbursement # and the group is
+ * skipped, with no guessing involved. If it's still a draft, asks whether to resume it.
+ */
+async function resolveExistingDraft(
+  page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
+  group: ReimbursementGroup,
+  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  table1Headers: string[]
+): Promise<{ action: "fresh" } | { action: "done" } | { action: "resume"; guid: string; snapshot: DraftSnapshot }> {
+  const rowIds = group.rows.map((r) => r.data["ID"]);
+  const record = await loadDraftRecord(rowIds);
+  if (!record) return { action: "fresh" };
+
+  const snapshot = await fetchDraftSnapshot(page, record.guid);
+  if (!snapshot) {
+    const choice = await browserChoose(
+      page,
+      `An earlier run started a StepUp draft for these row(s) (Reimbursement #${record.sequenceNumber ?? "unknown"}), but its current state couldn't be checked. ` +
+        `Check in StepUp whether it was already submitted before starting a new one.`,
+      [
+        { label: "Start a new request anyway", value: "fresh" },
+        { label: "Skip this group", value: "skip" },
+      ]
+    );
+    if (choice === "skip") return { action: "done" };
+    await deleteDraftRecord(rowIds);
+    return { action: "fresh" };
+  }
+
+  if (isSubmitted(snapshot)) {
+    const ordered = (record.rowOrder ?? rowIds).map((id) => group.rows.find((r) => r.data["ID"] === id)).filter((r): r is Table1Row => Boolean(r));
+    if (!snapshot.sequenceNumber || ordered.length !== snapshot.lineItemCount) {
+      await browserContinue(
+        page,
+        `Reimbursement #${snapshot.sequenceNumber ?? "?"} was already submitted in StepUp (${snapshot.lineItemCount} line item(s)), but this group has ${ordered.length} row(s), so the spreadsheet can't be updated automatically. ` +
+          `Update the rows by hand. Skipping this group.`
+      );
+      return { action: "done" };
+    }
+    const submittedDate = (snapshot.submitDate ?? new Date().toISOString()).slice(0, 10);
+    await markRowsSubmitted(excelRef, table1Headers, ordered, snapshot.sequenceNumber, submittedDate);
+    await deleteDraftRecord(rowIds);
+    console.log(`\nThese row(s) were already submitted as Reimbursement #${snapshot.sequenceNumber} — marked ${ordered.length} row(s) Submitted and skipping the group.`);
+    return { action: "done" };
+  }
+
+  const choice = await browserChoose(
+    page,
+    `An earlier run left an unsubmitted StepUp draft for these row(s) (Reimbursement #${snapshot.sequenceNumber ?? "unknown"}, status "${snapshot.externalStatus ?? "?"}"). Resume it, or start a new request?`,
+    [
+      { label: "Resume the draft", value: "resume" },
+      { label: "Start a new request", value: "fresh" },
+      { label: "Skip this group", value: "skip" },
+    ]
+  );
+  if (choice === "skip") return { action: "done" };
+  if (choice === "fresh") {
+    await deleteDraftRecord(rowIds);
+    return { action: "fresh" };
+  }
+  return { action: "resume", guid: record.guid, snapshot };
+}
+
 async function runGroup(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
@@ -380,8 +476,27 @@ async function runGroup(
   scholarshipByChild: Map<string, string>,
   allRows: Table1Row[]
 ): Promise<void> {
-  console.log(`\nNavigating to a new reimbursement request for ${group.child}...`);
-  await ensureOnNewReimbursementForm(page);
+  const existing = await resolveExistingDraft(page, group, excelRef, table1Headers);
+  if (existing.action === "done") return;
+  const groupRowIds = group.rows.map((r) => r.data["ID"]);
+  let resumedAtStep: ReimbursementStep | undefined;
+  if (existing.action === "resume") {
+    console.log(`\nResuming the existing draft for ${group.child}...`);
+    const base = new URL(page.url()).origin;
+    // The Item/Service Selection screen is the safest re-entry point: the receipt is already
+    // uploaded and read, and everything after it is idempotent (check boxes, then re-fill fields).
+    await page.goto(`${base}/SubmitReimbursement/${existing.guid}/2`).catch(() => {});
+    resumedAtStep = detectStep(page.url()) ?? undefined;
+    if (!resumedAtStep || resumedAtStep === "studentSelection") {
+      console.log("Couldn't re-open the draft — starting a new request instead.");
+      resumedAtStep = undefined;
+      await deleteDraftRecord(groupRowIds);
+    }
+  }
+  if (!resumedAtStep) {
+    console.log(`\nNavigating to a new reimbursement request for ${group.child}...`);
+    await ensureOnNewReimbursementForm(page);
+  }
   const program =
     group.rows[0].data["Program"]?.trim() || scholarshipByChild.get(group.child) || DEFAULT_PROGRAM;
 
@@ -406,11 +521,11 @@ async function runGroup(
   };
 
   // State carried across steps, since going back in StepUp means a step can be visited more than once.
-  let receiptUploaded = false;
+  let receiptUploaded = resumedAtStep !== undefined;
   let scanOutcome: ItemScanOutcome = "detected";
   let matchedRows: Table1Row[] = [];
   let reviewHtml = "";
-  let additionalUploaded = false;
+  let additionalUploaded = existing.action === "resume" && (existing.snapshot.hasAdditionalDocuments || group.additionalFiles.length === 0);
   let attachedAdditionalFiles: string[] = [];
   let missingAdditionalFiles: string[] = [];
 
@@ -560,6 +675,9 @@ async function runGroup(
     }
     const result = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows, categoryFixHooks);
     matchedRows = result.matchedRows;
+    if (draftGuid) {
+      await saveDraftRecord({ guid: draftGuid, rowIds: groupRowIds, sequenceNumber: draftSeq, rowOrder: matchedRows.map((r) => r.data["ID"]) });
+    }
     reviewHtml =
       `<div style="font-weight:600;margin-bottom:10px;">Review the filled details against these row(s), then click Continue yourself in StepUp:</div>` +
       `<div style="display:flex;flex-direction:column;gap:8px;">${matchedRows.map((r) => reviewItemCardHtml(r)).join("")}</div>`;
@@ -673,8 +791,41 @@ async function runGroup(
   // forward-only sequence: going Back in StepUp lands on an earlier step, which then just gets
   // handled as that step again (passively, so it doesn't bounce you forward), and the resync
   // button on a step's banner redoes that step's field-filling on demand.
+  // Records the draft's GUID (so a crashed run can find it again) and, as soon as StepUp reports
+  // it, writes the draft's Reimbursement # onto this group's rows — Status stays Unfiled until
+  // the submission is actually confirmed.
+  let draftGuid: string | undefined = existing.action === "resume" ? existing.guid : undefined;
+  let draftSeq: string | undefined = existing.action === "resume" ? existing.snapshot.sequenceNumber : undefined;
+  const trackDraft = async () => {
+    const guid = guidFromUrl(page.url());
+    if (!guid) return;
+    if (guid !== draftGuid) {
+      draftGuid = guid;
+      draftSeq = undefined;
+      await saveDraftRecord({ guid, rowIds: groupRowIds });
+      console.log(`[draft] Started draft ${guid}.`);
+    }
+    if (draftSeq) return;
+    let seq = latestSnapshot(guid)?.sequenceNumber;
+    for (let i = 0; !seq && i < 6; i++) {
+      await page.waitForTimeout(500);
+      seq = latestSnapshot(guid)?.sequenceNumber;
+    }
+    if (!seq) return;
+    draftSeq = seq;
+    const idCol = table1Headers.indexOf("Reimbursement ID");
+    for (const row of group.rows) {
+      if ((row.data["Reimbursement ID"] ?? "").trim() === seq) continue;
+      await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, { "Reimbursement ID": seq });
+      if (idCol !== -1) row.rawValues[idCol] = seq;
+      row.data["Reimbursement ID"] = seq;
+    }
+    await saveDraftRecord({ guid, rowIds: groupRowIds, sequenceNumber: seq, rowOrder: matchedRows.map((r) => r.data["ID"]) });
+    console.log(`[draft] Recorded Reimbursement #${seq} on ${group.rows.length} row(s).`);
+  };
+
   let zeroTotalFixes = 0;
-  let step: ReimbursementStep = "studentSelection";
+  let step: ReimbursementStep = resumedAtStep ?? "studentSelection";
   let mode: StepMode = "auto";
   while (step !== "confirmation") {
     let resync: ResyncHandle | undefined;
@@ -712,7 +863,7 @@ async function runGroup(
         break;
       }
     }
-    await scanPageForReimbursementId(page, step);
+    await trackDraft();
     const next = await waitForStepChange(page, step, resync?.clicked);
     if (next === "resync") {
       mode = "resync";
@@ -729,15 +880,8 @@ async function runGroup(
     throw new Error(`Submitted as Reimbursement #${reimbursementId}, but no item details were ever filled in by this run — update the spreadsheet rows manually.`);
   }
 
-  const today = new Date().toISOString().slice(0, 10);
-  for (const [idx, row] of matchedRows.entries()) {
-    await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-      Status: SUBMITTED_STATUS,
-      Submitted: today,
-      "Reimbursement ID": reimbursementId,
-      "Line Number": String(idx + 1),
-    });
-  }
+  await markRowsSubmitted(excelRef, table1Headers, matchedRows, reimbursementId, new Date().toISOString().slice(0, 10));
+  await deleteDraftRecord(groupRowIds);
   console.log(`Updated ${matchedRows.length} row(s) in the spreadsheet.`);
 
   // Deliberately not navigating away from the confirmation page here — it stays up so you can see
