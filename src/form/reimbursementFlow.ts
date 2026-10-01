@@ -130,13 +130,19 @@ export function detectStep(url: string): ReimbursementStep | null {
 export async function waitForStepChange(
   page: Page,
   from: ReimbursementStep,
-  resync?: Promise<void>
-): Promise<ReimbursementStep | "resync"> {
+  resync?: Promise<void>,
+  skip?: Promise<void>
+): Promise<ReimbursementStep | "resync" | "skip"> {
   let resyncRequested = false;
+  let skipRequested = false;
   resync?.then(() => {
     resyncRequested = true;
   });
+  skip?.then(() => {
+    skipRequested = true;
+  });
   while (true) {
+    if (skipRequested) return "skip";
     if (resyncRequested) return "resync";
     const step = detectStep(page.url());
     if (step && step !== from) return step;

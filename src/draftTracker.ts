@@ -34,6 +34,8 @@ export interface DraftRecord {
   scanOutcome?: string;
   attachedFiles?: string[];
   missingFiles?: string[];
+  /** Set when you chose "skip this group for now" mid-submission, so a later run re-fills it from the spreadsheet. */
+  skipped?: boolean;
 }
 
 const snapshots = new Map<string, DraftSnapshot>();

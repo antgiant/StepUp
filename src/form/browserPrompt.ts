@@ -468,6 +468,70 @@ export async function browserInfoHtml(page: Page, html: string): Promise<void> {
   })()`);
 }
 
+let skipCounter = 0;
+
+/**
+ * Installs a persistent "Skip this group for now" button that lives in its own top-layer popover,
+ * separate from the banners (which get replaced at every step and so can't hold something that
+ * must always be reachable). `skipped` resolves once it has been pressed twice in a row (the
+ * first press only arms it, so a stray click can't abandon a group). `ensure()` re-adds the button
+ * if a full page load wiped it; `remove()` takes it away once the group is finished.
+ */
+export async function installSkipButton(
+  page: Page
+): Promise<{ skipped: Promise<void>; ensure: () => Promise<void>; remove: () => Promise<void> }> {
+  const fnName = `__stepupSkip${skipCounter++}`;
+  let resolveSkip!: () => void;
+  const skipped = new Promise<void>((resolve) => {
+    resolveSkip = resolve;
+  });
+  await page.exposeFunction(fnName, () => resolveSkip());
+
+  const ensure = async () => {
+    await page
+      .evaluate(`(() => {
+        if (document.querySelector("[data-stepup-skip]")) return;
+        const fnName = ${JSON.stringify(fnName)};
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("popover", "manual");
+        btn.setAttribute("data-stepup-skip", "1");
+        const idleText = "\\u23ed Skip this group for now";
+        btn.textContent = idleText;
+        btn.style.cssText =
+          "position:fixed !important;top:auto !important;right:auto !important;bottom:16px !important;left:16px !important;" +
+          "margin:0 !important;border:none !important;border-radius:6px !important;padding:9px 14px !important;" +
+          "background:#8a5a00 !important;color:#fff !important;font:600 13px -apple-system,BlinkMacSystemFont,sans-serif !important;" +
+          "cursor:pointer !important;box-shadow:0 2px 10px rgba(0,0,0,.4) !important;";
+        let armedTimer = null;
+        btn.addEventListener("click", () => {
+          if (armedTimer === null) {
+            btn.textContent = "Click again to skip this group";
+            btn.style.setProperty("background", "#b3261e", "important");
+            armedTimer = setTimeout(() => {
+              armedTimer = null;
+              btn.textContent = idleText;
+              btn.style.setProperty("background", "#8a5a00", "important");
+            }, 4000);
+            return;
+          }
+          clearTimeout(armedTimer);
+          btn.disabled = true;
+          btn.textContent = "Skipping after this step...";
+          window[fnName]();
+        });
+        document.body.appendChild(btn);
+        btn.showPopover();
+      })()`)
+      .catch(() => {});
+  };
+  const remove = async () => {
+    await page.evaluate(`document.querySelectorAll("[data-stepup-skip]").forEach((el) => el.remove())`).catch(() => {});
+  };
+  await ensure();
+  return { skipped, ensure, remove };
+}
+
 let resyncCounter = 0;
 
 /**

@@ -10,6 +10,7 @@ import {
   browserInfo,
   browserInfoHtml,
   clearBanner,
+  installSkipButton,
   startConnectionHeartbeat,
 } from "./form/browserPrompt.js";
 import {
@@ -344,6 +345,11 @@ async function main() {
     try {
       await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, rows, existing);
     } catch (err) {
+      if (err instanceof GroupSkippedError) {
+        await clearBanner(page);
+        console.log(`\nSkipped group ${i + 1} for now — its StepUp draft is kept; fix the data and re-run to resume it.`);
+        continue;
+      }
       const message = (err as Error).message;
       console.error(`\nGroup ${i + 1} failed: ${message}`);
       console.error("Skipping to the next group rather than aborting the whole run.");
@@ -462,7 +468,10 @@ async function resolveExistingDraft(
 
   const choice = await browserChoose(
     page,
-    `An earlier run left an unsubmitted StepUp draft for these row(s) (Reimbursement #${snapshot.sequenceNumber ?? "unknown"}, status "${snapshot.externalStatus ?? "?"}"). Resume it, or start a new request?`,
+    `${record.skipped ? "You skipped this group earlier, leaving" : "An earlier run left"} an unsubmitted StepUp draft for these row(s) (Reimbursement #${snapshot.sequenceNumber ?? "unknown"}, status "${snapshot.externalStatus ?? "?"}"). ` +
+      (record.skipped
+        ? "Resuming re-fills it from the spreadsheet, so your data fixes apply. If the receipt itself was the problem, start a new request instead."
+        : "Resume it, or start a new request?"),
     [
       { label: "Resume the draft", value: "resume" },
       { label: "Start a new request", value: "fresh" },
@@ -477,6 +486,15 @@ async function resolveExistingDraft(
   return { action: "resume", guid: record.guid, snapshot, record };
 }
 
+/** Thrown when you press "Skip this group for now" — not a failure, so main() moves on without the error banner. */
+class GroupSkippedError extends Error {}
+
+/**
+ * Runs one group with a persistent "Skip this group for now" button on the page throughout, for
+ * when you spot an underlying data problem mid-submission (a receipt that doesn't match the
+ * spreadsheet, etc.). The StepUp draft is left in place and remembered, so the next run offers to
+ * resume it once the data is fixed.
+ */
 async function runGroup(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
@@ -488,6 +506,30 @@ async function runGroup(
   scholarshipByChild: Map<string, string>,
   allRows: Table1Row[],
   existing: Exclude<Awaited<ReturnType<typeof resolveExistingDraft>>, { action: "done" }>
+): Promise<void> {
+  const skipButton = await installSkipButton(page);
+  // A full page load (e.g. resuming via direct URL) wipes the button, so keep re-adding it.
+  const keepAlive = setInterval(() => void skipButton.ensure(), 2000);
+  try {
+    await runGroupSteps(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, allRows, existing, skipButton.skipped);
+  } finally {
+    clearInterval(keepAlive);
+    await skipButton.remove();
+  }
+}
+
+async function runGroupSteps(
+  page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
+  group: ReimbursementGroup,
+  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  folderChildren: FolderChild[],
+  dataDir: string,
+  table1Headers: string[],
+  scholarshipByChild: Map<string, string>,
+  allRows: Table1Row[],
+  existing: Exclude<Awaited<ReturnType<typeof resolveExistingDraft>>, { action: "done" }>,
+  skipped: Promise<void>
 ): Promise<void> {
   const groupRowIds = group.rows.map((r) => r.data["ID"]);
   let resumedAtStep: ReimbursementStep | undefined;
@@ -506,7 +548,9 @@ async function runGroup(
     };
     const wanted: ReimbursementStep[] = [];
     const lastStep = existing.record.lastStep as ReimbursementStep | undefined;
-    if (lastStep && stepNumbers[lastStep]) wanted.push(lastStep);
+    // A draft you skipped over a data problem restarts at Details/Selection instead, so the fixed
+    // spreadsheet values get re-applied rather than trusting what StepUp remembers.
+    if (lastStep && stepNumbers[lastStep] && !existing.record.skipped) wanted.push(lastStep);
     if (existing.snapshot.lineItemCount > 0) wanted.push("itemDetails");
     wanted.push("itemSelection");
     for (const target of [...new Set(wanted)]) {
@@ -838,6 +882,7 @@ async function runGroup(
   // it, writes the draft's Reimbursement # onto this group's rows — Status stays Unfiled until
   // the submission is actually confirmed.
   const record: DraftRecord = resumeRecord ?? { guid: "", rowIds: groupRowIds };
+  record.skipped = false;
   let draftSeq: string | undefined = resumeRecord ? existing.action === "resume" ? existing.snapshot.sequenceNumber : undefined : undefined;
   const persist = async () => {
     if (!record.guid) return;
@@ -880,12 +925,23 @@ async function runGroup(
     await persist();
   };
 
+  let skipRequested = false;
+  skipped.then(() => {
+    skipRequested = true;
+  });
+  const skipGroupForNow = async (): Promise<never> => {
+    record.skipped = true;
+    await persist();
+    throw new GroupSkippedError(`Skipped group for ${group.child} at your request.`);
+  };
+
   let zeroTotalFixes = 0;
   let step: ReimbursementStep = resumedAtStep ?? "studentSelection";
   let mode: StepMode = "auto";
   while (step !== "confirmation") {
     // Recorded on arrival too (not just after the handler) so a crash mid-step still resumes here.
     await trackDraft(step);
+    if (skipRequested) await skipGroupForNow();
     let resync: ResyncHandle | undefined;
     switch (step) {
       case "studentSelection":
@@ -929,7 +985,8 @@ async function runGroup(
       }
     }
     await trackDraft(step);
-    const next = await waitForStepChange(page, step, resync?.clicked);
+    const next = await waitForStepChange(page, step, resync?.clicked, skipped);
+    if (next === "skip") return skipGroupForNow();
     if (next === "resync") {
       mode = "resync";
       continue;
