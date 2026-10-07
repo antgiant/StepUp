@@ -4,7 +4,7 @@ import type { HlcClock } from "./hlc.js";
 import type { EventStore } from "./store.js";
 import { SCHEMA_VERSION, type Json, type LedgerEvent } from "./types.js";
 
-export interface WriteOptions {
+export interface LedgerWriteOptions {
   label?: string;
   reason?: string;
 }
@@ -39,15 +39,15 @@ export class Ledger {
     this.cached = undefined;
   }
 
-  set(entity: EntityKind, entityId: string, fields: Record<string, Json>, opts: WriteOptions = {}): LedgerEvent {
+  set(entity: EntityKind, entityId: string, fields: Record<string, Json>, opts: LedgerWriteOptions = {}): LedgerEvent {
     return this.write("set", entity, entityId, fields, opts);
   }
 
-  delete(entity: EntityKind, entityId: string, opts: WriteOptions = {}): LedgerEvent {
+  delete(entity: EntityKind, entityId: string, opts: LedgerWriteOptions = {}): LedgerEvent {
     return this.write("delete", entity, entityId, undefined, opts);
   }
 
-  restore(entity: EntityKind, entityId: string, opts: WriteOptions = {}): LedgerEvent {
+  restore(entity: EntityKind, entityId: string, opts: LedgerWriteOptions = {}): LedgerEvent {
     return this.write("restore", entity, entityId, undefined, opts);
   }
 
@@ -64,7 +64,7 @@ export class Ledger {
     entity: EntityKind,
     entityId: string,
     fields: Record<string, Json> | undefined,
-    opts: WriteOptions
+    opts: LedgerWriteOptions
   ): LedgerEvent {
     const hlc = this.clock.next();
     const event: LedgerEvent = {
