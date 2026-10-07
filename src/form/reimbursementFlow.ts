@@ -441,9 +441,20 @@ async function fillBlockFields(
     if (providerName) await selectVendorOrProvider(page, providerName, index);
   }
   if (row.data["Service Date"]) {
-    await page.locator(SERVICE_DATE).first().waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
-    if ((await page.locator(SERVICE_DATE).count()) > 0) {
-      await overwriteDateIfDifferent(page.locator(SERVICE_DATE).last(), row.data["Service Date"]);
+    // Scoped to this item block by its own "Service Date" label (like "Who did you pay?"), falling
+    // back to #serviceDate — the old unscoped .last() hit the wrong block's field when several
+    // items were on the page, and a missed field was skipped without a word.
+    const byLabel = page.locator(`#collapseOne____item_${index + 1} .reimbursement-item-field:has-text("Service Date") input`);
+    const byId = page.locator(SERVICE_DATE);
+    const deadline = Date.now() + 8000;
+    while ((await byLabel.count()) === 0 && (await byId.count()) === 0 && Date.now() < deadline) {
+      await page.waitForTimeout(300);
+    }
+    const field = (await byLabel.count()) > 0 ? byLabel.first() : (await byId.count()) > index ? byId.nth(index) : byId.last();
+    if ((await byLabel.count()) === 0 && (await byId.count()) === 0) {
+      console.log(`  Service Date: Excel has "${row.data["Service Date"]}" but no Service Date field appeared — fill it in manually.`);
+    } else {
+      await overwriteDateIfDifferent(field, row.data["Service Date"], "Service Date");
     }
   }
   await overwriteIfDifferent(page.locator(INVOICE_NUMBER).nth(index), row.data["Invoice #"], "Invoice #");
@@ -676,17 +687,21 @@ export function parseExcelDate(value: string): Date {
   return new Date(value);
 }
 
-async function overwriteDateIfDifferent(locator: ReturnType<Page["locator"]>, excelDate: string | undefined): Promise<void> {
+async function overwriteDateIfDifferent(
+  locator: ReturnType<Page["locator"]>,
+  excelDate: string | undefined,
+  label = "Purchase Date"
+): Promise<void> {
   if (!excelDate) return;
   const parsed = parseExcelDate(excelDate);
   if (Number.isNaN(parsed.getTime())) {
-    console.log(`  Date: couldn't parse Excel value "${excelDate}" as a date — leaving StepUp's value as-is.`);
+    console.log(`  ${label}: couldn't parse Excel value "${excelDate}" as a date — leaving StepUp's value as-is.`);
     return;
   }
   const iso = parsed.toISOString().slice(0, 10);
   const current = await locator.inputValue().catch(() => "");
   if (current === iso) return;
-  console.log(`  Purchase Date mismatch: StepUp has "${current}", Excel has "${excelDate}" — overwriting with Excel's value.`);
+  console.log(`  ${label} mismatch: StepUp has "${current}", Excel has "${excelDate}" — overwriting with Excel's value.`);
   await locator.fill(iso);
   await locator.blur();
 }
@@ -755,7 +770,12 @@ async function selectVendorOrProvider(page: Page, name: string, index: number): 
     `  "${name}" not found (or ambiguous — ${partialCount} partial match(es)) in the provider list — falling back to manual Vendor Name entry.`
   );
   await rawClick(dropdown.getByText(PROVIDER_NOT_LISTED_TEXT, { exact: true }));
-  await page.locator(VENDOR_NAME).last().fill(name);
+  // The revealed field is labelled "Provider Name" here (not always #vendorName), so find it by label
+  // within this item block first. Short timeout: the default 10-minute one turned a miss into a hang.
+  const block = `#collapseOne____item_${index + 1}`;
+  const byLabel = page.locator(`${block} .reimbursement-item-field:has-text("Provider Name") input, ${block} .reimbursement-item-field:has-text("Vendor Name") input`);
+  const manual = (await byLabel.count().catch(() => 0)) > 0 ? byLabel.first() : page.locator(VENDOR_NAME).last();
+  await manual.fill(name, { timeout: 10000 });
 }
 
 /**

@@ -143,6 +143,7 @@ function reviewItemCardHtml(r: { data: Record<string, string> }): string {
 
   const fields = [
     reviewFieldRow("Purchase Date", excelDateDisplay(r.data["Date"])),
+    reviewFieldRow("Service Date", excelDateDisplay(r.data["Service Date"])),
     reviewFieldRow("Invoice/Receipt #", r.data["Invoice #"]),
     reviewFieldRow("Category", r.data["Category"]),
     reviewFieldRow("Quantity", r.data["Quantity"]),

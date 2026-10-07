@@ -98,6 +98,10 @@ export async function loadUnfiledRows(excelRef: DriveItemRef): Promise<Table1Row
     throw new Error(`"Status" column not found in ${TABLE1}. Columns: ${headers.join(", ")}`);
   }
 
+  if (!headers.some((h) => /service/i.test(h) && /date/i.test(h))) {
+    console.warn(`Warning: no Service Date column found in ${TABLE1}. Columns: ${headers.join(", ")}`);
+  }
+
   const docFileIndexes = DOC_FILE_COLUMNS.map((name) => wsHeaders.indexOf(name)).filter((i) => i !== -1);
   if (docFileIndexes.length !== DOC_FILE_COLUMNS.length) {
     const missing = DOC_FILE_COLUMNS.filter((name) => !wsHeaders.includes(name));
@@ -113,6 +117,12 @@ export async function loadUnfiledRows(excelRef: DriveItemRef): Promise<Table1Row
     headers.forEach((h, i) => {
       data[h] = values[i] === undefined || values[i] === null ? "" : String(values[i]);
     });
+
+    // Tolerate a slightly different header ("Service Date ", "Date of Service", ...) by aliasing it.
+    if (!data["Service Date"]?.trim()) {
+      const key = headers.find((h) => h !== "Service Date" && /service/i.test(h) && /date/i.test(h) && data[h]?.trim());
+      if (key) data["Service Date"] = data[key];
+    }
 
     const wsRow = wsRows[rowIndex];
     const documentationFiles = docFileIndexes
