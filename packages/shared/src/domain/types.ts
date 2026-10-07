@@ -89,6 +89,8 @@ export interface DocumentRec {
   sizeBytes?: number;
   pages?: number;
   derivedFrom?: string;
+  /** Where it came from: dropped in the year folder the old way, uploaded through the app, or imported from a legacy workbook. */
+  source?: "loose" | "upload" | "legacy";
   /** Receipt shows payment was made (e.g. "$0.00 owed"); confidence 0..1. */
   paymentEvidenceConfidence?: number;
 }

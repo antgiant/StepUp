@@ -15,7 +15,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "import-legacy": "tsx packages/cli/src/importLegacy.ts",
-    "year": "tsx packages/cli/src/year.ts"
+    "year": "tsx packages/cli/src/year.ts",
+    "ingest": "tsx packages/cli/src/ingest.ts"
   },
   "license": "ISC",
   "devDependencies": {
