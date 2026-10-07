@@ -314,6 +314,10 @@ async function main() {
   console.log(`\nBuilt ${groups.length} submission group(s).`);
 
   let stoppedEarly = false;
+  // Groups auto-skipped as "Missing Things" — shown on the next prompt in the browser (and the final
+  // one) so what happened is visible there too, not only in the terminal.
+  const skipNotices: string[] = [];
+  const noticePrefix = () => (skipNotices.length ? `\u26a0 ${skipNotices.join("\n\u26a0 ")}\n\n` : "");
   for (const [i, group] of groups.entries()) {
     console.log(`\n=== Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile} ===`);
     group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
@@ -341,6 +345,10 @@ async function main() {
             `Marked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as "${MISSING_THINGS_STATUS}" with a note. ` +
             `Shrink the file, set the status back to "Unfiled (Ready to Submit)" and re-run.`
         );
+        skipNotices.push(
+          `Group ${i + 1} (${group.child}, ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) was skipped: its receipt is ${sizeMb} MB, over StepUp's 5 MB limit. ` +
+            `Marked "${MISSING_THINGS_STATUS}" in the spreadsheet with a note.`
+        );
         continue;
       }
     }
@@ -348,7 +356,7 @@ async function main() {
     // Checked before the Start prompt, so a group that's already submitted (or was left as a draft)
     // is recognized up front instead of being offered as if it were brand new.
     const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
-    const groupHeader = `Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`;
+    const groupHeader = `${noticePrefix()}Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`;
     const existing = await resolveExistingDraft(page, group, excelRef, table1Headers, groupHeader).catch((err) => {
       console.warn(`Couldn't check for an existing draft: ${(err as Error).message} — treating as a new request.`);
       return { action: "fresh" } as const;
@@ -367,6 +375,7 @@ async function main() {
               { label: "Stop for now", value: "exit" },
             ]
           );
+    skipNotices.length = 0; // the prompt above has shown them
     if (choice === "skip") continue;
     if (choice === "exit") {
       console.log(`\nStopping early at group ${i + 1} of ${groups.length}, per your choice.`);
@@ -385,6 +394,10 @@ async function main() {
       if (err instanceof GroupSkippedMissingDataError) {
         await clearBanner(page);
         console.log(`Skipped group ${i + 1} — missing data (see above).`);
+        skipNotices.push(
+          `Group ${i + 1} (${group.child}, ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) was skipped: ${err.message} ` +
+            `Marked "${MISSING_THINGS_STATUS}" in the spreadsheet with a note.`
+        );
         continue;
       }
       const message = (err as Error).message;
@@ -405,9 +418,10 @@ async function main() {
 
   await browserContinue(
     page,
-    stoppedEarly
+    noticePrefix() +
+      (stoppedEarly
       ? "Stopped early. Everything submitted so far is already saved — just re-run \"npm start\" later to pick up the rest. Click Continue to finish."
-      : "All groups processed. Click Continue to finish. The browser stays open — re-run \"npm start\" for more rows, or click the \"All done — close browser\" button (top-left of the page) when you're fully done."
+      : "All groups processed. Click Continue to finish. The browser stays open — re-run \"npm start\" for more rows, or click the \"All done — close browser\" button (top-left of the page) when you're fully done.")
   );
   // Deliberately not closing `context`/`browser` here — this process only connected to the
   // shared browser server (browserServer.ts owns its lifecycle), it didn't launch it. Force an
