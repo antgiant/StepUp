@@ -15,7 +15,7 @@ const CDP_PORT = 9333;
 const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
 
 const TSX_BIN = path.resolve(process.cwd(), "node_modules", ".bin", "tsx");
-const BROWSER_SERVER_SCRIPT = path.resolve(process.cwd(), "src", "browserServer.ts");
+const BROWSER_SERVER_SCRIPT = path.resolve(process.cwd(), "packages", "cli", "src", "browserServer.ts");
 const BROWSER_SERVER_LOG = path.resolve(process.cwd(), "browser-server.log");
 const CONNECT_RETRY_INTERVAL_MS = 500;
 const AUTO_LAUNCH_TIMEOUT_MS = 60000;
