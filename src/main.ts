@@ -80,6 +80,7 @@ const DEFAULT_PROGRAM = "FES-UA";
 const SUBMITTED_STATUS = "Submitted";
 // Status written back when documentation turns out to be missing/wrong, so the row doesn't
 // keep coming up as ready to submit until you've actually fixed it.
+const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 const MISSING_THINGS_STATUS = "Unfiled (Missing Things)";
 
 function requireEnv(name: string): string {
@@ -316,6 +317,33 @@ async function main() {
   for (const [i, group] of groups.entries()) {
     console.log(`\n=== Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile} ===`);
     group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
+
+    // StepUp rejects a main receipt over 5 MB. Checked before anything is offered — including
+    // resuming a draft, since a draft left by a failed upload of an oversized file is exactly the
+    // case where this matters — and the rows are flagged without any prompting.
+    {
+      const receipt = folderChildren.find(
+        (c) => !c.isFolder && (c.name === group.mainReceiptFile || c.name.trim().toLowerCase() === group.mainReceiptFile.trim().toLowerCase())
+      );
+      if (receipt && receipt.size > MAX_RECEIPT_BYTES) {
+        const sizeMb = (receipt.size / (1024 * 1024)).toFixed(1);
+        const today = new Date().toISOString().slice(0, 10);
+        const note = `[${today}] Main receipt "${group.mainReceiptFile}" is ${sizeMb} MB — StepUp only accepts files under 5 MB, needs to be shrunk/compressed.`;
+        for (const row of group.rows) {
+          const existingNotes = (row.data["Notes"] ?? "").trim();
+          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
+            Notes: existingNotes ? `${existingNotes} | ${note}` : note,
+            Status: MISSING_THINGS_STATUS,
+          });
+        }
+        console.log(
+          `Skipped group ${i + 1}: "${group.mainReceiptFile}" is ${sizeMb} MB, over StepUp's 5 MB limit. ` +
+            `Marked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as "${MISSING_THINGS_STATUS}" with a note. ` +
+            `Shrink the file, set the status back to "Unfiled (Ready to Submit)" and re-run.`
+        );
+        continue;
+      }
+    }
 
     // Checked before the Start prompt, so a group that's already submitted (or was left as a draft)
     // is recognized up front instead of being offered as if it were brand new.
