@@ -12,6 +12,16 @@ Semi-automated Playwright helper for filing **FES-UA reimbursement requests** on
 - Passively accumulates the **known vendor/provider list** too (`.cache/vendor-listing-cache.json`), from the "Who did you pay?" dropdown's own API responses whenever they naturally load — local cache only for now, not yet synced into a spreadsheet table.
 - Also passively syncs `Pre-Auth` status (matched by `Pre-Auth #`) from StepUp's Pre-Authorization list API, same throttled pattern — currently dormant since no rows have a `Pre-Auth #` recorded yet. (Full Pre-Auth *submission* automation — a separate wizard from reimbursements — isn't built yet; see `todo.md`.)
 
+## Repo layout
+
+npm workspaces monorepo. Everything is still run from the repo root, so `.env`, `.cache/`, `.chrome-profile/` and `data/` stay where they were.
+
+- `packages/cli/` — the Playwright automator (everything described below). Node-only: MSAL device-code auth, disk caches, browser automation.
+- `packages/shared/` — environment-agnostic code used by both sides: the Microsoft Graph/Excel client (token supplied by the host via `setTokenProvider`), workbook table names, status constants and category parsing.
+- `packages/web/` — placeholder for the static GitHub Pages data-entry portal (not built yet).
+
+Run `npm run typecheck` to check every package.
+
 ## One-time setup
 
 ### 1. Install dependencies
@@ -86,7 +96,7 @@ You can type `skip` at the start of any group to move to the next one without pr
 Everything year-specific lives in `.env`, not code:
 
 - Update `ONEDRIVE_EXCEL_URL` and `ONEDRIVE_FILES_FOLDER_URL` to that year's workbook/folder share links.
-- Rerun `npm run discover` to confirm the table/column names still match what `src/reimbursements.ts` expects (`Table1`, `Status`, `Documentation File 1-6`, etc.) — if StepUp's site changed its field IDs or your spreadsheet's columns were renamed, `src/` would need updating too, but the links themselves never require a code change.
+- Rerun `npm run discover` to confirm the table/column names still match what `packages/cli/src/reimbursements.ts` expects (`Table1`, `Status`, `Documentation File 1-6`, etc.) — if StepUp's site changed its field IDs or your spreadsheet's columns were renamed, `packages/cli/src/` would need updating too, but the links themselves never require a code change.
 
 ## Notes on data safety
 

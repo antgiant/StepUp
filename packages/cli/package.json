@@ -1,0 +1,19 @@
+{
+  "name": "@step-up/cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@step-up/shared": "*",
+    "@azure/msal-node": "^6.0.1",
+    "dotenv": "^17.4.2",
+    "playwright": "^1.62.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12"
+  }
+}

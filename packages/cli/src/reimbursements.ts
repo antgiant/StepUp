@@ -6,14 +6,20 @@ import {
   getUsedRange,
   type DriveItemRef,
 } from "./graph/onedrive.js";
-import { scholarshipNamesMatch } from "./categorySync.js";
+import {
+  TABLE1,
+  CHILDREN_TABLE,
+  CATEGORIES_TABLE,
+  INCLUDE_PATH_TABLE,
+  WORKSHEET,
+  STATUS_UNFILED,
+  DOC_FILE_COLUMNS,
+  parseCategoryLevels,
+  scholarshipNamesMatch,
+} from "@step-up/shared";
 
-const TABLE1 = "Table1";
-const CHILDREN_TABLE = "Table2";
-const CATEGORIES_TABLE = "Table5";
-const WORKSHEET = "FES UA Tracking Spreadsheet";
-const STATUS_UNFILED = "Unfiled (Ready to Submit)";
-const DOC_FILE_COLUMNS = [1, 2, 3, 4, 5, 6].map((n) => `Documentation File ${n}`);
+export { parseCategoryLevels };
+
 const RECEIPT_KEYWORDS = ["invoice", "order", "receipt"];
 const RECEIPT_CHOICE_CACHE_FILE = path.resolve(process.cwd(), ".cache", "receipt-choice-cache.json");
 
@@ -33,19 +39,6 @@ async function saveReceiptChoiceCache(cache: Record<string, string>): Promise<vo
   await writeFile(RECEIPT_CHOICE_CACHE_FILE, JSON.stringify(cache, null, 2), "utf-8");
 }
 
-/**
- * Excel's "Category" column stores a cascading dropdown selection as one string, e.g.
- * "Bob - Smith" means: pick "Bob" in the first dropdown, then "Smith" in the second
- * dropdown that appears once "Bob" is selected (StepUp's category picker can be
- * more than two levels deep, so this splits on every " - " occurrence).
- */
-export function parseCategoryLevels(category: string): string[] {
-  return category
-    .split(" - ")
-    .map((level) => level.trim())
-    .filter((level) => level.length > 0);
-}
-
 export interface Table1Row {
   /** 0-based index within Table1 — needed for write-back via updateTableRowByIndex. */
   rowIndex: number;
@@ -56,8 +49,6 @@ export interface Table1Row {
   /** Non-blank values from Documentation File 1-6 (columns live outside Table1's own range). */
   documentationFiles: string[];
 }
-
-const INCLUDE_PATH_TABLE = "Table9";
 
 /**
  * Everything downstream (findFile() in main.ts, etc.) matches Documentation File 1-6 values

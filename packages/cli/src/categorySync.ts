@@ -32,12 +32,6 @@ function scholarshipDisplayName(code: string): string {
   return KNOWN_SCHOLARSHIP_NAMES[code.toLowerCase()] ?? code.toUpperCase();
 }
 
-/** Loosely compares a Table2-style label ("FES-UA") against a resolved display name, ignoring punctuation/case. */
-export function scholarshipNamesMatch(a: string, b: string): boolean {
-  const normalize = (s: string) => s.replace(/[^a-z0-9]/gi, "").toUpperCase();
-  return normalize(a) === normalize(b);
-}
-
 export interface CachedNode {
   name: string;
   isActive: boolean;

@@ -1,8 +1,3 @@
-import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { graphFetch, graphJson } from "./client.js";
 
 export interface DriveItemRef {
@@ -21,7 +16,8 @@ interface DriveItemResponse {
 
 /** Encodes a onedrive.com / 1drv.ms sharing URL into the Graph "shares" API token format. */
 function encodeShareUrl(shareUrl: string): string {
-  const base64 = Buffer.from(shareUrl, "utf-8").toString("base64");
+  const bytes = new TextEncoder().encode(shareUrl);
+  const base64 = btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
   const unpadded = base64.replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
   return `u!${unpadded}`;
 }
@@ -70,12 +66,9 @@ export async function listFolderChildren(ref: DriveItemRef): Promise<FolderChild
   return results;
 }
 
-/** Downloads a file item's content to destPath, creating parent directories as needed. */
-export async function downloadItem(driveId: string, itemId: string, destPath: string): Promise<void> {
-  await mkdir(path.dirname(destPath), { recursive: true });
-  const response = await graphFetch(`/drives/${driveId}/items/${itemId}/content`, { rawBody: true });
-  if (!response.body) throw new Error(`No response body when downloading item ${itemId}`);
-  await pipeline(Readable.fromWeb(response.body as any), createWriteStream(destPath));
+/** Fetches a file item's raw content; callers stream it to disk (Node) or read it as a Blob (browser). */
+export function fetchItemContent(driveId: string, itemId: string): Promise<Response> {
+  return graphFetch(`/drives/${driveId}/items/${itemId}/content`, { rawBody: true });
 }
 
 /** Finds the best filename match in a folder for a loose document description (case-insensitive substring match). */

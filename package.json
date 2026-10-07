@@ -1,29 +1,21 @@
 {
   "name": "step-up-automator",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "browser": "tsx src/browserServer.ts",
-    "discover": "tsx src/discover.ts",
-    "inspect": "tsx src/inspectPages.ts",
-    "start": "tsx src/main.ts",
-    "typecheck": "tsc --noEmit",
-    "plan": "tsx src/planReimbursements.ts"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "private": true,
   "type": "module",
-  "private": "true",
-  "dependencies": {
-    "@azure/msal-node": "^6.0.1",
-    "dotenv": "^17.4.2",
-    "playwright": "^1.62.1"
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "browser": "tsx packages/cli/src/browserServer.ts",
+    "discover": "tsx packages/cli/src/discover.ts",
+    "inspect": "tsx packages/cli/src/inspectPages.ts",
+    "start": "tsx packages/cli/src/main.ts",
+    "plan": "tsx packages/cli/src/planReimbursements.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present"
   },
+  "license": "ISC",
   "devDependencies": {
-    "@types/node": "^26.2.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }

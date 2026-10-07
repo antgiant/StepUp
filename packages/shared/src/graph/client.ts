@@ -1,6 +1,14 @@
-import { getAccessToken } from "./auth.js";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+
+export type TokenProvider = () => Promise<string>;
+
+let tokenProvider: TokenProvider | undefined;
+
+/** Each host (Node CLI via MSAL device-code, browser PWA via MSAL.js) supplies its own way of getting a Graph token. */
+export function setTokenProvider(provider: TokenProvider): void {
+  tokenProvider = provider;
+}
 
 export class GraphError extends Error {
   constructor(public status: number, public body: string, method: string, url: string) {
@@ -13,7 +21,8 @@ export async function graphFetch(
   path: string,
   init: RequestInit & { rawBody?: boolean } = {}
 ): Promise<Response> {
-  const token = await getAccessToken();
+  if (!tokenProvider) throw new Error("No Graph token provider registered — call setTokenProvider() first.");
+  const token = await tokenProvider();
   const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);

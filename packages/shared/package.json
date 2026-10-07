@@ -1,0 +1,13 @@
+{
+  "name": "@step-up/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./graph/onedrive": "./src/graph/onedrive.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
