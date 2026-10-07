@@ -18,3 +18,5 @@ export * from "./mirror/xlsx.js";
 export * from "./mirror/publish.js";
 export * from "./util/hash.js";
 export * from "./import/legacy.js";
+export * from "./util/clientId.js";
+export * from "./workspace/workspace.js";

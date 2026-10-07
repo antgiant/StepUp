@@ -40,7 +40,7 @@ export class FakeGraph {
   }
 
   private meta(n: Node) {
-    return { id: n.id, name: n.name, eTag: `"${n.id}-${n.version}"`, size: n.content.byteLength, webUrl: `https://fake/${n.id}`, ...(n.isFolder ? { folder: {} } : {}) };
+    return { id: n.id, name: n.name, eTag: `"${n.id}-${n.version}"`, size: n.content.byteLength, webUrl: `https://fake/${n.id}`, parentReference: { id: n.parent }, ...(n.isFolder ? { folder: {} } : {}) };
   }
 
   fetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
