@@ -11,6 +11,7 @@ import {
   browserInfoHtml,
   clearBanner,
   installSkipButton,
+  addSplitButton,
   startConnectionHeartbeat,
 } from "./form/browserPrompt.js";
 import {
@@ -522,7 +523,7 @@ async function runGroup(
   // A full page load (e.g. resuming via direct URL) wipes the button, so keep re-adding it.
   const keepAlive = setInterval(() => void skipButton.ensure(), 2000);
   try {
-    await runGroupSteps(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, allRows, existing, skipButton.skipped);
+    await runGroupSteps(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, allRows, existing, skipButton.skipped, skipButton.splitRequested, skipButton.requestSplit);
   } finally {
     clearInterval(keepAlive);
     await skipButton.remove();
@@ -540,7 +541,9 @@ async function runGroupSteps(
   scholarshipByChild: Map<string, string>,
   allRows: Table1Row[],
   existing: Exclude<Awaited<ReturnType<typeof resolveExistingDraft>>, { action: "done" }>,
-  skipped: Promise<void>
+  skipped: Promise<void>,
+  splitRequested: () => boolean,
+  requestSplit: () => void
 ): Promise<void> {
   const groupRowIds = group.rows.map((r) => r.data["ID"]);
   let resumedAtStep: ReimbursementStep | undefined;
@@ -672,10 +675,18 @@ async function runGroupSteps(
     await clickContinue(page);
   };
 
+  // Item/Service Selection banners also carry "Needs to be split", for a single row whose receipt
+  // StepUp wants itemized into several lines.
+  const itemSelectionBanner = async (message: string, label: string | undefined): Promise<ResyncHandle | undefined> => {
+    const handle = await bannerWithResync(message, label);
+    await addSplitButton(page, requestSplit);
+    return handle;
+  };
+
   const handleItemSelection = async (mode: StepMode): Promise<ResyncHandle | undefined> => {
     const resyncLabel = "Re-check detected items";
     if (mode === "passive") {
-      return bannerWithResync(
+      return itemSelectionBanner(
         `Back on Item/Service Selection. Fix the box(es) yourself, or let the automation re-check them for:\n${rowsSummary}`,
         resyncLabel
       );
@@ -743,7 +754,7 @@ async function runGroupSteps(
         await clickContinue(page);
         return;
       }
-      return bannerWithResync("StepUp detected no items, so there's nothing to check. Click Continue yourself in StepUp.", resyncLabel);
+      return itemSelectionBanner("StepUp detected no items, so there's nothing to check. Click Continue yourself in StepUp.", resyncLabel);
     }
 
     console.log("StepUp detected item(s) — attempting to auto-check the matching box(es)...");
@@ -754,11 +765,11 @@ async function runGroupSteps(
         await clickContinue(page);
         return;
       }
-      return bannerWithResync("All detected item(s) matched and checked. Click Continue yourself in StepUp.", resyncLabel);
+      return itemSelectionBanner("All detected item(s) matched and checked. Click Continue yourself in StepUp.", resyncLabel);
     }
     console.log("\nSome item(s) couldn't be auto-matched — check/fix the box(es) for these row(s) yourself:");
     group.rows.forEach((r) => console.log(`  ${summarizeRow(r)}`));
-    return bannerWithResync(
+    return itemSelectionBanner(
       `Some item(s) couldn't be auto-matched. Check/fix the box(es) for these row(s), then click Continue yourself in StepUp:\n${rowsSummary}`,
       resyncLabel
     );
@@ -960,6 +971,22 @@ async function runGroupSteps(
     skipRequested = true;
   });
   const skipGroupForNow = async (): Promise<never> => {
+    if (splitRequested()) {
+      const today = new Date().toISOString().slice(0, 10);
+      const note = `[${today}] Needs to be split — the receipt has multiple items, so this row must be itemized into separate rows in the spreadsheet.`;
+      for (const row of group.rows) {
+        const existingNotes = (row.data["Notes"] ?? "").trim();
+        await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
+          Notes: existingNotes ? `${existingNotes} | ${note}` : note,
+          Status: MISSING_THINGS_STATUS,
+        });
+      }
+      console.log(
+        `\nYou flagged this group as needing to be split. Marked ${group.rows.length} row(s) (ID ${groupRowIds.join(", ")}) as "${MISSING_THINGS_STATUS}" ` +
+          `with an itemization note, and skipping to the next group. Split the row in the spreadsheet, set the status back to "Unfiled (Ready to Submit)" and re-run.`
+      );
+      throw new GroupSkippedMissingDataError("Needs to be split (itemization required).");
+    }
     record.skipped = true;
     await persist();
     throw new GroupSkippedError(`Skipped group for ${group.child} at your request.`);

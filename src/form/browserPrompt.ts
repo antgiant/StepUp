@@ -479,13 +479,27 @@ let skipCounter = 0;
  */
 export async function installSkipButton(
   page: Page
-): Promise<{ skipped: Promise<void>; ensure: () => Promise<void>; remove: () => Promise<void> }> {
+): Promise<{
+  skipped: Promise<void>;
+  splitRequested: () => boolean;
+  requestSplit: () => void;
+  ensure: () => Promise<void>;
+  remove: () => Promise<void>;
+}> {
   const fnName = `__stepupSkip${skipCounter++}`;
   let resolveSkip!: () => void;
   const skipped = new Promise<void>((resolve) => {
     resolveSkip = resolve;
   });
   await page.exposeFunction(fnName, () => resolveSkip());
+  // "Needs to be split" (see addSplitButton) is a skip with a reason: it also resolves `skipped` so
+  // the existing skip checkpoints stop the group, and the caller checks splitRequested() to tell
+  // the two apart.
+  let split = false;
+  const requestSplit = () => {
+    split = true;
+    resolveSkip();
+  };
 
   const ensure = async () => {
     await page
@@ -529,7 +543,7 @@ export async function installSkipButton(
     await page.evaluate(`document.querySelectorAll("[data-stepup-skip]").forEach((el) => el.remove())`).catch(() => {});
   };
   await ensure();
-  return { skipped, ensure, remove };
+  return { skipped, splitRequested: () => split, requestSplit, ensure, remove };
 }
 
 let resyncCounter = 0;
@@ -572,6 +586,58 @@ export async function addResyncButton(page: Page, label: string): Promise<{ clic
     content.appendChild(row);
   })()`);
   return { clicked };
+}
+
+/**
+ * Adds a "Needs to be split" button to the banner that's currently showing, on the same row as the
+ * resync button when there is one (call after addResyncButton). Two clicks to confirm, like the
+ * skip button. `onSplit` fires on the confirming click.
+ */
+export async function addSplitButton(page: Page, onSplit: () => void): Promise<void> {
+  const fnName = `__stepupSplit${resyncCounter++}`;
+  await page.exposeFunction(fnName, () => onSplit());
+  await page.evaluate(`(() => {
+    const content = document.querySelector("[data-stepup-prompt] [data-stepup-content]");
+    if (!content) return;
+    const fnName = ${JSON.stringify(fnName)};
+    const idleText = "\\u2702 Needs to be split";
+    const idleColor = "#1f5f8b";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = idleText;
+    btn.style.cssText =
+      "display:inline-block !important;width:auto !important;max-width:max-content !important;" +
+      "box-sizing:border-box !important;white-space:nowrap !important;float:none !important;margin-left:8px !important;" +
+      "padding:9px 16px !important;border:none !important;border-radius:4px !important;" +
+      "background:" + idleColor + " !important;color:#fff !important;font-size:14px !important;font-weight:600 !important;cursor:pointer !important;";
+    let armedTimer = null;
+    btn.addEventListener("click", () => {
+      if (armedTimer === null) {
+        btn.textContent = "Click again to mark as needing itemization";
+        btn.style.setProperty("background", "#b3261e", "important");
+        armedTimer = setTimeout(() => {
+          armedTimer = null;
+          btn.textContent = idleText;
+          btn.style.setProperty("background", idleColor, "important");
+        }, 4000);
+        return;
+      }
+      clearTimeout(armedTimer);
+      btn.disabled = true;
+      btn.textContent = "Marking as needs split...";
+      window[fnName]();
+    });
+    const rows = content.querySelectorAll(":scope > div");
+    const last = rows.length ? rows[rows.length - 1] : null;
+    if (last && last.querySelector("button")) {
+      last.appendChild(btn);
+    } else {
+      const row = document.createElement("div");
+      row.style.cssText = "margin-top:10px;";
+      row.appendChild(btn);
+      content.appendChild(row);
+    }
+  })()`);
 }
 
 /**
