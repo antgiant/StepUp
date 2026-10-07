@@ -1,6 +1,7 @@
 import type { AdditionalDoc, DocumentRec, LedgerState, LineItem } from "../domain/types.js";
+import { canonical, hashString } from "../util/hash.js";
 import { childBudget, daysUntil } from "../rules/budget.js";
-import { displayStatus, evaluateItem, requestedCents, type RulesContext } from "../rules/readiness.js";
+import { displayStatus, effectiveDate, effectiveInvoice, effectiveVendor, evaluateItem, requestedCents, type RulesContext } from "../rules/readiness.js";
 import type { MirrorCell, MirrorColumn, MirrorSheet, MirrorWorkbook } from "./model.js";
 
 export const MAIN_SHEET = "FES UA Tracking Spreadsheet";
@@ -28,29 +29,6 @@ const STATUS_FILL: Record<string, string> = {
 const dollars = (cents: number | undefined): number | null => (cents === undefined ? null : cents / 100);
 export const shortId = (id: string): string => id.replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase();
 
-/** cyrb53: small deterministic string hash, enough to detect "state unchanged". Not cryptographic. */
-function hashString(str: string): string {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < str.length; i++) {
-    const ch = str.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0");
-}
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    const o = value as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 export function stateHash(state: LedgerState): string {
   return hashString(canonical(state));
 }
@@ -69,8 +47,8 @@ function additionalFor(state: LedgerState, item: LineItem): AdditionalDoc[] {
 export function buildMirror(state: LedgerState, ctx: RulesContext, opts: MirrorOptions): MirrorWorkbook {
   const deadline = state.settings["year"]?.submissionDeadline;
   const items = Object.values(state.items).sort((a, b) => {
-    const da = state.purchases[a.purchaseId ?? ""]?.date ?? "";
-    const db = state.purchases[b.purchaseId ?? ""]?.date ?? "";
+    const da = effectiveDate(a, state.purchases[a.purchaseId ?? ""]) ?? "";
+    const db = effectiveDate(b, state.purchases[b.purchaseId ?? ""]) ?? "";
     return da === db ? a.id.localeCompare(b.id) : da.localeCompare(db);
   });
 
@@ -121,7 +99,7 @@ export function buildMirror(state: LedgerState, ctx: RulesContext, opts: MirrorO
         { v: shortId(item.id) },
         { v: child?.name ?? "" },
         { v: item.description ?? "" },
-        { v: purchase?.vendor ?? "" },
+        { v: effectiveVendor(item, purchase) ?? "" },
         { v: status, fill: STATUS_FILL[status] },
         { v: evaluation.reasons.map((r) => r.message).join("; ") },
       ]);
@@ -132,16 +110,16 @@ export function buildMirror(state: LedgerState, ctx: RulesContext, opts: MirrorO
       { v: child?.name ?? "" },
       { v: child?.scholarship ?? "" },
       { v: item.description ?? "" },
-      { v: purchase?.date ?? null },
+      { v: effectiveDate(item, purchase) ?? null },
       { v: item.serviceDate ?? null },
-      { v: purchase?.invoiceNo ?? "" },
+      { v: effectiveInvoice(item, purchase) ?? "" },
       { v: path?.join(" - ") ?? "" },
       { v: item.quantity ?? null },
       { v: dollars(item.amountCents) },
       { v: dollars(item.taxShippingCents) },
       { v: dollars(requestedCents(item)) },
       { v: dollars(item.paidCents ?? item.approvedCents) },
-      { v: purchase?.vendor ?? "" },
+      { v: effectiveVendor(item, purchase) ?? "" },
       { v: item.serviceProvider ?? "" },
       { v: state.paymentMethods[purchase?.paymentMethodId ?? ""]?.label ?? "" },
       { v: item.benefitMessage ?? "" },

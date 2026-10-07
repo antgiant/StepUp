@@ -41,10 +41,11 @@ export interface FolderChild {
   name: string;
   isFolder: boolean;
   size: number;
+  webUrl?: string;
 }
 
 interface ChildrenResponse {
-  value: Array<{ id: string; name: string; size: number; folder?: unknown }>;
+  value: Array<{ id: string; name: string; size: number; webUrl?: string; folder?: unknown }>;
   "@odata.nextLink"?: string;
 }
 
@@ -57,10 +58,10 @@ interface ChildrenResponse {
  */
 export async function listFolderChildren(ref: DriveItemRef): Promise<FolderChild[]> {
   const results: FolderChild[] = [];
-  let url: string | undefined = `/drives/${ref.driveId}/items/${ref.itemId}/children?$select=id,name,size,folder&$top=200`;
+  let url: string | undefined = `/drives/${ref.driveId}/items/${ref.itemId}/children?$select=id,name,size,webUrl,folder&$top=200`;
   while (url) {
     const data: ChildrenResponse = await graphJson<ChildrenResponse>(url);
-    results.push(...data.value.map((c) => ({ id: c.id, name: c.name, isFolder: Boolean(c.folder), size: c.size })));
+    results.push(...data.value.map((c) => ({ id: c.id, name: c.name, isFolder: Boolean(c.folder), size: c.size, webUrl: c.webUrl })));
     url = data["@odata.nextLink"];
   }
   return results;

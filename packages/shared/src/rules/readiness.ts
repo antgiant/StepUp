@@ -37,7 +37,8 @@ export type ReasonCode =
   | "receipt-also-additional"
   | "receipt-too-large"
   | "awaiting-proof"
-  | "items-exceed-receipt-total";
+  | "items-exceed-receipt-total"
+  | "on-hold";
 
 export interface Reason {
   code: ReasonCode;
@@ -50,6 +51,10 @@ export interface Evaluation {
   readiness: Readiness;
   reasons: Reason[];
 }
+
+export const effectiveDate = (item: LineItem, purchase?: Purchase) => item.date ?? purchase?.date;
+export const effectiveInvoice = (item: LineItem, purchase?: Purchase) => item.invoiceNo ?? purchase?.invoiceNo;
+export const effectiveVendor = (item: LineItem, purchase?: Purchase) => item.vendor ?? purchase?.vendor;
 
 export function requestedCents(item: LineItem): number {
   return (item.amountCents ?? 0) + (item.taxShippingCents ?? 0);
@@ -87,19 +92,26 @@ export function evaluateItem(state: LedgerState, itemId: string, ctx: RulesConte
       add("unknown-category", "Category is unknown or no longer active");
     } else {
       const scholarship = item.childId ? state.children[item.childId]?.scholarship : undefined;
-      if (scholarship && !cat.eligibleScholarships.some((s) => norm(s) === norm(scholarship))) {
+      // An empty eligibility list means "not known yet" (it fills in gradually from StepUp), so it is never flagged.
+      if (scholarship && cat.eligibleScholarships.length > 0 && !cat.eligibleScholarships.some((s) => norm(s) === norm(scholarship))) {
         add("category-ineligible", `Category is not eligible for ${scholarship}`);
       }
       if (cat.requiresServiceDate && !item.serviceDate) add("missing-service-date", "This category needs a Service Date");
     }
   }
 
+  // A "missing Service Date" hold clears itself once the date is filled in; other holds stay until removed.
+  if (item.hold && !(item.hold === "missing-service-date" && item.serviceDate)) {
+    add("on-hold", item.holdNote?.trim() || `On hold: ${item.hold}`);
+  }
+
   const purchase = item.purchaseId ? state.purchases[item.purchaseId] : undefined;
   if (!purchase) {
     add("missing-purchase", "Attach this item to a purchase");
   } else {
-    if (!purchase.vendor?.trim()) add("missing-vendor", "Add the vendor");
-    if (!purchase.date) add("missing-purchase-date", "Add the purchase date");
+    // StepUp wants a vendor or a provider for an item, never both: either one satisfies this.
+    if (!effectiveVendor(item, purchase)?.trim() && !item.serviceProvider?.trim()) add("missing-vendor", "Add the vendor or service provider");
+    if (!effectiveDate(item, purchase)) add("missing-purchase-date", "Add the purchase date");
 
     const receiptId = purchase.receiptDocumentId;
     const receipt = receiptId ? state.documents[receiptId] : undefined;

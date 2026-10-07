@@ -16,3 +16,5 @@ export * from "./mirror/model.js";
 export * from "./mirror/build.js";
 export * from "./mirror/xlsx.js";
 export * from "./mirror/publish.js";
+export * from "./util/hash.js";
+export * from "./import/legacy.js";

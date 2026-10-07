@@ -46,6 +46,10 @@ export interface LineItem {
   id: string;
   purchaseId?: string;
   childId?: string;
+  /** Overrides of the purchase's date/invoice/vendor: StepUp takes these per item, and one receipt can cover items with different values. */
+  date?: string;
+  invoiceNo?: string;
+  vendor?: string;
   serviceDate?: string;
   serviceProvider?: string;
   description?: string;
@@ -65,6 +69,9 @@ export interface LineItem {
   stepUpStatus?: string;
   approvedCents?: number;
   paidCents?: number;
+  /** Set by a person or by the submission flow when something outside the data blocks filing (e.g. "needs-split"). Cleared by removing it. */
+  hold?: string;
+  holdNote?: string;
   /** Human override with a reason; wins over every derived status. */
   statusOverride?: string;
   notes?: string;
