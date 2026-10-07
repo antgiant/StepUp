@@ -12,11 +12,14 @@
     "inspect": "tsx packages/cli/src/inspectPages.ts",
     "start": "tsx packages/cli/src/main.ts",
     "plan": "tsx packages/cli/src/planReimbursements.ts",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run"
   },
   "license": "ISC",
   "devDependencies": {
+    "fast-check": "^4.10.2",
     "tsx": "^4.23.12",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   }
 }
