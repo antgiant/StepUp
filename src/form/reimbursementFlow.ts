@@ -398,6 +398,13 @@ async function waitForVendorFieldType(page: Page, index: number, timeoutMs = 100
   return lastType;
 }
 
+/** Thrown when an item's category requires a Service Date but the spreadsheet row has none. */
+export class MissingServiceDateError extends Error {
+  constructor(public readonly row: Table1Row) {
+    super(`Row ID ${row.data["ID"]} ("${row.data["Item"]}") needs a Service Date for its category, but the spreadsheet has none.`);
+  }
+}
+
 /**
  * Fills in one already-matched item block's fields: Category/Type/Description, Benefit Message,
  * Item/Service URL, Vendor or Provider (whichever this category settles on), Service Date,
@@ -440,20 +447,27 @@ async function fillBlockFields(
     const providerName = row.data["Service Provider"] || row.data["Vendor"];
     if (providerName) await selectVendorOrProvider(page, providerName, index);
   }
-  if (row.data["Service Date"]) {
-    // Scoped to this item block by its own "Service Date" label (like "Who did you pay?"), falling
-    // back to #serviceDate — the old unscoped .last() hit the wrong block's field when several
-    // items were on the page, and a missed field was skipped without a word.
-    const byLabel = page.locator(`#collapseOne____item_${index + 1} .reimbursement-item-field:has-text("Service Date") input`);
-    const byId = page.locator(SERVICE_DATE);
-    const deadline = Date.now() + 8000;
-    while ((await byLabel.count()) === 0 && (await byId.count()) === 0 && Date.now() < deadline) {
-      await page.waitForTimeout(300);
-    }
-    const field = (await byLabel.count()) > 0 ? byLabel.first() : (await byId.count()) > index ? byId.nth(index) : byId.last();
-    if ((await byLabel.count()) === 0 && (await byId.count()) === 0) {
+  // Scoped to this item block by its own "Service Date" label (like "Who did you pay?"), falling
+  // back to #serviceDate — the old unscoped .last() hit the wrong block's field when several
+  // items were on the page, and a missed field was skipped without a word.
+  const byLabel = page.locator(`#collapseOne____item_${index + 1} .reimbursement-item-field:has-text("Service Date") input`);
+  const byId = page.locator(SERVICE_DATE);
+  const hasServiceDate = row.data["Service Date"]?.trim();
+  // The category (and so whether the field exists) has already settled by now via the vendor/provider
+  // wait above, so a row with no date only needs a short look to learn the field isn't required.
+  const deadline = Date.now() + (hasServiceDate ? 8000 : 1500);
+  while ((await byLabel.count()) === 0 && (await byId.count()) === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(300);
+  }
+  const fieldPresent = (await byLabel.count()) > 0 || (await byId.count()) > 0;
+  if (fieldPresent && !hasServiceDate) {
+    throw new MissingServiceDateError(row);
+  }
+  if (hasServiceDate) {
+    if (!fieldPresent) {
       console.log(`  Service Date: Excel has "${row.data["Service Date"]}" but no Service Date field appeared — fill it in manually.`);
     } else {
+      const field = (await byLabel.count()) > 0 ? byLabel.first() : (await byId.count()) > index ? byId.nth(index) : byId.last();
       await overwriteDateIfDifferent(field, row.data["Service Date"], "Service Date");
     }
   }

@@ -21,6 +21,7 @@ import {
   detectStep,
   ensureOnNewReimbursementForm,
   fillItemDetails,
+  MissingServiceDateError,
   scrollToFirstItem,
   formatMoney,
   parseExcelDate,
@@ -352,6 +353,11 @@ async function main() {
         console.log(`\nSkipped group ${i + 1} for now — its StepUp draft is kept; fix the data and re-run to resume it.`);
         continue;
       }
+      if (err instanceof GroupSkippedMissingDataError) {
+        await clearBanner(page);
+        console.log(`Skipped group ${i + 1} — missing data (see above).`);
+        continue;
+      }
       const message = (err as Error).message;
       console.error(`\nGroup ${i + 1} failed: ${message}`);
       console.error("Skipping to the next group rather than aborting the whole run.");
@@ -491,6 +497,8 @@ async function resolveExistingDraft(
 
 /** Thrown when you press "Skip this group for now" — not a failure, so main() moves on without the error banner. */
 class GroupSkippedError extends Error {}
+/** Thrown after the group's rows were marked "Missing Things" in the spreadsheet — already reported on the console, so main() moves on without the blocking error banner. */
+class GroupSkippedMissingDataError extends Error {}
 
 /**
  * Runs one group with a persistent "Skip this group for now" button on the page throughout, for
@@ -765,7 +773,26 @@ async function runGroupSteps(
     if (mode === "passive") {
       return bannerWithResync("Back on Item/Service Details. Edit as needed, or let the automation fill the fields from the spreadsheet.", resyncLabel);
     }
-    const result = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows, categoryFixHooks);
+    let result: Awaited<ReturnType<typeof fillItemDetails>>;
+    try {
+      result = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows, categoryFixHooks);
+    } catch (err) {
+      if (!(err instanceof MissingServiceDateError)) throw err;
+      const today = new Date().toISOString().slice(0, 10);
+      const note = `[${today}] Missing Service Date — required for this category (found on ID ${err.row.data["ID"]}), needs filling in spreadsheet.`;
+      for (const row of group.rows) {
+        const existingNotes = (row.data["Notes"] ?? "").trim();
+        await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
+          Notes: existingNotes ? `${existingNotes} | ${note}` : note,
+          Status: MISSING_THINGS_STATUS,
+        });
+      }
+      console.log(
+        `\n${err.message}\nMarked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as "${MISSING_THINGS_STATUS}" ` +
+          `with a note, and skipping to the next group. Fill in the Service Date, set the status back to "Unfiled (Ready to Submit)" and re-run.`
+      );
+      throw new GroupSkippedMissingDataError(err.message);
+    }
     matchedRows = result.matchedRows;
     await persist();
     reviewHtml =
