@@ -8,7 +8,8 @@ export type EntityKind =
   | "document"
   | "additionalDoc"
   | "submission"
-  | "setting";
+  | "setting"
+  | "category";
 
 export interface Child {
   id: string;
@@ -132,6 +133,19 @@ export interface YearSettings {
   mirror?: boolean;
 }
 
+/**
+ * A year's correction to the shared category tree (plan §3.8 overlay). Keyed by StepUp's category id to change an
+ * existing entry, or by a new `user-cat-…` id to add one. Only the fields present override the baseline.
+ */
+export interface CategoryEdit {
+  id: string;
+  parentId?: string;
+  name?: string;
+  isActive?: boolean;
+  eligibleScholarships?: string[];
+  requiresServiceDate?: boolean;
+}
+
 export interface LedgerState {
   children: Record<string, Child>;
   paymentMethods: Record<string, PaymentMethod>;
@@ -141,4 +155,5 @@ export interface LedgerState {
   additionalDocs: Record<string, AdditionalDoc>;
   submissions: Record<string, Submission>;
   settings: Record<string, YearSettings>;
+  categories: Record<string, CategoryEdit>;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import committed from "../../web/public/reference/categories.json";
-import { categoryIdForPath, referenceHash, resolveReference, validateCategoryReference, type CategoryReference, type ReferenceNode } from "../src/index.js";
+import { HlcClock, Ledger, MemoryBackend, MemoryEventStore, addOrFixCategory, categoryIdForPath, exportCategoryEdits, promoteEdits, referenceHash, resolveReference, validateCategoryReference, type CategoryReference, type ReferenceNode } from "../src/index.js";
 
 const node = (id: string, name: string, extra: Partial<ReferenceNode> = {}): ReferenceNode => ({ id, name, isActive: true, eligibleScholarships: [], requiresServiceDate: false, ...extra });
 const file = (categories: ReferenceNode[]): CategoryReference => ({ schemaVersion: 1, version: 1, hash: referenceHash(categories), categories });
@@ -42,5 +42,42 @@ describe("category reference", () => {
     const r = resolveReference(file(tree));
     expect(categoryIdForPath(["Curriculum", "Books"])).toBe("legacy-cat-curriculum-books");
     expect(r.category("legacy-cat-curriculum-books")?.id).toBe("t1");
+  });
+});
+
+describe("category edits (year overlay)", () => {
+  const base = file(tree);
+  const ledger = () => new Ledger(new MemoryEventStore(new MemoryBackend(), "dev"), new HlcClock("dev"), "t");
+
+  it("an edit changes only the fields it sets, and can mark an existing entry as needing a Service Date", () => {
+    const r = resolveReference(base, { t1: { id: "t1", requiresServiceDate: true } });
+    expect(r.category("t1")).toMatchObject({ path: ["Curriculum", "Books"], requiresServiceDate: true, eligibleScholarships: ["FES-UA"] });
+    expect(r.category("c2")?.requiresServiceDate).toBe(true); // untouched
+  });
+
+  it("a requiring parent makes every child require it", () => {
+    const r = resolveReference(base, { c1: { id: "c1", requiresServiceDate: true } });
+    expect(r.category("t1")?.requiresServiceDate).toBe(true);
+  });
+
+  it("adds missing levels under existing ones, reusing what is there, and the picker offers them", () => {
+    const l = ledger();
+    const leaf = addOrFixCategory(l, resolveReference(base), ["Curriculum", "Workbooks", "Math"], true);
+    const r = resolveReference(base, l.state.categories);
+    expect(r.category(leaf)).toMatchObject({ path: ["Curriculum", "Workbooks", "Math"], requiresServiceDate: true, isActive: true });
+    expect(r.choices.map((c) => c.label)).toContain("Curriculum - Workbooks - Math");
+    expect(Object.keys(l.state.categories)).toHaveLength(2); // Curriculum reused: only Workbooks and Math are new
+    expect(addOrFixCategory(l, r, ["Curriculum", "Workbooks", "Math"], false)).toBe(leaf); // idempotent
+    expect(Object.keys(l.state.categories)).toHaveLength(2);
+  });
+
+  it("exports only allow-listed fields and a maintainer can promote them into the baseline", () => {
+    const l = ledger();
+    addOrFixCategory(l, resolveReference(base), ["Curriculum", "Workbooks"], true);
+    const out = exportCategoryEdits(l.state.categories);
+    expect(JSON.stringify(out)).not.toMatch(/source|actor|clientId/);
+    const merged = promoteEdits(base.categories, out);
+    expect(resolveReference({ ...base, categories: merged }).category(out.edits[0]!.id)?.path).toEqual(["Curriculum", "Workbooks"]);
+    expect(() => promoteEdits(base.categories, { schemaVersion: 1, kind: "category-edits", edits: [{ id: "x", secret: 1 }] })).toThrow(/Unknown field/);
   });
 });

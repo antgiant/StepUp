@@ -32,6 +32,10 @@ import {
   toCents,
   type EventStore,
   type ResolvedReference,
+  type CategoryReference,
+  addOrFixCategory,
+  exportCategoryEdits,
+  resolveReference,
   type MapTarget,
   type RulesContext,
 } from "@step-up/shared/web";
@@ -39,7 +43,7 @@ import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, readCache, writeCache } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { loadReference } from "./reference.js";
+import { loadBaseline as loadReference } from "./reference.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
 
@@ -68,15 +72,26 @@ let pendingYear: Pointer | undefined;
 let sharing = false;
 
 /** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
-let reference: ResolvedReference | undefined;
+let referenceBase: CategoryReference | undefined;
+let resolved: { state: object; ref: ResolvedReference } | undefined;
+/** Baseline tree plus this year's edits; recomputed only when the ledger state changes. */
+function reference(): ResolvedReference | undefined {
+  if (!referenceBase) return undefined;
+  const state = ledger.state;
+  if (resolved?.state !== state) resolved = { state, ref: resolveReference(referenceBase, state.categories) };
+  return resolved.ref;
+}
 const anyCategory = (id: string) => ({ id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true });
 const ctx = (): RulesContext => ({
   today: new Date().toISOString().slice(0, 10),
   // Ids from older imports ("legacy-cat-…") that the tree does not know stay accepted, as the importer always allowed them.
-  category: (id) => (reference ? reference.category(id) ?? (id.startsWith("legacy-cat-") ? anyCategory(id) : undefined) : anyCategory(id)),
+  category: (id) => {
+    const ref = reference();
+    return ref ? ref.category(id) ?? (id.startsWith("legacy-cat-") ? anyCategory(id) : undefined) : anyCategory(id);
+  },
 });
 const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
-  (i.categoryId && reference?.category(i.categoryId)?.path.join(" - ")) || i.categoryPath?.join(" - ") || i.categoryId || "";
+  (i.categoryId && reference()?.category(i.categoryId)?.path.join(" - ")) || i.categoryPath?.join(" - ") || i.categoryId || "";
 
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
@@ -297,6 +312,7 @@ function header(): string {
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
+        ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
       </div></details></nav></header>
     ${connectionBar()}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
@@ -363,8 +379,8 @@ function purchaseView(id: string, draft = false): string {
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
     <button>Save receipt details</button></form>`;
   }
-  const categories = reference
-    ? reference.choices.map((c) => c.label)
+  const categories = reference()
+    ? reference()!.choices.map((c) => c.label)
     : [...new Set(Object.values(state.items).map((i) => categoryLabel(i)).filter(Boolean))];
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
@@ -386,17 +402,21 @@ function purchaseView(id: string, draft = false): string {
     <label>Child<select name="childId" required>${children.map((c) => `<option value="${esc(c.id)}"${c.id === next.childId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
     <label>Description<input name="description" required></label>
     <label>Amount<input name="amount" inputmode="decimal" required value="${money(next.amountCents)}"></label>
-    <label>Category<input name="categoryId" list="cats" required${reference ? ` placeholder="Start typing to search"` : ""}></label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <label>Category<input name="categoryId" list="cats" required${reference() ? ` placeholder="Start typing to search"` : ""}></label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
     <label>Benefit message<input name="benefitMessage" required></label>
     <label>Service date<input name="serviceDate" type="date"></label>
     <label>Service provider<input name="serviceProvider" value="${esc(next.serviceProvider)}"></label>
-    <button>Save and add another</button></form>`;
+    <button>Save and add another</button></form>
+  ${reference() ? `<details><summary>Category missing, or needs a Service Date?</summary>
+    <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
+      <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
+    <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}`;
 }
 
 /** A picked/typed label becomes the StepUp category id (and its path); anything else is kept as typed and flagged as unknown. */
 function categoryFields(text: string): { categoryId: string; categoryPath?: string[] } {
-  const id = reference?.idForLabel(text);
-  const info = id ? reference?.category(id) : undefined;
+  const id = reference()?.idForLabel(text);
+  const info = id ? reference()?.category(id) : undefined;
   return id && info ? { categoryId: id, categoryPath: info.path } : { categoryId: text };
 }
 
@@ -500,6 +520,12 @@ root.addEventListener("click", async (ev) => {
       a.click();
       URL.revokeObjectURL(url);
     }, "Preparing export…");
+  } else if (t.id === "export-categories") {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(exportCategoryEdits(ledger.state.categories), null, 1)], { type: "application/json" }));
+    Object.assign(document.createElement("a"), { href: url, download: "category-edits.json" }).click();
+    URL.revokeObjectURL(url);
+    status = "Saved category-edits.json. Send it to the maintainers (or open an issue on the project) so everyone gets these fixes.";
+    render();
   } else if (t.id === "new-purchase") {
     go({ name: "purchase", id: newId("purchase"), draft: true });
   } else if (d["open"]) go({ name: "purchase", id: d["open"] });
@@ -571,7 +597,14 @@ root.addEventListener("submit", async (ev) => {
     }, "Setting up the school year…");
     return;
   }
-  if (form.id === "add-child") {
+  if (form.id === "category-form") {
+    const ref = reference();
+    if (ref) {
+      const needs = (form.elements.namedItem("needsDate") as HTMLInputElement).checked;
+      addOrFixCategory(ledger, ref, val(form, "path").split(" - "), needs);
+      status = "Category saved for this year.";
+    }
+  } else if (form.id === "add-child") {
     ledger.set("child", newId("child"), { name: val(form, "name"), ...(val(form, "scholarship") ? { scholarship: val(form, "scholarship") } : {}) }, { label: "child.created" });
   } else if (form.id === "purchase-form") {
     const fields: Record<string, string | number> = {};
@@ -659,6 +692,6 @@ await guarded(async () => {
 }, "Connecting to OneDrive…");
 if (workspace?.fromCache) void refreshInBackground(workspace);
 void loadReference().then((r) => {
-  reference = r;
+  referenceBase = r;
   if (r && !typing()) render();
 });

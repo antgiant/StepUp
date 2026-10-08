@@ -46,6 +46,7 @@ function state(): LedgerState {
     additionalDocs: { a1: { id: "a1", ownerKind: "purchase", ownerId: "p1", documentId: "d3", kind: "payment-proof" } },
     submissions: { s1: { id: "s1", reimbursementId: "R-100", purchaseId: "p1", childId: "c1", submittedAt: "2026-09-10" } },
     settings: { year: { id: "year", year: "2026-2027", submissionDeadline: "2027-06-30" } },
+    categories: {},
   };
 }
 

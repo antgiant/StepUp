@@ -23,3 +23,5 @@ Events are stored in this browser's localStorage; Import/Export events moves a l
 **Receipts:** once a folder is open, **Add receipt files** and **Take a photo** upload into the year folder and add the files to the list (identical files are skipped, name clashes get "(2)", big photos are shrunk). **Preview** shows a receipt from OneDrive (images and PDFs) without leaving the page.
 
 **Categories:** the picker and the readiness rules use the published StepUp category tree (`public/reference/categories.json`, built by `npm run reference:build` from the CLI's category cache and checked by `npm run reference:validate` and a test). If it cannot load, every category is accepted.
+
+**Category fixes:** a missing category, or one that needs a Service Date, is recorded for the year in the ledger (item page -> *Category missing, or needs a Service Date?*). *Advanced -> Share category fixes* downloads them as `category-edits.json`; a maintainer merges that with `npm run reference:promote -- category-edits.json`. Everything under "Testing and Assessments" requires a Service Date by default.

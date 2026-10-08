@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "version": 1,
- "hash": "18f25ee7273bd7",
+ "version": 2,
+ "hash": "0f488c37dc809a",
  "categories": [
   {
    "id": "00626ac9-ef34-408d-8693-4d5251ac906a",
@@ -294,7 +294,7 @@
     "FTC",
     "FTCPEP"
    ],
-   "requiresServiceDate": false
+   "requiresServiceDate": true
   },
   {
    "id": "434eb44f-6028-4530-a1f3-caefffdde4e6",

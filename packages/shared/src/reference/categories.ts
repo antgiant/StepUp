@@ -1,3 +1,5 @@
+import type { CategoryEdit } from "../domain/types.js";
+import type { Ledger } from "../events/ledger.js";
 import type { CategoryInfo } from "../rules/readiness.js";
 import { canonical, hashString } from "../util/hash.js";
 
@@ -96,11 +98,30 @@ export interface ResolvedReference {
   idForLabel(label: string): string | undefined;
 }
 
-/** The effective view of the reference data. (Per-year overlay operations will be folded in here too.) */
-export function resolveReference(ref: CategoryReference): ResolvedReference {
-  const byId = new Map(ref.categories.map((n) => [n.id, n]));
+/** Baseline entries with the year's edits applied: edited fields win, and an edit with a new id and a name adds an entry. */
+export function applyEdits(base: ReferenceNode[], edits: Record<string, CategoryEdit> = {}): ReferenceNode[] {
+  const out = new Map(base.map((n) => [n.id, n]));
+  for (const e of Object.values(edits)) {
+    const old = out.get(e.id);
+    if (!old && !e.name?.trim()) continue; // an edit of something we do not know and cannot name: ignore
+    out.set(e.id, {
+      id: e.id,
+      ...((e.parentId ?? old?.parentId) !== undefined ? { parentId: e.parentId ?? old!.parentId! } : {}),
+      name: e.name?.trim() || old!.name,
+      isActive: e.isActive ?? old?.isActive ?? true,
+      eligibleScholarships: e.eligibleScholarships ?? old?.eligibleScholarships ?? [],
+      requiresServiceDate: e.requiresServiceDate ?? old?.requiresServiceDate ?? false,
+    });
+  }
+  return [...out.values()];
+}
+
+/** The effective view: the baseline tree plus this year's edits (`ledger.state.categories`). */
+export function resolveReference(ref: CategoryReference, edits?: Record<string, CategoryEdit>): ResolvedReference {
+  const nodes = applyEdits(ref.categories, edits);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
   const children = new Map<string, ReferenceNode[]>();
-  for (const n of ref.categories) if (n.parentId) children.set(n.parentId, [...(children.get(n.parentId) ?? []), n]);
+  for (const n of nodes) if (n.parentId) children.set(n.parentId, [...(children.get(n.parentId) ?? []), n]);
 
   const chain = (n: ReferenceNode): ReferenceNode[] => {
     const out: ReferenceNode[] = [];
@@ -122,7 +143,7 @@ export function resolveReference(ref: CategoryReference): ResolvedReference {
   const infos = new Map<string, CategoryInfo>();
   const labels = new Map<string, string>();
   const choices: CategoryChoice[] = [];
-  for (const n of ref.categories) {
+  for (const n of nodes) {
     const info = infoOf(n);
     infos.set(n.id, info);
     infos.set(categoryIdForPath(info.path), info);
@@ -132,4 +153,55 @@ export function resolveReference(ref: CategoryReference): ResolvedReference {
   }
   choices.sort((a, b) => a.label.localeCompare(b.label));
   return { category: (id) => infos.get(id), choices, idForLabel: (label) => labels.get(label.trim().toLowerCase()) };
+}
+
+/**
+ * Records, in this year's ledger, that a category exists / needs a Service Date. Levels that already exist are reused;
+ * missing ones are added under the previous level with a `user-cat-…` id. Returns the leaf's id. Re-resolve afterwards.
+ */
+export function addOrFixCategory(ledger: Ledger, current: ResolvedReference, path: string[], requiresServiceDate: boolean): string {
+  const levels = path.map((l) => l.trim()).filter(Boolean);
+  if (levels.length === 0) throw new Error("Enter the category, e.g. Testing and Assessments - Other");
+  let parent: string | undefined;
+  for (const [i, name] of levels.entries()) {
+    const label = levels.slice(0, i + 1).join(" - ");
+    let id = current.idForLabel(label);
+    if (!id) {
+      id = `user-cat-${hashString(label.toLowerCase())}`;
+      ledger.set("category", id, { name, isActive: true, ...(parent ? { parentId: parent } : {}) }, { label: "category.added" });
+    }
+    parent = id;
+  }
+  ledger.set("category", parent!, { requiresServiceDate }, { label: "category.serviceDateSet" });
+  return parent!;
+}
+
+/** The year's edits as a minimal, schema-checked file anyone can send to the maintainers ("share with everyone"). Contains no private data. */
+export function exportCategoryEdits(edits: Record<string, CategoryEdit>): { schemaVersion: number; kind: "category-edits"; edits: CategoryEdit[] } {
+  const allowed = (e: CategoryEdit): CategoryEdit => ({
+    id: e.id,
+    ...(e.parentId !== undefined ? { parentId: e.parentId } : {}),
+    ...(e.name !== undefined ? { name: e.name } : {}),
+    ...(e.isActive !== undefined ? { isActive: e.isActive } : {}),
+    ...(e.eligibleScholarships !== undefined ? { eligibleScholarships: e.eligibleScholarships } : {}),
+    ...(e.requiresServiceDate !== undefined ? { requiresServiceDate: e.requiresServiceDate } : {}),
+  });
+  return { schemaVersion: REFERENCE_SCHEMA_VERSION, kind: "category-edits", edits: Object.values(edits).map(allowed).sort((a, b) => a.id.localeCompare(b.id)) };
+}
+
+/** Folds an exported edits file into baseline entries (maintainer path: `npm run reference:promote`). Throws on a malformed file. */
+export function promoteEdits(base: ReferenceNode[], file: unknown): ReferenceNode[] {
+  const f = file as { schemaVersion?: unknown; kind?: unknown; edits?: unknown };
+  if (!f || f.schemaVersion !== REFERENCE_SCHEMA_VERSION || f.kind !== "category-edits" || !Array.isArray(f.edits)) throw new Error("Not a category-edits file");
+  const allowed = new Set(["id", "parentId", "name", "isActive", "eligibleScholarships", "requiresServiceDate"]);
+  const edits: Record<string, CategoryEdit> = {};
+  for (const raw of f.edits as Array<Record<string, unknown>>) {
+    for (const k of Object.keys(raw)) if (!allowed.has(k)) throw new Error(`Unknown field "${k}" in an edit`);
+    if (typeof raw["id"] !== "string") throw new Error("An edit has no id");
+    edits[raw["id"]] = raw as unknown as CategoryEdit;
+  }
+  const merged = applyEdits(base, edits).sort((a, b) => a.id.localeCompare(b.id));
+  const problems = validateCategoryReference({ schemaVersion: REFERENCE_SCHEMA_VERSION, version: 1, hash: referenceHash(merged), categories: merged });
+  if (problems.length) throw new Error(`Edits would make the tree invalid:\n${problems.join("\n")}`);
+  return merged;
 }

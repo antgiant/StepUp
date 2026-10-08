@@ -29,6 +29,7 @@ function state(): LedgerState {
     additionalDocs: { a1: { id: "a1", ownerKind: "purchase", ownerId: "p1", documentId: "d2", kind: "other" } },
     submissions: {},
     settings: { year: { id: "year", submissionDeadline: "2027-06-30" } },
+    categories: {},
   };
 }
 
