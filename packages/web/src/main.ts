@@ -70,12 +70,32 @@ type View = { name: "queue" } | { name: "purchase"; id: string };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
+/** Spinner shown while we wait on OneDrive. Lives outside #app so re-rendering never removes it. */
+const busyEl = Object.assign(document.createElement("div"), { className: "busy", hidden: true, role: "status" });
+busyEl.setAttribute("aria-live", "polite");
+document.body.append(busyEl);
+let pending = 0;
+function showBusy(label: string): void {
+  pending++;
+  busyEl.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(label)}</span>`;
+  busyEl.hidden = false;
+  document.body.setAttribute("aria-busy", "true");
+}
+function hideBusy(): void {
+  pending = Math.max(0, pending - 1);
+  if (pending === 0) {
+    busyEl.hidden = true;
+    document.body.removeAttribute("aria-busy");
+  }
+}
+
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const val = (form: HTMLFormElement, name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value.trim() ?? "";
 
 /** Runs an action that may hit the network; shows the error instead of leaving the page half-updated. */
-async function guarded(action: () => Promise<void>): Promise<void> {
+async function guarded(action: () => Promise<void>, label = "Waiting for OneDrive…"): Promise<void> {
   status = "";
+  showBusy(label);
   try {
     await action();
   } catch (err) {
@@ -91,12 +111,14 @@ async function guarded(action: () => Promise<void>): Promise<void> {
     } else {
       status = err instanceof Error ? err.message : String(err);
     }
+  } finally {
+    hideBusy();
   }
   render();
 }
 
 async function save(): Promise<void> {
-  await guarded(() => ledger.flush());
+  await guarded(() => ledger.flush(), "Saving to OneDrive…");
 }
 
 function attach(next: OpenWorkspace | undefined): void {
@@ -114,7 +136,7 @@ function connectionBar(): string {
   if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    <button id="check-files">Check for new files</button> <button id="share">Share</button> <button id="disconnect">Disconnect</button> <button id="sign-out">Sign out</button></p>`;
+    <button id="check-files">Check for new files</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
 }
 
 function shareForm(): string {
@@ -132,8 +154,13 @@ function shareForm(): string {
 function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue">Step Up Helper</a></h1>
-    <nav><label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
-    <button id="export">Export events</button>${unsaved ? `<span class="warn">${unsaved} unsaved</span>` : ""}</nav></header>
+    <nav>${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}
+    <details class="menu"><summary class="btn">Advanced</summary>
+      <div class="menu-panel">
+        <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
+        <button id="export">Export events</button>
+        ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
+      </div></details></nav></header>
     ${connectionBar()}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
 }
 
@@ -263,6 +290,7 @@ function go(next: View): void {
 root.addEventListener("click", async (ev) => {
   const t = (ev.target as HTMLElement).closest<HTMLElement>("button, a");
   if (!t) return;
+  if (!t.closest(".menu")) root.querySelector<HTMLDetailsElement>("details.menu")?.removeAttribute("open");
   const d = t.dataset;
   if (d["go"]) { ev.preventDefault(); go({ name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
@@ -274,7 +302,16 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") await signIn();
   else if (t.id === "sign-out") { forgetLocalPointer(); await signOut(); }
-  else if (t.id === "disconnect") { await savePointer(undefined); workspace = undefined; activeStore = store; ledger = new Ledger(store, new HlcClock(store.clientId), "web"); await ledger.refresh(); await guarded(pickerTop); }
+  else if (t.id === "disconnect") {
+    await guarded(async () => {
+      await savePointer(undefined);
+      workspace = undefined;
+      activeStore = store;
+      ledger = new Ledger(store, new HlcClock(store.clientId), "web");
+      await ledger.refresh();
+      await pickerTop();
+    }, "Disconnecting…");
+  }
   else if (t.id === "share") { sharing = !sharing; render(); }
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
@@ -282,24 +319,26 @@ root.addEventListener("click", async (ev) => {
       registerLooseFiles(ledger, plan.toRegister);
       await ledger.flush();
       status = plan.toRegister.length ? `Registered ${plan.toRegister.length} new file(s).` : "No new files.";
-    });
+    }, "Checking OneDrive for new files…");
   }
   else if (t.id === "export") {
-    await ledger.flush();
-    const url = URL.createObjectURL(new Blob([exportJsonl(await activeStore.readAll())], { type: "text/plain" }));
-    const a = Object.assign(document.createElement("a"), { href: url, download: "events.jsonl" });
-    a.click();
-    URL.revokeObjectURL(url);
+    await guarded(async () => {
+      await ledger.flush();
+      const url = URL.createObjectURL(new Blob([exportJsonl(await activeStore.readAll())], { type: "text/plain" }));
+      const a = Object.assign(document.createElement("a"), { href: url, download: "events.jsonl" });
+      a.click();
+      URL.revokeObjectURL(url);
+    }, "Preparing export…");
   } else if (t.id === "new-purchase") {
     const id = createPurchase(ledger);
-    await ledger.flush();
+    await guarded(() => ledger.flush(), "Saving to OneDrive…");
     go({ name: "purchase", id });
   } else if (d["open"]) go({ name: "purchase", id: d["open"] });
   else if (d["start"]) {
     const doc = ledger.state.documents[d["start"]];
     const hints = fileNameHints(doc?.filename ?? "");
     const id = startPurchaseFromDocument(ledger, d["start"], { vendor: hints.vendor, date: hints.date });
-    await ledger.flush();
+    await guarded(() => ledger.flush(), "Saving to OneDrive…");
     go({ name: "purchase", id });
   } else if (d["attach"]) {
     const target: MapTarget = { kind: d["kind"] as "purchase" | "item", id: d["target"]! };
@@ -381,10 +420,11 @@ root.addEventListener("change", async (ev) => {
     return;
   }
   if (input.id !== "import" || !input.files?.[0]) return;
-  const events = parseJsonl(await input.files[0].text());
-  await activeStore.appendOwn(events);
-  await ledger.refresh();
-  render();
+  const file = input.files[0];
+  await guarded(async () => {
+    await activeStore.appendOwn(parseJsonl(await file.text()));
+    await ledger.refresh();
+  }, "Importing events…");
 });
 
 await ledger.refresh();
@@ -408,4 +448,4 @@ await guarded(async () => {
       }
     }
   } else if (account) await pickerTop();
-});
+}, "Connecting to OneDrive…");

@@ -16,3 +16,5 @@ data (every category is currently accepted), offline queue / PWA, join and new-y
 **Onboarding:** sign in with Microsoft, pick a folder in the built-in navigator (your OneDrive or folders shared with you; you can create a new one), and if it has no school year yet, create one. The choice is remembered in this browser.
 
 **Sharing:** the Share button invites someone to edit the workspace folder. They accept in OneDrive, use **Add shortcut to My files** on it (Graph's shared list is unreliable, so a shortcut or a pasted link is how the app finds it), then sign in here and pick it from My OneDrive.
+
+**Settings:** the header's **Advanced** menu holds Import events, Export events and Disconnect. Anything that waits on OneDrive shows a labelled spinner; the caching strategy for slow Graph calls is in `docs/PLAN.md` §3.2b.
