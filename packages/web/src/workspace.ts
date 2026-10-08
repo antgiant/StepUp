@@ -2,6 +2,7 @@ import {
   HlcClock,
   Ledger,
   OneDriveEventStore,
+  copyChildren,
   YEAR_FOLDER_RE,
   GraphError,
   ensureFolder,
@@ -81,6 +82,8 @@ export interface OpenWorkspace {
   year: YearInfo;
   driveId: string;
   ledger: Ledger;
+  /** Students copied in from an earlier year on this open (unsaved until the ledger is flushed). */
+  carriedChildren: number;
 }
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
@@ -93,7 +96,22 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const folders = (await openLedgerFolders(pointer.driveId, year.folderId))!;
   const ledger = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
   await ledger.refresh();
-  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger };
+  const carriedChildren = Object.keys(ledger.state.children).length ? 0 : await carryOverChildren(pointer, ledger, ledgerYears, year.label, clientId);
+  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, carriedChildren };
+}
+
+/** A new year starts with no students: copy them from the most recent earlier year that has any (read-only on that year). */
+async function carryOverChildren(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string): Promise<number> {
+  const earlier = ledgerYears.filter((y) => y.label < current).sort((a, b) => b.label.localeCompare(a.label));
+  for (const y of earlier) {
+    const folders = await openLedgerFolders(pointer.driveId, y.folderId);
+    if (!folders) continue;
+    const past = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
+    await past.refresh();
+    const added = copyChildren(ledger, past.state);
+    if (added) return added;
+  }
+  return 0;
 }
 
 /** The workspace root as a shareable folder entry. */

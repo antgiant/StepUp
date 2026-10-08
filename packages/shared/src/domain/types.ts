@@ -40,6 +40,8 @@ export interface Purchase {
   orderTotalCents?: number;
   taxShippingTotalCents?: number;
   notes?: string;
+  /** Hidden from the queue, plan and budget; reversible (the purchase's items are archived with it). */
+  archived?: boolean;
 }
 
 export interface LineItem {
@@ -75,6 +77,8 @@ export interface LineItem {
   /** Human override with a reason; wins over every derived status. */
   statusOverride?: string;
   notes?: string;
+  /** Set along with the purchase's `archived`; archived items are ignored by the queue, plan and budget. */
+  archived?: boolean;
 }
 
 export type ContentKind = "receipt-like" | "statement" | "explanation" | "other";

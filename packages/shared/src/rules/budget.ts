@@ -28,7 +28,7 @@ export function childBudget(state: LedgerState, childId: string): ChildBudget {
     remainingCents: 0,
   };
   for (const item of Object.values(state.items)) {
-    if (item.childId !== childId) continue;
+    if (item.childId !== childId || item.archived) continue;
     const status = item.stepUpStatus ?? (item.submissionId ? "Submitted" : "");
     if (status === "Paid") budget.paidCents += item.paidCents ?? item.approvedCents ?? requestedCents(item);
     else if (APPROVED.has(status)) budget.approvedCents += item.approvedCents ?? requestedCents(item);

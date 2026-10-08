@@ -38,6 +38,7 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
   const deadline = Object.values(state.settings)[0]?.submissionDeadline;
 
   for (const item of Object.values(state.items).sort(byLine)) {
+    if (item.archived) continue;
     if (isFiled(item) || item.statusOverride) {
       skipped++;
       continue;

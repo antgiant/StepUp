@@ -15,7 +15,6 @@ import {
   attachAdditional,
   attachAsReceipt,
   buildQueue,
-  createPurchase,
   duplicateItem,
   evaluateItem,
   fileNameHints,
@@ -23,6 +22,7 @@ import {
   itemsOf,
   newId,
   reallocateTax,
+  setPurchaseArchived,
   remainingToItemize,
   startPurchaseFromDocument,
   suggestNextItem,
@@ -66,7 +66,8 @@ const ctx = (): RulesContext => ({
   category: (id) => ({ id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true }),
 });
 
-type View = { name: "queue" } | { name: "purchase"; id: string };
+/** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
+type View = { name: "queue" } | { name: "purchase"; id: string; draft?: boolean };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
@@ -127,6 +128,10 @@ function attach(next: OpenWorkspace | undefined): void {
     ledger = next.ledger;
     activeStore = ledger.store;
     void savePointer(next.pointer);
+    if (next.carriedChildren) {
+      status = `Added ${next.carriedChildren} student(s) from last year.`;
+      void ledger.flush().catch((err) => { status = err instanceof Error ? err.message : String(err); render(); });
+    }
   }
 }
 
@@ -172,7 +177,11 @@ function queueView(): string {
     <ul>${children.map((c) => `<li>${esc(c.name)} ${c.scholarship ? `<small>${esc(c.scholarship)}</small>` : ""}</li>`).join("")}</ul>
     <form id="add-child" class="row"><input name="name" placeholder="Name" required><input name="scholarship" placeholder="Scholarship (e.g. FES-UA)"><button>Add child</button></form></details>`;
   const startBlank = `<p><button id="new-purchase">New purchase without a file</button></p>`;
-  if (entries.length === 0) return `${childForm}${startBlank}<p>Nothing needs attention.</p>`;
+  const archived = Object.values(state.purchases).filter((p) => p.archived);
+  const archivedList = archived.length
+    ? `<details><summary>Archived purchases (${archived.length})</summary><ul class="queue">${archived.map((p) => `<li class="q"><span>${esc(p.vendor ?? state.documents[p.receiptDocumentId ?? ""]?.filename ?? "Untitled purchase")} <small>${esc(p.date)}</small></span><button data-unarchive="${esc(p.id)}">Restore</button></li>`).join("")}</ul></details>`
+    : "";
+  if (entries.length === 0) return `${childForm}${startBlank}<p>Nothing needs attention.</p>${archivedList}`;
   const rows = entries.map((e) => {
     const sugg = (e.suggestions ?? []).map((s) => {
       const name = s.target.kind === "purchase" ? state.purchases[s.target.id]?.vendor ?? s.target.id : state.items[s.target.id]?.description ?? s.target.id;
@@ -181,16 +190,16 @@ function queueView(): string {
     const actions =
       e.kind === "unattached-document"
         ? `<button data-start="${esc(e.id)}">Start purchase</button>${sugg}`
-        : `<button data-open="${esc(e.purchaseId ?? e.id)}">Open</button>`;
+        : `<button data-open="${esc(e.purchaseId ?? e.id)}">Open</button>${e.kind === "purchase-needs-items" ? `<button data-archive="${esc(e.id)}">Archive</button>` : ""}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}<br><small>${esc(e.reasons.join("; "))}</small></div><div class="actions">${actions}</div></li>`;
   });
-  return `${childForm}${startBlank}<h2>Needs your attention (${entries.length})</h2><ul class="queue">${rows.join("")}</ul>`;
+  return `${childForm}${startBlank}<h2>Needs your attention (${entries.length})</h2><ul class="queue">${rows.join("")}</ul>${archivedList}`;
 }
 
-function purchaseView(id: string): string {
+function purchaseView(id: string, draft = false): string {
   const state = ledger.state;
-  const p = state.purchases[id];
+  const p = state.purchases[id] ?? (draft ? { id } : undefined);
   if (!p) return `<p>That purchase no longer exists.</p>`;
   const doc = p.receiptDocumentId ? state.documents[p.receiptDocumentId] : undefined;
   const items = itemsOf(state, id);
@@ -205,6 +214,18 @@ function purchaseView(id: string): string {
       <td>${ev.readiness === "ready" ? `<span class="ok">Ready</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`}</td>
       <td><button data-dup="${esc(i.id)}">Duplicate</button></td></tr>`;
   });
+  if (draft) {
+    return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
+  <h2>New purchase</h2>
+  <p class="note">Nothing is saved until you enter at least one detail.</p>
+  <form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
+    <label>Vendor<input name="vendor"></label>
+    <label>Date<input name="date" type="date"></label>
+    <label>Invoice #<input name="invoiceNo"></label>
+    <label>Receipt total<input name="orderTotal" inputmode="decimal"></label>
+    <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
+    <button>Save receipt details</button></form>`;
+  }
   const categories = [...new Set(Object.values(state.items).map((i) => i.categoryId).filter(Boolean))];
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
@@ -215,6 +236,7 @@ function purchaseView(id: string): string {
     <label>Receipt total<input name="orderTotal" inputmode="decimal" value="${money(p.orderTotalCents)}"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal" value="${money(p.taxShippingTotalCents)}"></label>
     <button>Save receipt details</button></form>
+  <p><button data-archive="${esc(id)}">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p>
   <h3>Items${remaining !== undefined ? ` <small>(${formatCents(remaining)} left to itemize)</small>` : ""}</h3>
   ${items.length ? `<table><thead><tr><th>Child</th><th>Description</th><th>Amount</th><th>Tax/ship</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>` : "<p>No items yet.</p>"}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
@@ -278,7 +300,7 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 }
 
 function render(): void {
-  const body = account && !workspace ? onboardingView() : view.name === "queue" ? queueView() : purchaseView(view.id);
+  const body = account && !workspace ? onboardingView() : view.name === "queue" ? queueView() : purchaseView(view.id, view.draft);
   root.innerHTML = header() + body;
 }
 
@@ -330,9 +352,7 @@ root.addEventListener("click", async (ev) => {
       URL.revokeObjectURL(url);
     }, "Preparing export…");
   } else if (t.id === "new-purchase") {
-    const id = createPurchase(ledger);
-    await guarded(() => ledger.flush(), "Saving to OneDrive…");
-    go({ name: "purchase", id });
+    go({ name: "purchase", id: newId("purchase"), draft: true });
   } else if (d["open"]) go({ name: "purchase", id: d["open"] });
   else if (d["start"]) {
     const doc = ledger.state.documents[d["start"]];
@@ -344,6 +364,15 @@ root.addEventListener("click", async (ev) => {
     const target: MapTarget = { kind: d["kind"] as "purchase" | "item", id: d["target"]! };
     const result = d["role"] === "receipt" ? attachAsReceipt(ledger, target.id, d["attach"]) : attachAdditional(ledger, target, d["attach"]);
     if (!result.ok) alert(`Could not attach: ${result.reason}`);
+    await save();
+  } else if (d["archive"]) {
+    if (confirm("Archive this purchase? It and its items are hidden from the list, plan and budget. You can restore it later.")) {
+      setPurchaseArchived(ledger, d["archive"]);
+      view = { name: "queue" };
+      await save();
+    }
+  } else if (d["unarchive"]) {
+    setPurchaseArchived(ledger, d["unarchive"], false);
     await save();
   } else if (d["dup"]) {
     duplicateItem(ledger, d["dup"]);
@@ -396,7 +425,14 @@ root.addEventListener("submit", async (ev) => {
     const tax = toCents(val(form, "taxTotal"));
     if (total !== undefined) fields["orderTotalCents"] = total;
     if (tax !== undefined) fields["taxShippingTotalCents"] = tax;
-    ledger.set("purchase", form.dataset["id"]!, fields, { label: "purchase.edited" });
+    const draft = form.dataset["draft"] === "1";
+    if (draft && Object.keys(fields).length === 0) {
+      status = "Enter at least one detail to save this purchase.";
+      render();
+      return;
+    }
+    ledger.set("purchase", form.dataset["id"]!, fields, { label: draft ? "purchase.created" : "purchase.edited" });
+    if (draft && view.name === "purchase") view = { name: "purchase", id: view.id };
     if (tax !== undefined) reallocateTax(ledger, form.dataset["id"]!);
   } else if (form.id === "item-form") {
     addItem(ledger, form.dataset["id"]!, {

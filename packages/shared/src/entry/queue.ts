@@ -42,15 +42,15 @@ export function buildQueue(state: LedgerState, ctx: RulesContext): QueueEntry[] 
     });
   }
 
-  const withItems = new Set(Object.values(state.items).map((i) => i.purchaseId));
+  const withItems = new Set(Object.values(state.items).filter((i) => !i.archived).map((i) => i.purchaseId));
   for (const p of Object.values(state.purchases).sort((a, b) => a.id.localeCompare(b.id))) {
-    if (!withItems.has(p.id)) {
+    if (!p.archived && !withItems.has(p.id)) {
       entries.push({ kind: "purchase-needs-items", id: p.id, purchaseId: p.id, title: p.vendor ?? state.documents[p.receiptDocumentId ?? ""]?.filename ?? p.id, reasons: ["Add the items on this receipt"] });
     }
   }
 
   const blocked = Object.values(state.items)
-    .filter((i) => !isFiled(i) && !i.statusOverride)
+    .filter((i) => !i.archived && !isFiled(i) && !i.statusOverride)
     .sort((a, b) => (a.purchaseId ?? "").localeCompare(b.purchaseId ?? "") || a.id.localeCompare(b.id));
   for (const item of blocked) {
     const ev = evaluateItem(state, item.id, ctx);

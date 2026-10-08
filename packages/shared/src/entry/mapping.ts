@@ -31,6 +31,7 @@ export function suggestTargets(state: LedgerState, docId: string, ctx: RulesCont
   const out: Suggestion[] = [];
 
   for (const purchase of Object.values(state.purchases)) {
+    if (purchase.archived) continue;
     const items = Object.values(state.items).filter((i) => i.purchaseId === purchase.id);
     const why: string[] = [];
     let score = 0;

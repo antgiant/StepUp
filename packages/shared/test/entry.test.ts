@@ -10,6 +10,8 @@ import {
   attachAdditional,
   attachAsReceipt,
   buildQueue,
+  copyChildren,
+  setPurchaseArchived,
   createPurchase,
   detachAdditional,
   duplicateItem,
@@ -189,5 +191,24 @@ describe("file name hints", () => {
     ledger.set("document", "d", { filename: "Acme 07 28 2026 Books.pdf", contentKind: "receipt-like" });
     expect(buildQueue(ledger.state, ctx)[0]!.hints).toMatchObject({ vendor: "Acme", date: "2026-07-28" });
   });
-});
 
+  it("archives a purchase and its items out of the queue, and restores them", () => {
+    const p = createPurchase(ledger, { vendor: "Acme" });
+    addItem(ledger, p, { description: "Book", amountCents: 1000 });
+    expect(buildQueue(ledger.state, ctx).length).toBeGreaterThan(0);
+    setPurchaseArchived(ledger, p);
+    expect(buildQueue(ledger.state, ctx)).toEqual([]);
+    expect(ledger.state.purchases[p]!.archived).toBe(true);
+    setPurchaseArchived(ledger, p, false);
+    expect(buildQueue(ledger.state, ctx).length).toBeGreaterThan(0);
+  });
+
+  it("copies children from an earlier year once, keeping ids and not overwriting", () => {
+    const last = new Ledger(new MemoryEventStore(new MemoryBackend(), "old"), new HlcClock("old"), "test");
+    last.set("child", "c9", { name: "Ann", scholarship: "FES-UA", capCents: 5000 });
+    expect(copyChildren(ledger, last.state)).toBe(1);
+    expect(ledger.state.children["c9"]).toMatchObject({ name: "Ann", scholarship: "FES-UA" });
+    expect(ledger.state.children["c9"]!.capCents).toBeUndefined();
+    expect(copyChildren(ledger, last.state)).toBe(0);
+  });
+});

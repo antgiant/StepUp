@@ -64,6 +64,13 @@ export function addItem(ledger: Ledger, purchaseId: string, input: NewItemInput)
   return id;
 }
 
+/** Hides a purchase and its items everywhere (queue, plan, budget) without losing anything; `archived = false` brings it back. */
+export function setPurchaseArchived(ledger: Ledger, purchaseId: string, archived = true): void {
+  const label = archived ? "purchase.archived" : "purchase.unarchived";
+  ledger.set("purchase", purchaseId, { archived }, { label });
+  for (const item of itemsOf(ledger.state, purchaseId)) ledger.set("item", item.id, { archived }, { label });
+}
+
 /** Items on a purchase, oldest first. */
 export function itemsOf(state: LedgerState, purchaseId: string): LineItem[] {
   return Object.values(state.items)
@@ -115,4 +122,19 @@ export function reallocateTax(ledger: Ledger, purchaseId: string): void {
   const items = itemsOf(ledger.state, purchaseId);
   const parts = allocateProportionally(purchase.taxShippingTotalCents, items.map((i) => i.amountCents ?? 0));
   items.forEach((item, n) => ledger.set("item", item.id, { taxShippingCents: parts[n]!, taxShippingEstimated: false }, { label: "item.taxAllocated" }));
+}
+
+/**
+ * Carries the students over from an earlier year's ledger into this one, keeping their ids so the same child is the
+ * same child in every year (and two devices doing this at once write identical events). Per-year money (cap,
+ * rollover) is not copied. Returns how many were added; existing children are never overwritten.
+ */
+export function copyChildren(ledger: Ledger, from: LedgerState): number {
+  let added = 0;
+  for (const c of Object.values(from.children)) {
+    if (ledger.state.children[c.id]) continue;
+    ledger.set("child", c.id, clean({ name: c.name, scholarship: c.scholarship }), { label: "child.carriedOver" });
+    added++;
+  }
+  return added;
 }
