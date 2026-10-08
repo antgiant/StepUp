@@ -98,8 +98,10 @@ export interface DocumentRec {
   derivedFrom?: string;
   /** True for a copy with everything not needed as proof blacked out; it is what gets sent to StepUp instead of its original. */
   redacted?: boolean;
+  /** True for a smaller copy made to fit StepUp's size limit; the purchase uses it instead of `derivedFrom`. */
+  shrunk?: boolean;
   /** Where it came from: dropped in the year folder the old way, uploaded through the app, or imported from a legacy workbook. */
-  source?: "loose" | "upload" | "legacy";
+  source?: "loose" | "upload" | "legacy" | "inbox";
   /** For statements: what was read from the file (see statements/parse.ts). Private; never exported or shared. */
   statement?: StatementData;
   /** Receipt shows payment was made (e.g. "$0.00 owed"); confidence 0..1. */

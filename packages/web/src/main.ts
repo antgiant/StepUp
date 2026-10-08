@@ -24,6 +24,9 @@ import {
   reallocateTax,
   observeActivity,
   yearSummary,
+  emlToText,
+  parseEml,
+  receiptAttachments,
   itemsBeingFiled,
   displayStatus,
   parseStatementText,
@@ -64,6 +67,8 @@ import { cacheKey, clearCache, deleteCache, readCache, readOutbox, writeCache, w
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
 import { onOcrProgress, ocrImage } from "./ocr.js";
+import { shrinkToLimit } from "./shrink.js";
+import { addScanPage, buildScanPdf, type ScanPage } from "./scan.js";
 import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
@@ -119,6 +124,7 @@ const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
 let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string } | undefined;
 const downloaded = new Map<string, { url: string; kind: PreviewKind; blob: Blob }>();
+const emailTexts = new Map<string, string>();
 
 /** Downloads a document once per session (documents never change) and keeps it for previews and for reading statements. */
 async function loadDocument(docId: string): Promise<{ url: string; kind: PreviewKind; blob: Blob }> {
@@ -135,6 +141,26 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
     downloaded.set(docId, got);
   }
   return got;
+}
+
+/** A receipt being photographed page by page. Nothing leaves this device until it is saved. */
+let scan: { name: string; pages: ScanPage[] } | undefined;
+
+function discardScan(): void {
+  for (const p of scan?.pages ?? []) URL.revokeObjectURL(p.url);
+  scan = undefined;
+}
+
+function scanPanel(): string {
+  if (!scan) return "";
+  const pages = scan.pages.map((p, i) => `<li class="scan-page"><div class="scan-thumb"><img src="${esc(p.url)}" alt="Page ${i + 1}" style="transform:rotate(${p.rotation}deg)"></div>
+      <div><strong>Page ${i + 1}</strong>${p.blurry ? ` <span class="warn">looks blurry: retake it</span>` : ""}<br>
+      <button data-scan-rotate="${p.id}">Rotate</button>${i > 0 ? `<button data-scan-up="${p.id}">Move up</button>` : ""}<button data-scan-remove="${p.id}">Remove</button></div></li>`);
+  return `<section class="preview scan"><div class="preview-bar"><strong>Scan a receipt</strong><span><button id="scan-cancel">Cancel</button></span></div>
+    <div style="padding:10px 14px"><p class="note">Photograph each page in order. Check each one is sharp and upright, then save them as one PDF.</p>
+    <ul class="scan-pages">${pages.join("")}</ul>
+    <p class="row"><label class="btn">${scan.pages.length ? "Add another page" : "Take the first photo"}<input type="file" id="scan-add" accept="image/*" capture="environment" hidden></label></p>
+    <form id="scan-form" class="row"><input name="name" value="${esc(scan.name)}" aria-label="File name" required><button${scan.pages.length ? "" : " disabled"}>Save as PDF (${scan.pages.length} page${scan.pages.length === 1 ? "" : "s"})</button></form></div></section>`;
 }
 
 /** A redacted copy that has been made but not saved: the person checks every page before it can be used. */
@@ -187,6 +213,7 @@ async function openPreview(docId: string): Promise<void> {
   if (!doc?.driveItemId || !workspace) return;
   const filename = doc.filename ?? "receipt";
   const got = await loadDocument(docId);
+  if (got.kind === "email") emailTexts.set(docId, emlToText(await got.blob.text()));
   preview = { docId, filename, url: got.url, kind: got.kind, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
 }
 
@@ -208,8 +235,9 @@ function previewPanel(): string {
   const body =
     preview.kind === "image" ? `<img src="${esc(preview.url)}" alt="${esc(preview.filename)}">`
     : preview.kind === "pdf" ? `<iframe src="${esc(preview.url)}" title="${esc(preview.filename)}"></iframe>`
+    : preview.kind === "email" ? `<pre class="mail">${esc(emailTexts.get(preview.docId) ?? "")}</pre>`
     : `<p class="note">This file type cannot be previewed here.${open}</p>`;
-  return `<section class="preview"><div class="preview-bar"><strong>${esc(preview.filename)}</strong><span>${preview.kind === "other" ? "" : open}<button id="close-preview">Close</button></span></div>${body}</section>`;
+  return `<section class="preview"><div class="preview-bar"><strong>${esc(preview.filename)}</strong><span>${preview.kind === "other" || preview.kind === "email" ? "" : open}<button id="close-preview">Close</button></span></div>${body}</section>`;
 }
 
 async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
@@ -302,6 +330,7 @@ async function dropWorkspace(): Promise<void> {
 
 function clearPreviews(): void {
   preview = undefined;
+  discardScan();
   discardRedaction();
   for (const d of downloaded.values()) URL.revokeObjectURL(d.url);
   downloaded.clear();
@@ -556,7 +585,8 @@ function queueView(): string {
   const banner = filingBanner();
   const uploads = workspace
     ? ` <label class="btn">Add receipt files<input type="file" id="upload" multiple accept="application/pdf,image/*" hidden></label>
-        <label class="btn">Take a photo<input type="file" id="photo" accept="image/*" capture="environment" hidden></label>`
+        <label class="btn">Take a photo<input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
+        <button id="start-scan">Scan a receipt (several pages)</button>`
     : "";
   const startBlank = `<p class="row"><button id="new-purchase">New purchase without a file</button>${uploads}</p>`;
   const archived = Object.values(state.purchases).filter((p) => p.archived);
@@ -571,7 +601,7 @@ function queueView(): string {
     }).join("");
     const actions =
       e.kind === "unattached-document"
-        ? `<button data-start="${esc(e.id)}">Start purchase</button>${state.documents[e.id]?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${state.documents[e.id]?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as statement</button>` : `<button data-statement="${esc(e.id)}">Open statement</button>`}${sugg}`
+        ? `<button data-start="${esc(e.id)}">Start purchase</button>${state.documents[e.id]?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(state.documents[e.id]?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${state.documents[e.id]?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as statement</button>` : `<button data-statement="${esc(e.id)}">Open statement</button>`}${sugg}`
         : `<button data-open="${esc(e.purchaseId ?? e.id)}">Open</button>${e.kind === "purchase-needs-items" ? `<button data-archive="${esc(e.id)}">Archive</button>` : ""}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}<br><small>${esc(e.reasons.join("; "))}</small></div><div class="actions">${actions}</div></li>`;
@@ -699,9 +729,29 @@ async function documentText(docId: string): Promise<{ text: string; ocr: boolean
   let read: { text: string; ocr: boolean };
   if (got.kind === "pdf") read = await pdfToText(got.blob);
   else if (got.kind === "image") read = { text: (await ocrImage(got.blob)).text, ocr: true };
+  else if (got.kind === "email") read = { text: emlToText(await got.blob.text()), ocr: false };
   else throw new Error("This file type can't be read. Fill in the details by hand.");
   documentTexts.set(docId, read);
   return read;
+}
+
+/** StepUp rejects a receipt over 5 MB: make a smaller copy, use it for this purchase, and keep the original untouched. */
+async function shrinkReceipt(purchaseId: string): Promise<void> {
+  const ws = workspace;
+  const p = ledger.state.purchases[purchaseId];
+  const original = p?.receiptDocumentId ? ledger.state.documents[p.receiptDocumentId] : undefined;
+  if (!ws || !p || !original) return;
+  const got = await loadDocument(original.id);
+  if (got.kind !== "pdf" && got.kind !== "image") throw new Error("Only PDFs and photos can be shrunk here.");
+  note("Making a smaller copy…");
+  const small = await shrinkToLimit(got.blob, got.kind, MAX_PROOF_BYTES);
+  const body = new Blob([small.bytes as BlobPart], { type: small.mime });
+  const name = `${(original.filename ?? "Receipt").replace(/\.\w+$/, "")} (smaller).${small.ext}`;
+  const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
+  ledger.set("document", result.documentId, { derivedFrom: original.id, shrunk: true, contentKind: original.contentKind ?? "receipt-like", ...(original.paymentEvidenceConfidence !== undefined ? { paymentEvidenceConfidence: original.paymentEvidenceConfidence } : {}) }, { label: "document.shrunk" });
+  ledger.set("purchase", purchaseId, { receiptDocumentId: result.documentId }, { label: "purchase.receiptShrunk" });
+  await ledger.flush();
+  status = `Made a smaller copy (${(small.bytes.byteLength / 1048576).toFixed(1)} MB: ${small.how}) and switched this purchase to it. The original is kept.`;
 }
 
 /** Fills only the blank fields of a purchase from its receipt, and records whether the receipt itself shows payment. */
@@ -780,7 +830,7 @@ function purchaseView(id: string, draft = false): string {
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
-  ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button></p>` : ""}
+  ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}
   ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
@@ -869,7 +919,7 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 function render(): void {
   const onboarding = account && !workspace;
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
-  root.innerHTML = header() + (onboarding ? "" : tabs()) + redactionPanel() + previewPanel() + body;
+  root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body;
   scheduleClaimPoll();
 }
 
@@ -913,10 +963,16 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "new-year") { newYearOpen = !newYearOpen; render(); }
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
-      const plan = planIngest(ledger.state, await listLooseFiles(workspace!.driveId, workspace!.year.folderId));
-      registerLooseFiles(ledger, plan.toRegister);
+      const ws = workspace!;
+      const loose = planIngest(ledger.state, await listLooseFiles(ws.driveId, ws.year.folderId));
+      registerLooseFiles(ledger, loose.toRegister);
+      // The inbox is where emails saved as .eml, print-to-PDF receipts and phone shares can be dropped.
+      const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
+      const inbox = folders ? planIngest(ledger.state, await listLooseFiles(ws.driveId, folders.inboxId)) : { toRegister: [], alreadyKnown: 0 };
+      registerLooseFiles(ledger, inbox.toRegister, "inbox");
       await ledger.flush();
-      status = plan.toRegister.length ? `Registered ${plan.toRegister.length} new file(s).` : "No new files.";
+      const n = loose.toRegister.length + inbox.toRegister.length;
+      status = n ? `Registered ${n} new file(s)${inbox.toRegister.length ? ` (${inbox.toRegister.length} from the inbox folder)` : ""}.` : "No new files.";
     }, "Checking OneDrive for new files…");
   }
   else if (t.id === "export") {
@@ -962,6 +1018,45 @@ root.addEventListener("click", async (ev) => {
     view = { name: "statement", id: d["statement"] };
     render();
     if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
+  } else if (t.id === "start-scan") {
+    const now = new Date();
+    const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
+    scan = { name: `Scan ${stamp}.pdf`, pages: [] };
+    render();
+  } else if (t.id === "scan-cancel") {
+    discardScan();
+    render();
+  } else if (d["scanRotate"] && scan) {
+    const p = scan.pages.find((x) => x.id === Number(d["scanRotate"]));
+    if (p) p.rotation = (((p.rotation + 90) % 360) as ScanPage["rotation"]);
+    render();
+  } else if (d["scanUp"] && scan) {
+    const i = scan.pages.findIndex((x) => x.id === Number(d["scanUp"]));
+    if (i > 0) [scan.pages[i - 1], scan.pages[i]] = [scan.pages[i]!, scan.pages[i - 1]!];
+    render();
+  } else if (d["scanRemove"] && scan) {
+    const gone = scan.pages.find((x) => x.id === Number(d["scanRemove"]));
+    if (gone) URL.revokeObjectURL(gone.url);
+    scan.pages = scan.pages.filter((x) => x !== gone);
+    render();
+  } else if (d["emlAttachments"]) {
+    await guarded(async () => {
+      const ws = workspace!;
+      const got = await loadDocument(d["emlAttachments"]!);
+      const found = receiptAttachments(parseEml(await got.blob.text()));
+      let added = 0;
+      for (const a of found) {
+        const body = new Blob([a.bytes as BlobPart], { type: a.contentType });
+        const r = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name: a.filename, body, sha256: (await sha256Hex(body)) || undefined });
+        if (r.status === "uploaded") added++;
+      }
+      await ledger.flush();
+      status = found.length ? `Saved ${added} attachment(s) from the email as files${added < found.length ? ` (${found.length - added} were already there)` : ""}.` : "That email has no PDF or image attachments.";
+    }, "Saving the email's attachments…");
+    persist();
+  } else if (d["shrink"]) {
+    await guarded(() => shrinkReceipt(d["shrink"]!), "Making a smaller copy…");
+    persist();
   } else if (d["readReceipt"]) {
     await guarded(() => readReceipt(d["readReceipt"]!), "Reading the receipt…");
     persist();
@@ -1060,6 +1155,21 @@ root.addEventListener("submit", async (ev) => {
     }, "Setting up the school year…");
     return;
   }
+  if (form.id === "scan-form" && scan && workspace) {
+    const ws = workspace;
+    const draft = scan;
+    const name = val(form, "name").replace(/\.pdf$/i, "") + ".pdf";
+    await guarded(async () => {
+      const bytes = await buildScanPdf(draft.pages, MAX_PROOF_BYTES);
+      const body = new Blob([bytes as BlobPart], { type: "application/pdf" });
+      const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
+      await ledger.flush();
+      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s)) to the list.` : `That scan was already added as "${result.name}".`;
+      discardScan();
+      persist();
+    }, "Building the PDF…");
+    return;
+  }
   if (form.id === "card-form") {
     const last4 = form.dataset["last4"]!;
     ledger.set("paymentMethod", `pm-card-${last4}`, { label: val(form, "label"), kind: "card", last4: [last4], ...(form.dataset["issuer"] ? { issuer: form.dataset["issuer"] } : {}) }, { label: "paymentMethod.created" });
@@ -1112,6 +1222,14 @@ root.addEventListener("change", async (ev) => {
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
     await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);
+    return;
+  }
+  if (input.id === "scan-add" && input.files?.[0] && scan) {
+    const file = input.files[0];
+    input.value = "";
+    await guarded(async () => {
+      scan!.pages.push(await addScanPage(file));
+    }, "Checking the photo…");
     return;
   }
   if ((input.id === "upload" || input.id === "photo") && input.files?.length) {

@@ -100,3 +100,29 @@ export async function renderRedactedPdf(file: Blob, plan: RedactionPlan, scale =
     await task.destroy();
   }
 }
+
+/** Renders every page of a PDF to a JPEG at the given scale (1 = 72 dpi) and quality, as an image-only PDF page list. */
+export async function renderPdfPagesJpeg(file: Blob, scale: number, quality: number): Promise<ImagePage[]> {
+  const { task, doc } = await openPdf(file);
+  try {
+    const out: ImagePage[] = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+      const jpeg = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (!jpeg) throw new Error("Could not encode a page.");
+      const base = page.getViewport({ scale: 1 });
+      out.push({ jpeg: new Uint8Array(await jpeg.arrayBuffer()), pxWidth: canvas.width, pxHeight: canvas.height, widthPt: base.width, heightPt: base.height });
+    }
+    return out;
+  } finally {
+    await task.destroy();
+  }
+}

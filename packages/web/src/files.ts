@@ -38,10 +38,11 @@ export function photoName(file: File, now = new Date()): string {
   return `Photo ${stamp}${/\.\w+$/.exec(file.name)?.[0] ?? ".jpg"}`;
 }
 
-export type PreviewKind = "image" | "pdf" | "other";
+export type PreviewKind = "image" | "pdf" | "email" | "other";
 
 export function previewKind(filename: string, mime: string): PreviewKind {
   if (/^image\/(jpeg|png|gif|webp|bmp)$/.test(mime) || /\.(jpe?g|png|gif|webp|bmp)$/i.test(filename)) return "image";
   if (mime === "application/pdf" || /\.pdf$/i.test(filename)) return "pdf";
+  if (mime === "message/rfc822" || /\.eml$/i.test(filename)) return "email";
   return "other";
 }

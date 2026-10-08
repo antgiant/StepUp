@@ -28,8 +28,10 @@ export function buildQueue(state: LedgerState, ctx: RulesContext): QueueEntry[] 
   for (const p of Object.values(state.purchases)) if (p.receiptDocumentId) used.add(p.receiptDocumentId);
   for (const a of Object.values(state.additionalDocs)) if (a.documentId) used.add(a.documentId);
 
+  // A file that has been replaced by a smaller or redacted copy is no longer something to deal with.
+  const hasCopy = new Set(Object.values(state.documents).flatMap((d) => (d.derivedFrom ? [d.derivedFrom] : [])));
   const entries: QueueEntry[] = [];
-  const docs = Object.values(state.documents).filter((d) => !used.has(d.id) && !d.derivedFrom).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const docs = Object.values(state.documents).filter((d) => !used.has(d.id) && !d.derivedFrom && !hasCopy.has(d.id)).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
   for (const d of docs) {
     entries.push({
       kind: "unattached-document",

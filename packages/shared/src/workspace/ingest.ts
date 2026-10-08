@@ -50,6 +50,7 @@ export function fileNameHints(name: string): FileNameHints {
 export function guessContentKind(name: string): ContentKind {
   const n = name.toLowerCase();
   if (/statement/.test(n)) return "statement";
+  if (/\.eml$/.test(n)) return "receipt-like"; // a saved order-confirmation email
   if (/(receipt|invoice|order)/.test(n) || fileNameHints(name).date) return "receipt-like";
   if (/(letter|explanation|form|reading list|guide|syllabus)/.test(n) || /\.docx?$/.test(n)) return "explanation";
   return "other";
@@ -70,13 +71,13 @@ export function planIngest(state: LedgerState, files: LooseFile[]): IngestPlan {
 export const documentIdFor = (driveItemId: string) => `doc-${hashString(driveItemId)}`;
 
 /** Registers files as documents so they show up in the entry queue. Deterministic ids make this safe to repeat. */
-export function registerLooseFiles(ledger: Ledger, files: LooseFile[]): string[] {
+export function registerLooseFiles(ledger: Ledger, files: LooseFile[], source: "loose" | "inbox" = "loose"): string[] {
   return files.map((f) => {
     const id = documentIdFor(f.id);
     ledger.set(
       "document",
       id,
-      { driveItemId: f.id, filename: f.name, sizeBytes: f.size, contentKind: guessContentKind(f.name), source: "loose", ...(f.webUrl ? { webUrl: f.webUrl } : {}) },
+      { driveItemId: f.id, filename: f.name, sizeBytes: f.size, contentKind: guessContentKind(f.name), source, ...(f.webUrl ? { webUrl: f.webUrl } : {}) },
       { label: "document.registered" }
     );
     return id;
