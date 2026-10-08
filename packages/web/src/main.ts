@@ -59,7 +59,6 @@ let status = "";
 let picker: { path: FolderEntry[]; mine?: FolderEntry; shared: FolderEntry[]; list: FolderEntry[] } = { path: [], shared: [], list: [] };
 let pendingYear: Pointer | undefined;
 let sharing = false;
-let sharedError = "";
 
 // Category rules are shared reference data (plan §3.8) and are not loaded yet: every category counts as known.
 const ctx = (): RulesContext => ({
@@ -209,12 +208,12 @@ function onboardingView(): string {
   }
   const open = (list: FolderEntry[]) => list.map((f, i) => `<li><button data-pick="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || "<li><small>No folders here.</small></li>";
   if (picker.path.length === 0) {
-    return `<h2>Choose the folder to use</h2><p class="note">Pick the folder that holds (or will hold) your school-year folders. Folders shared with you are listed too.</p>
+    return `<h2>Choose the folder to use</h2><p class="note">Pick the folder that holds (or will hold) your school-year folders.</p>
       <h3>Your OneDrive</h3><ul class="queue"><li><button data-pick-mine="1">&#128193; My OneDrive</button></li></ul>
       <h3>A folder someone shared with you</h3>
-      <p class="note">If it is not listed below, paste its OneDrive sharing link, or in OneDrive choose "Add shortcut to My files" on the folder and open it from My OneDrive.</p>
+      <p class="note">Paste its OneDrive sharing link, or in OneDrive choose "Add shortcut to My files" on the folder and open it from My OneDrive.</p>
       <form id="pick-link" class="row"><input name="link" placeholder="OneDrive sharing link" required><button>Use this link</button></form>
-      <h3>Shared with you</h3><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || `<li><small>${sharedError ? `Could not load the list (${esc(sharedError)}).` : "OneDrive lists no shared folders here."}</small></li>`}</ul>`;
+      ${picker.shared.length ? `<h3>Shared with you</h3><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("")}</ul>` : ""}`;
   }
   const here = picker.path[picker.path.length - 1]!;
   return `<h2>Choose the folder to use</h2>
@@ -226,8 +225,7 @@ function onboardingView(): string {
 
 async function pickerTop(): Promise<void> {
   pendingYear = undefined;
-  sharedError = "";
-  const [mine, shared] = await Promise.all([myDriveRoot(), sharedFolders().catch((err) => { sharedError = err instanceof Error ? err.message : String(err); return [] as FolderEntry[]; })]);
+  const [mine, shared] = await Promise.all([myDriveRoot(), sharedFolders().catch(() => [] as FolderEntry[])]);
   picker = { path: [], mine, shared, list: [] };
 }
 
