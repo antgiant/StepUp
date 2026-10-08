@@ -38,6 +38,10 @@ import {
   linkRefund,
   unlinkRefund,
   checkRedactionOutput,
+  diffReference,
+  mergeReference,
+  readYearSnapshot,
+  writeYearSnapshot,
   type RedactionCheck,
   unlinkTransaction,
   linkConfidentMatches,
@@ -79,6 +83,8 @@ import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
 
+/** Where shared category fixes are sent (an issue on this project). */
+const REPO = "antgiant/StepUp";
 const CLIENT_KEY = "stepup.clientId";
 function clientId(): string {
   try {
@@ -105,7 +111,56 @@ let sharing = false;
 let newYearOpen = false;
 
 /** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
+/** The latest published category list; each year works from its own frozen copy of it (`referenceBase`). */
+let publishedRef: CategoryReference | undefined;
+let yearSnapshot: CategoryReference | undefined;
 let referenceBase: CategoryReference | undefined;
+let ledgerFolderId: { yearFolderId: string; id: string } | undefined;
+
+/** Finds (or, the first time, freezes) this year's copy of the category list. */
+async function loadYearReference(ws: OpenWorkspace): Promise<void> {
+  try {
+    if (ledgerFolderId?.yearFolderId !== ws.year.folderId) {
+      const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
+      if (!folders) return;
+      ledgerFolderId = { yearFolderId: ws.year.folderId, id: folders.ledgerId };
+    }
+    let snap = await readYearSnapshot(ws.driveId, ledgerFolderId.id);
+    if (!snap && publishedRef) {
+      await writeYearSnapshot(ws.driveId, ledgerFolderId.id, publishedRef);
+      snap = (await readYearSnapshot(ws.driveId, ledgerFolderId.id)) ?? publishedRef;
+    }
+    if (workspace !== ws || !snap) return;
+    yearSnapshot = snap;
+    referenceBase = snap;
+    persist();
+    if (!typing()) render();
+  } catch {
+    /* the published list keeps working until the next try */
+  }
+}
+
+/** What the published list has that this year's copy does not (or undefined when they agree). */
+function referenceUpdate(): { added: number; changed: number; removed: number } | undefined {
+  if (!publishedRef || !yearSnapshot || publishedRef.hash === yearSnapshot.hash) return undefined;
+  const d = diffReference(yearSnapshot, publishedRef);
+  return d.added.length + d.changed.length + d.removed.length ? { added: d.added.length, changed: d.changed.length, removed: d.removed.length } : undefined;
+}
+
+async function updateYearReference(): Promise<void> {
+  const ws = workspace;
+  if (!ws || !publishedRef || !yearSnapshot || !ledgerFolderId) return;
+  const d = diffReference(yearSnapshot, publishedRef);
+  const ok = confirm(
+    `Update this year's category list to version ${publishedRef.version}?\n\n${d.added.length} new, ${d.changed.length} changed${d.removed.length ? `, ${d.removed.length} no longer published (kept, marked inactive)` : ""}.\nItems already filed keep their category; your own category fixes stay on top.`
+  );
+  if (!ok) return;
+  const merged = mergeReference(yearSnapshot, publishedRef);
+  await writeYearSnapshot(ws.driveId, ledgerFolderId.id, merged, true);
+  yearSnapshot = merged;
+  referenceBase = merged;
+  status = `Updated this year's category list to version ${merged.version}.`;
+}
 let resolved: { state: object; ref: ResolvedReference } | undefined;
 /** Baseline tree plus this year's edits; recomputed only when the ledger state changes. */
 function reference(): ResolvedReference | undefined {
@@ -353,7 +408,7 @@ function clearPreviews(): void {
 /** Browser cache of the open workspace (see cache.ts). Best effort: failures just mean a slower next visit. */
 const keyOf = (p: Pointer) => cacheKey(account?.homeAccountId ?? "", p.driveId, p.rootId, p.year ?? "");
 function persist(): void {
-  if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace));
+  if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace, yearSnapshot));
 }
 function forgetCache(): void {
   if (account && workspace) {
@@ -484,6 +539,12 @@ function attach(next: OpenWorkspace | undefined): void {
     void savePointer(next.pointer);
     if (!next.fromCache) persist();
     void useOutbox(next);
+    // Switching year (or workspace) means a different frozen category list.
+    if (yearSnapshot && ledgerFolderId && ledgerFolderId.yearFolderId !== next.year.folderId) {
+      yearSnapshot = undefined;
+      referenceBase = publishedRef;
+    }
+    void loadYearReference(next);
     if (next.carried.children) {
       const pms = next.carried.paymentMethods ? ` and ${next.carried.paymentMethods} payment method(s)` : "";
       status = `Added ${next.carried.children} student(s)${pms} from last year.`;
@@ -539,8 +600,9 @@ function header(): string {
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
+        ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
-        ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button>` : ""}
+        ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
       </div></details></nav></header>
     ${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
@@ -1024,6 +1086,9 @@ root.addEventListener("click", async (ev) => {
       a.click();
       URL.revokeObjectURL(url);
     }, "Preparing export…");
+  } else if (t.id === "update-reference") {
+    await guarded(updateYearReference, "Updating the category list…");
+    persist();
   } else if (t.id === "refresh-now") {
     if (workspace) await refreshInBackground(workspace);
     render();
@@ -1035,6 +1100,20 @@ root.addEventListener("click", async (ev) => {
   } else if (t.id === "toggle-mirror") {
     ledger.set("setting", "year", { mirror: !mirrorOn() }, { label: "setting.mirrorToggled" });
     await save();
+  } else if (t.id === "issue-categories") {
+    // A prefilled "new issue" page: anyone with a GitHub account can send the fixes; the app holds no GitHub credentials.
+    const json = JSON.stringify(exportCategoryEdits(ledger.state.categories), null, 1);
+    const body = `These category fixes came from the Step Up Helper (no private data; only category names, ids and flags).\n\n\`\`\`json\n${json}\n\`\`\`\n\nMaintainer: \`npm run reference:promote -- category-edits.json\``;
+    const url = `https://github.com/${REPO}/issues/new?title=${encodeURIComponent("Category fixes")}&body=${encodeURIComponent(body)}`;
+    if (url.length < 7000) window.open(url, "_blank", "noopener");
+    else {
+      window.open(`https://github.com/${REPO}/issues/new?title=${encodeURIComponent("Category fixes")}`, "_blank", "noopener");
+      status = "That is too much to prefill: attach the file you just downloaded to the new issue.";
+      const dl = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+      Object.assign(document.createElement("a"), { href: dl, download: "category-edits.json" }).click();
+      URL.revokeObjectURL(dl);
+      render();
+    }
   } else if (t.id === "export-categories") {
     const url = URL.createObjectURL(new Blob([JSON.stringify(exportCategoryEdits(ledger.state.categories), null, 1)], { type: "application/json" }));
     Object.assign(document.createElement("a"), { href: url, download: "category-edits.json" }).click();
@@ -1316,6 +1395,10 @@ await guarded(async () => {
       const quick = cached ? openFromCache(pointer, store.clientId, cached) : undefined;
       if (quick) {
         note("Opening your saved ledger…");
+        if (cached?.snapshot) {
+          yearSnapshot = cached.snapshot;
+          referenceBase = cached.snapshot;
+        }
         attach(quick);
       } else {
         note("Opening your workspace…");
@@ -1337,7 +1420,9 @@ await guarded(async () => {
 }, "Connecting to OneDrive…");
 if (workspace?.fromCache) void refreshInBackground(workspace);
 void loadReference().then((r) => {
-  referenceBase = r;
+  publishedRef = r;
+  if (!yearSnapshot) referenceBase = r; // before the year's own copy is known (or in local mode)
+  if (workspace && !yearSnapshot) void loadYearReference(workspace);
   if (r && !typing()) render();
 });
 

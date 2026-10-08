@@ -14,6 +14,7 @@ import {
   loadRemotePointer,
   parentOf,
   saveRemotePointer,
+  type CategoryReference,
   type Pointer,
   type YearInfo,
 } from "@step-up/shared/web";
@@ -155,8 +156,8 @@ export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
   return JSON.stringify([ws.ledger.state, ws.years]) !== before;
 }
 
-export function snapshotFor(ws: OpenWorkspace): WorkspaceCache {
-  return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: ws.eventsId, logs: ws.store.exportCache(), savedAt: Date.now() };
+export function snapshotFor(ws: OpenWorkspace, reference?: CategoryReference): WorkspaceCache {
+  return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: ws.eventsId, logs: ws.store.exportCache(), ...(reference ? { snapshot: reference } : {}), savedAt: Date.now() };
 }
 
 /** The workspace root as a shareable folder entry. */

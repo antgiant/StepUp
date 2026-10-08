@@ -24,6 +24,7 @@ export * from "./workspace/upload.js";
 export * from "./workspace/lock.js";
 export * from "./reference/categories.js";
 export * from "./reference/sync.js";
+export * from "./reference/snapshot.js";
 export * from "./statements/parse.js";
 export * from "./receipts/read.js";
 export * from "./email/eml.js";

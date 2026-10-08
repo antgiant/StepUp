@@ -3,6 +3,8 @@ import path from "node:path";
 import type { Page } from "playwright";
 import {
   applyObservedCategories,
+  openLedgerFolders,
+  readYearSnapshot,
   applyStepUpStatuses,
   claimItems,
   claimedByOthers,
@@ -53,6 +55,8 @@ export class LedgerStore implements FilingStore {
   readonly describe: string;
   private readonly drive: string;
   private docs = new Map<string, DocumentRec>();
+  /** This year's frozen category list; the published file is only the fallback. */
+  private snapshot?: CategoryReference;
   private groups: FilingGroup[] = [];
 
   constructor(private readonly opened: OpenedYear, private readonly me: ClaimOwner = { actor: "cli", clientId: "cli" }) {
@@ -92,8 +96,17 @@ export class LedgerStore implements FilingStore {
     return this.opened.ledger;
   }
 
+  private async loadSnapshot(): Promise<void> {
+    try {
+      const folders = await openLedgerFolders(this.drive, this.opened.year.folderId);
+      if (folders) this.snapshot = await readYearSnapshot(this.drive, folders.ledgerId);
+    } catch {
+      /* fall back to the published list */
+    }
+  }
+
   private rules(): RulesContext {
-    const base = loadReference();
+    const base = this.snapshot ?? loadReference();
     const ref: ResolvedReference | undefined = base ? resolveReference(base, this.ledger.state.categories) : undefined;
     return {
       today: new Date().toISOString().slice(0, 10),
@@ -111,6 +124,7 @@ export class LedgerStore implements FilingStore {
 
   async loadRows(): Promise<Table1Row[]> {
     await this.ledger.refresh();
+    await this.loadSnapshot();
     const planned = filingGroups(this.ledger.state, this.rules());
     const { blocked } = planned;
     // Items someone else is filing right now are theirs; leave them out (a stale claim, past its time-out, no longer counts).
@@ -219,7 +233,7 @@ export class LedgerStore implements FilingStore {
   }
 
   private async recordCategories(cache: Cache): Promise<void> {
-    const base = loadReference();
+    const base = this.snapshot ?? loadReference();
     if (!base) {
       console.log("[category sync] No shared category list found (packages/web/public/reference/categories.json); nothing recorded.");
       return;

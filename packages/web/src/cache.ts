@@ -1,4 +1,4 @@
-import type { CachedLog, LedgerEvent, YearInfo } from "@step-up/shared/web";
+import type { CachedLog, CategoryReference, LedgerEvent, YearInfo } from "@step-up/shared/web";
 
 /**
  * What the browser remembers about a workspace between visits so the app can paint instantly and then ask OneDrive
@@ -10,6 +10,8 @@ export interface WorkspaceCache {
   yearLabel: string;
   eventsId: string;
   logs: CachedLog[];
+  /** The year's frozen category list, so categories work at once and offline. */
+  snapshot?: CategoryReference;
   savedAt: number;
 }
 
