@@ -67,6 +67,11 @@ export async function ensureFolder(driveId: string, parentId: string, name: stri
   }
 }
 
+/** Deletes an item (to the recycle bin). With `ifMatch`, only if its ETag still matches; a mismatch throws GraphError 412. */
+export async function deleteItem(driveId: string, itemId: string, ifMatch?: string): Promise<void> {
+  await graphFetch(`/drives/${driveId}/items/${itemId}`, { method: "DELETE", ...(ifMatch ? { headers: { "If-Match": ifMatch } } : {}), rawBody: true });
+}
+
 /** Reads a small text file together with its ETag. */
 export async function readTextFile(driveId: string, itemId: string): Promise<{ text: string; eTag?: string }> {
   const meta = await graphJson<DriveItemJson>(`/drives/${driveId}/items/${itemId}?$select=eTag`);

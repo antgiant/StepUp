@@ -2,6 +2,7 @@ import "dotenv/config";
 import { launchStepUpSession } from "./form/browser.js";
 import { dumpFormFields, printFieldTable } from "./form/inspect.js";
 import { closePrompt, waitForEnter } from "./form/pause.js";
+import { acquireStepUpLock } from "./stepupLock.js";
 import { attachVendorListingListener } from "./vendorListingSync.js";
 
 /**
@@ -11,6 +12,7 @@ import { attachVendorListingListener } from "./vendorListingSync.js";
  * config/form-config.json together against the real form.
  */
 async function main() {
+  const lock = await acquireStepUpLock(); // StepUp does not like two sessions on one account
   const { context, page } = await launchStepUpSession();
   // Passive bonus: exploration sessions often open the "Who did you pay?" dropdown too, so
   // may as well accumulate vendor data from that while we're here (no spreadsheet writes,
@@ -29,6 +31,7 @@ async function main() {
 
   closePrompt();
   await context.close();
+  await lock.release();
 }
 
 main().catch((err) => {

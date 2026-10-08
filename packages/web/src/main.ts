@@ -405,13 +405,18 @@ async function publishMirrorNow(): Promise<"written" | "unchanged" | "locked"> {
   const ws = workspace;
   if (!ws) return "unchanged";
   const lib = await import("@step-up/shared/mirror");
-  if (reportsFolder?.yearFolderId !== ws.year.folderId) {
-    const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
-    if (!folders) throw new Error("This year has no ledger folders yet.");
-    reportsFolder = { yearFolderId: ws.year.folderId, id: folders.reportsId };
-  }
-  const model = lib.buildMirror(ledger.state, ctx(), { generatedAt: new Date().toISOString(), appVersion: "web" });
-  return (await lib.publishMirror(ws.driveId, reportsFolder.id, `${ws.year.label} FES UA Tracking (mirror).xlsx`, model)).status;
+  const same = reportsFolder?.yearFolderId === ws.year.folderId;
+  const result = await lib.publishYearMirror({
+    ledger,
+    ctx: ctx(),
+    driveId: ws.driveId,
+    yearFolderId: ws.year.folderId,
+    yearLabel: ws.year.label,
+    ...(same ? { reportsId: reportsFolder!.id } : {}),
+    appVersion: "web",
+  });
+  if (result.reportsId) reportsFolder = { yearFolderId: ws.year.folderId, id: result.reportsId };
+  return result.status === "off" ? "unchanged" : result.status;
 }
 /** Background work: spinner while it runs, and a short note (not an error page) if it fails. */
 async function guardedQuiet(work: () => Promise<unknown>): Promise<void> {

@@ -43,6 +43,7 @@ import { ExcelStore } from "./filing/excelStore.js";
 import { LedgerStore } from "./filing/ledgerStore.js";
 import type { FilingStore } from "./filing/store.js";
 import { openYearLedger } from "./ledgerYear.js";
+import { acquireStepUpLock, type HeldLock } from "./stepupLock.js";
 import {
   attachDraftTracker,
   deleteDraftRecord,
@@ -189,7 +190,12 @@ async function chooseStore(): Promise<FilingStore> {
   return new ExcelStore(await resolveShareLink(requireEnv("ONEDRIVE_EXCEL_URL")), await resolveShareLink(requireEnv("ONEDRIVE_FILES_FOLDER_URL")));
 }
 
+/** The StepUp session lock, kept at module level so the exit paths below can give it back. */
+let heldLock: HeldLock | undefined;
+
 async function main() {
+  // Only one person may drive StepUp at a time (it logs people out when two sessions share an account).
+  heldLock = await acquireStepUpLock();
   const store = await chooseStore();
   console.log(`Filing from ${store.describe}.`);
 
@@ -390,6 +396,7 @@ async function main() {
       ? "Stopped early. Everything submitted so far is already saved — just re-run \"npm start\" later to pick up the rest. Click Continue to finish."
       : "All groups processed. Click Continue to finish. The browser stays open — re-run \"npm start\" for more rows, or click the \"All done — close browser\" button (top-left of the page) when you're fully done.")
   );
+  await heldLock?.release();
   // Deliberately not closing `context`/`browser` here — this process only connected to the
   // shared browser server (browserServer.ts owns its lifecycle), it didn't launch it. Force an
   // explicit clean exit instead of letting the CDP connection's open socket keep the process alive.
@@ -1005,7 +1012,10 @@ async function runGroupSteps(
   // (called at the start of the next runGroup()) clicks "Request Another Reimbursement" itself.
 }
 
-main().catch((err) => {
-  console.error("\nRun failed:", err.message ?? err);
-  process.exit(1);
-});
+main()
+  .then(() => heldLock?.release())
+  .catch(async (err) => {
+    console.error("\nRun failed:", err.message ?? err);
+    await heldLock?.release();
+    process.exit(1);
+  });

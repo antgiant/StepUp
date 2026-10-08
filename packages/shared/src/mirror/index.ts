@@ -3,3 +3,4 @@ export * from "./model.js";
 export * from "./build.js";
 export * from "./xlsx.js";
 export * from "./publish.js";
+export * from "./year.js";

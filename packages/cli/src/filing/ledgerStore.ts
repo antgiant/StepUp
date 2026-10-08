@@ -2,13 +2,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import {
+  applyObservedCategories,
   applyStepUpStatuses,
   filingGroups,
+  publishYearMirror,
   recordCategoryFix,
   recordDraftNumber,
   recordNeedsAttention,
   recordSubmitted,
-  redactedCopyOf,
   resolveReference,
   validateCategoryReference,
   type CategoryReference,
@@ -20,7 +21,8 @@ import {
 import { downloadItem, type FolderChild } from "../graph/onedrive.js";
 import type { OpenedYear } from "../ledgerYear.js";
 import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
-import { attachCategoryTreeListener } from "../categorySync.js";
+import { attachCategoryTreeListener, type Cache } from "../categorySync.js";
+import { nodesFromCache } from "../categoryNodes.js";
 import { attachStatusSyncListenerWith } from "../statusSync.js";
 import type { FilingStore } from "./store.js";
 
@@ -141,6 +143,7 @@ export class LedgerStore implements FilingStore {
   async markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string): Promise<void> {
     recordSubmitted(this.ledger, this.itemIds(rows), { reimbursementId, submittedAt: submittedDate });
     await this.save();
+    await this.rebuildMirror();
   }
 
   async recordDraftNumber(rows: Table1Row[], reimbursementId: string): Promise<void> {
@@ -166,13 +169,43 @@ export class LedgerStore implements FilingStore {
       await this.save();
       return changed;
     });
-    attachCategoryTreeListener(page, undefined);
+    // StepUp's own category list, as it is observed, becomes edits in this year's ledger (the old Table5 sync).
+    attachCategoryTreeListener(page, (cache) => this.recordCategories(cache));
     // Pre-authorization status is not part of the ledger yet (plan: Pre-Auth is its own flow), so it is not synced here.
+  }
+
+  private async recordCategories(cache: Cache): Promise<void> {
+    const base = loadReference();
+    if (!base) {
+      console.log("[category sync] No shared category list found (packages/web/public/reference/categories.json); nothing recorded.");
+      return;
+    }
+    const { added, updated } = applyObservedCategories(this.ledger, base, nodesFromCache(cache));
+    if (added + updated === 0) return;
+    await this.save();
+    console.log(`[category sync] Recorded ${added} new and ${updated} changed categor${added + updated === 1 ? "y" : "ies"} in ${this.describe}.`);
+  }
+
+  /** Rebuilds the mirror spreadsheet exactly as the web app does (skipped if unchanged or switched off); never fails the run. */
+  async rebuildMirror(): Promise<void> {
+    try {
+      const { status } = await publishYearMirror({
+        ledger: this.ledger,
+        ctx: this.rules(),
+        driveId: this.drive,
+        yearFolderId: this.opened.year.folderId,
+        yearLabel: this.opened.year.label,
+        appVersion: "cli",
+      });
+      const said: Record<string, string> = { written: "updated", unchanged: "already up to date", locked: "open in Excel, will update next time", off: "switched off for this year" };
+      console.log(`[spreadsheet] ${said[status]}.`);
+    } catch (err) {
+      console.warn(`[spreadsheet] Could not rebuild it (${(err as Error).message}).`);
+    }
   }
 
   async finish(): Promise<void> {
     await this.save();
+    await this.rebuildMirror();
   }
 }
-
-export { redactedCopyOf };

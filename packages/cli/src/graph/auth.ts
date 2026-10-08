@@ -82,3 +82,10 @@ export async function getAccessToken(): Promise<string> {
   }
   return result.accessToken;
 }
+
+/** The Microsoft account the CLI is signed in as (after a token has been obtained), for saying who holds the StepUp lock. */
+export async function getSignedInName(): Promise<string> {
+  await getAccessToken();
+  const accounts = await getPca().getTokenCache().getAllAccounts();
+  return accounts[0]?.username ?? "unknown user";
+}

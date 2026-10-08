@@ -182,12 +182,19 @@ async function syncCategoriesTable(
   return { added: toAdd.map((e) => e.path), updated: toUpdate.map((u) => u.path), stale };
 }
 
-async function reportAndSync(excelRef: DriveItemRef | undefined, cache: Cache, label: string): Promise<void> {
-  if (!excelRef) {
-    // Ledger mode: the shared category list is the published reference file, rebuilt from this cache by hand.
-    console.log(`[category sync] Cache updated (${label}). Run "npm run reference:build" to fold it into the shared category list.`);
+/** Where an observed category tree goes: the workbook's Table5, or (ledger mode) a function that records it in the ledger. */
+export type CategorySink = DriveItemRef | ((cache: Cache) => Promise<void>) | undefined;
+
+async function reportAndSync(sink: CategorySink, cache: Cache, label: string): Promise<void> {
+  if (typeof sink === "function") {
+    await sink(cache);
     return;
   }
+  if (!sink) {
+    console.log(`[category sync] Cache updated (${label}).`);
+    return;
+  }
+  const excelRef = sink;
   const entries = buildPathEntriesFromCache(cache);
   const { added, updated, stale } = await syncCategoriesTable(excelRef, entries);
   console.log(
@@ -266,7 +273,7 @@ export async function applyCategoryRename(excelRef: DriveItemRef, oldPath: strin
  *    anything different; we're just piggybacking extra data collection onto a click that was
  *    going to happen anyway.
  */
-export function attachCategoryTreeListener(page: Page, excelRef: DriveItemRef | undefined): void {
+export function attachCategoryTreeListener(page: Page, excelRef: CategorySink): void {
   // Tracks the throttle in-memory so it's re-checked fresh on every call rather than memoized
   // once for the whole process — the earlier version cached a single boolean forever, so once
   // due, it stayed "due" for the rest of the session and re-ran the full expansion loop on

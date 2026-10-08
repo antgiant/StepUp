@@ -104,6 +104,14 @@ export class FakeGraph {
       const n = this.nodes.get(m[1]!);
       return n ? new Response(n.content as BodyInit) : this.json({}, 404);
     }
+    if ((m = /^\/drives\/[^/]+\/items\/([^/?]+)(\?.*)?$/.exec(path)) && method === "DELETE") {
+      const n = this.nodes.get(m[1]!);
+      if (!n) return this.json({ error: "itemNotFound" }, 404);
+      const ifMatch = headers.get("If-Match");
+      if (ifMatch && ifMatch !== `"${n.id}-${n.version}"`) return this.json({ error: "preconditionFailed" }, 412);
+      this.nodes.delete(n.id);
+      return new Response(null, { status: 204 });
+    }
     if ((m = /^\/drives\/[^/]+\/items\/([^/?]+)(\?.*)?$/.exec(path))) {
       const n = this.nodes.get(m[1]!);
       return n ? this.json(this.meta(n)) : this.json({}, 404);
