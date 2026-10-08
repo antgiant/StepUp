@@ -38,16 +38,11 @@ import {
   type ItemScanOutcome,
   type ReimbursementStep,
 } from "./form/reimbursementFlow.js";
-import {
-  downloadItem,
-  getTableHeaderRow,
-  getTableRows,
-  listFolderChildren,
-  resolveShareLink,
-  updateTableRowByIndex,
-  type FolderChild,
-} from "./graph/onedrive.js";
-import { applyCategoryRename, attachCategoryTreeListener } from "./categorySync.js";
+import { resolveShareLink, type FolderChild } from "./graph/onedrive.js";
+import { ExcelStore } from "./filing/excelStore.js";
+import { LedgerStore } from "./filing/ledgerStore.js";
+import type { FilingStore } from "./filing/store.js";
+import { openYearLedger } from "./ledgerYear.js";
 import {
   attachDraftTracker,
   deleteDraftRecord,
@@ -60,28 +55,14 @@ import {
   type DraftRecord,
   type DraftSnapshot,
 } from "./draftTracker.js";
-import { attachPreauthSyncListener } from "./preauthSync.js";
-import {
-  buildGroups,
-  checkScholarshipEligibility,
-  loadUnfiledRows,
-  type ReimbursementGroup,
-  type Table1Row,
-} from "./reimbursements.js";
-import { attachStatusSyncListener } from "./statusSync.js";
+import type { ReimbursementGroup, Table1Row } from "./reimbursements.js";
 import { attachVendorListingListener } from "./vendorListingSync.js";
 
-const TABLE1 = "Table1";
-const STATUSES_TABLE = "Table3";
-const CHILDREN_TABLE = "Table2";
 // Fallback when a child isn't found in Table2's Scholarship column at all.
 const DEFAULT_PROGRAM = "FES-UA";
-// Status written back to Table1 once a submission actually goes through.
-const SUBMITTED_STATUS = "Submitted";
 // Status written back when documentation turns out to be missing/wrong, so the row doesn't
 // keep coming up as ready to submit until you've actually fixed it.
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
-const MISSING_THINGS_STATUS = "Unfiled (Missing Things)";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -168,13 +149,13 @@ function reviewItemCardHtml(r: { data: Record<string, string> }): string {
 /** Downloads a candidate file and opens it in a new tab wrapped with a clear label (filename + the row it's being reviewed for), so it's obvious what you're looking at and why. */
 async function openLabeledPreview(
   context: Awaited<ReturnType<typeof connectToStepUpSession>>["context"],
-  folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  store: FilingStore,
   fileId: string,
   localPath: string,
   fileName: string,
   itemSummary: string
 ) {
-  await downloadItem(folderRef.driveId, fileId, localPath);
+  await store.download(fileId, localPath);
   const wrapperPath = `${localPath}.preview.html`;
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(fileName)}</title></head>
@@ -193,19 +174,33 @@ async function openLabeledPreview(
   return previewPage;
 }
 
-async function main() {
+/**
+ * `npm start` files from the Excel workbook as before. `npm start -- --ledger=2026-2027` files from that year's
+ * ledger instead: items come from the ledger, and every result (submitted, needs attention, statuses) is recorded there.
+ */
+async function chooseStore(): Promise<FilingStore> {
+  const arg = process.argv.find((a) => a.startsWith("--ledger="));
+  if (arg) {
+    const year = arg.slice("--ledger=".length);
+    console.log(`Opening the ${year} ledger...`);
+    return new LedgerStore(await openYearLedger(year));
+  }
   console.log("Resolving OneDrive links...");
-  const excelRef = await resolveShareLink(requireEnv("ONEDRIVE_EXCEL_URL"));
-  const folderRef = await resolveShareLink(requireEnv("ONEDRIVE_FILES_FOLDER_URL"));
+  return new ExcelStore(await resolveShareLink(requireEnv("ONEDRIVE_EXCEL_URL")), await resolveShareLink(requireEnv("ONEDRIVE_FILES_FOLDER_URL")));
+}
 
-  const rows = await loadUnfiledRows(excelRef);
-  console.log(`Found ${rows.length} row(s) with Status = "Unfiled (Ready to Submit)".`);
+async function main() {
+  const store = await chooseStore();
+  console.log(`Filing from ${store.describe}.`);
+
+  const rows = await store.loadRows();
+  console.log(`Found ${rows.length} item(s) ready to file.`);
   if (rows.length === 0) {
     console.log("Nothing to do.");
     return;
   }
 
-  const mismatches = await checkScholarshipEligibility(excelRef, rows);
+  const mismatches = await store.eligibilityMismatches(rows);
   if (mismatches.length > 0) {
     console.log(`\nWarning: ${mismatches.length} row(s) have a Category that doesn't list the child's Scholarship as eligible:`);
     for (const m of mismatches) {
@@ -216,17 +211,9 @@ async function main() {
     console.log("Not blocking — double-check these before submitting.");
   }
 
-  const folderChildren = await listFolderChildren(folderRef);
-  const table1Headers = await getTableHeaderRow(excelRef, TABLE1);
+  const folderChildren = await store.files();
   const dataDir = path.resolve(process.cwd(), "data");
-
-  const childrenRows = await getTableRows(excelRef, CHILDREN_TABLE);
-  const scholarshipByChild = new Map<string, string>();
-  for (const r of childrenRows) {
-    const name = String(r[0] ?? "").trim();
-    const scholarship = String(r[1] ?? "").trim();
-    if (name && scholarship) scholarshipByChild.set(name, scholarship);
-  }
+  const scholarshipByChild = await store.childScholarships();
 
   const { context, page } = await connectToStepUpSession();
   console.log("\nConnected to the browser server. If you haven't already, log in manually — no prompts will show until you land on the Dashboard.");
@@ -234,23 +221,17 @@ async function main() {
   // closed terminal) instead of just sitting there looking like it's still waiting on you.
   startConnectionHeartbeat(page);
 
-  attachStatusSyncListener(page, excelRef);
-  attachCategoryTreeListener(page, excelRef);
+  store.attachListeners(page);
   attachVendorListingListener(page);
-  attachPreauthSyncListener(page, excelRef);
   attachDraftTracker(page);
 
-  const statusRows = await getTableRows(excelRef, STATUSES_TABLE);
-  const validStatuses = statusRows.map((r) => String(r[0] ?? "")).filter(Boolean);
-  if (!validStatuses.includes(SUBMITTED_STATUS)) {
-    throw new Error(`"${SUBMITTED_STATUS}" isn't one of ${STATUSES_TABLE}'s valid Status values: ${validStatuses.join(" | ")}`);
-  }
+  await store.checkReady();
 
   await waitForLogin(page);
   console.log("\nLogged in. Prompts from here on show up as a banner at the bottom of the page.");
   await checkForDashboardModal(page);
 
-  const groups = await buildGroups(rows, async (row, candidates) => {
+  const groups = await store.buildGroups(rows, async (row, candidates) => {
     console.log(`\n${summarizeRow(row)} has multiple documentation files with no clear match.`);
 
     // Filenames alone often aren't enough to tell which is the actual receipt — open each
@@ -273,7 +254,7 @@ async function main() {
       try {
         previewByFile.set(
           fileName,
-          await openLabeledPreview(context, folderRef, fileChild.id, localPath, fileName, summarizeRow(row))
+          await openLabeledPreview(context, store, fileChild.id, localPath, fileName, summarizeRow(row))
         );
       } catch (err) {
         console.warn(`  Couldn't open a preview tab for "${fileName}": ${err instanceof Error ? err.message : err}`);
@@ -297,15 +278,8 @@ async function main() {
     for (const t of previewByFile.values()) await t.close();
 
     if (choice === WRONG_DOCUMENTATION) {
-      const today = new Date().toISOString().slice(0, 10);
-      const note = `[${today}] Documentation files (${candidates.join(", ")}) don't clearly identify the main receipt — needs fixing in spreadsheet.`;
-      const existingNotes = (row.data["Notes"] ?? "").trim();
-      const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
-      await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-        Notes: updatedNotes,
-        Status: MISSING_THINGS_STATUS,
-      });
-      console.log(`Marked row ID ${row.data["ID"]} as "${MISSING_THINGS_STATUS}" and noted the documentation issue.`);
+      await store.markNeedsAttention([row], `Documentation files (${candidates.join(", ")}) don't clearly identify the main receipt — needs fixing in spreadsheet.`);
+      console.log(`Marked row ID ${row.data["ID"]} as needing attention and noted the documentation issue.`);
       return null;
     }
 
@@ -331,23 +305,15 @@ async function main() {
       );
       if (receipt && receipt.size > MAX_RECEIPT_BYTES) {
         const sizeMb = (receipt.size / (1024 * 1024)).toFixed(1);
-        const today = new Date().toISOString().slice(0, 10);
-        const note = `[${today}] Main receipt "${group.mainReceiptFile}" is ${sizeMb} MB — StepUp only accepts files under 5 MB, needs to be shrunk/compressed.`;
-        for (const row of group.rows) {
-          const existingNotes = (row.data["Notes"] ?? "").trim();
-          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-            Notes: existingNotes ? `${existingNotes} | ${note}` : note,
-            Status: MISSING_THINGS_STATUS,
-          });
-        }
+        await store.markNeedsAttention(group.rows, `Main receipt "${group.mainReceiptFile}" is ${sizeMb} MB — StepUp only accepts files under 5 MB, needs to be shrunk/compressed.`);
         console.log(
           `Skipped group ${i + 1}: "${group.mainReceiptFile}" is ${sizeMb} MB, over StepUp's 5 MB limit. ` +
-            `Marked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as "${MISSING_THINGS_STATUS}" with a note. ` +
+            `Marked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as needing attention with a note. ` +
             `Shrink the file, set the status back to "Unfiled (Ready to Submit)" and re-run.`
         );
         skipNotices.push(
           `Group ${i + 1} (${group.child}, ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) was skipped: its receipt is ${sizeMb} MB, over StepUp's 5 MB limit. ` +
-            `Marked "${MISSING_THINGS_STATUS}" in the spreadsheet with a note.`
+            `Flagged as needing attention, with a note.`
         );
         continue;
       }
@@ -357,7 +323,7 @@ async function main() {
     // is recognized up front instead of being offered as if it were brand new.
     const rowsSummary = group.rows.map((r) => summarizeRow(r)).join("\n");
     const groupHeader = `${noticePrefix()}Group ${i + 1} of ${groups.length}: ${group.child} — ${group.mainReceiptFile}\n${rowsSummary}`;
-    const existing = await resolveExistingDraft(page, group, excelRef, table1Headers, groupHeader).catch((err) => {
+    const existing = await resolveExistingDraft(page, group, store, groupHeader).catch((err) => {
       console.warn(`Couldn't check for an existing draft: ${(err as Error).message} — treating as a new request.`);
       return { action: "fresh" } as const;
     });
@@ -384,7 +350,7 @@ async function main() {
     }
 
     try {
-      await runGroup(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, rows, existing);
+      await runGroup(page, group, store, folderChildren, dataDir, scholarshipByChild, rows, existing);
     } catch (err) {
       if (err instanceof GroupSkippedError) {
         await clearBanner(page);
@@ -396,7 +362,7 @@ async function main() {
         console.log(`Skipped group ${i + 1} — missing data (see above).`);
         skipNotices.push(
           `Group ${i + 1} (${group.child}, ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) was skipped: ${err.message} ` +
-            `Marked "${MISSING_THINGS_STATUS}" in the spreadsheet with a note.`
+            `Flagged as needing attention, with a note.`
         );
         continue;
       }
@@ -416,6 +382,7 @@ async function main() {
     }
   }
 
+  await store.finish();
   await browserContinue(
     page,
     noticePrefix() +
@@ -449,24 +416,6 @@ function expectedTotal(rows: Table1Row[]): string {
   return `$${total.toFixed(2)}`;
 }
 
-/** Writes the "submitted" bookkeeping for `rows` (already in line-item order) back to Table1. */
-async function markRowsSubmitted(
-  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
-  table1Headers: string[],
-  rows: Table1Row[],
-  reimbursementId: string,
-  submittedDate: string
-): Promise<void> {
-  for (const [idx, row] of rows.entries()) {
-    await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-      Status: SUBMITTED_STATUS,
-      Submitted: submittedDate,
-      "Reimbursement ID": reimbursementId,
-      "Line Number": String(idx + 1),
-    });
-  }
-}
-
 /**
  * Before starting a group, checks whether an earlier run already created a StepUp draft for these
  * exact rows (remembered in .cache/drafts.json, keyed by the group's row IDs). If StepUp says it
@@ -477,8 +426,7 @@ async function markRowsSubmitted(
 async function resolveExistingDraft(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
-  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
-  table1Headers: string[],
+  store: FilingStore,
   groupHeader: string
 ): Promise<{ action: "fresh" } | { action: "done" } | { action: "resume"; guid: string; snapshot: DraftSnapshot; record: DraftRecord }> {
   const rowIds = group.rows.map((r) => r.data["ID"]);
@@ -512,7 +460,7 @@ async function resolveExistingDraft(
       return { action: "done" };
     }
     const submittedDate = (snapshot.submitDate ?? new Date().toISOString()).slice(0, 10);
-    await markRowsSubmitted(excelRef, table1Headers, ordered, snapshot.sequenceNumber, submittedDate);
+    await store.markSubmitted(ordered, snapshot.sequenceNumber, submittedDate);
     await deleteDraftRecord(rowIds);
     console.log(`\nThese row(s) were already submitted as Reimbursement #${snapshot.sequenceNumber} — marked ${ordered.length} row(s) Submitted and skipping the group.`);
     return { action: "done" };
@@ -552,11 +500,9 @@ class GroupSkippedMissingDataError extends Error {}
 async function runGroup(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
-  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
-  folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  store: FilingStore,
   folderChildren: FolderChild[],
   dataDir: string,
-  table1Headers: string[],
   scholarshipByChild: Map<string, string>,
   allRows: Table1Row[],
   existing: Exclude<Awaited<ReturnType<typeof resolveExistingDraft>>, { action: "done" }>
@@ -565,7 +511,7 @@ async function runGroup(
   // A full page load (e.g. resuming via direct URL) wipes the button, so keep re-adding it.
   const keepAlive = setInterval(() => void skipButton.ensure(), 2000);
   try {
-    await runGroupSteps(page, group, excelRef, folderRef, folderChildren, dataDir, table1Headers, scholarshipByChild, allRows, existing, skipButton.skipped, skipButton.splitRequested, skipButton.requestSplit);
+    await runGroupSteps(page, group, store, folderChildren, dataDir, scholarshipByChild, allRows, existing, skipButton.skipped, skipButton.splitRequested, skipButton.requestSplit);
   } finally {
     clearInterval(keepAlive);
     await skipButton.remove();
@@ -575,11 +521,9 @@ async function runGroup(
 async function runGroupSteps(
   page: Awaited<ReturnType<typeof connectToStepUpSession>>["page"],
   group: ReimbursementGroup,
-  excelRef: Awaited<ReturnType<typeof resolveShareLink>>,
-  folderRef: Awaited<ReturnType<typeof resolveShareLink>>,
+  store: FilingStore,
   folderChildren: FolderChild[],
   dataDir: string,
-  table1Headers: string[],
   scholarshipByChild: Map<string, string>,
   allRows: Table1Row[],
   existing: Exclude<Awaited<ReturnType<typeof resolveExistingDraft>>, { action: "done" }>,
@@ -637,19 +581,10 @@ async function runGroupSteps(
   // persisted the moment it's resolved, instead of only living in that file's in-memory
   // categoryOverrides for this process's lifetime: the corrected value is written back to Table1
   // for every affected row, and Table5 (the categories reference table) is renamed to match.
-  const categoryIdx = table1Headers.indexOf("Category");
   const categoryFixHooks: CategoryFixHooks = {
-    onRenamed: (oldPath, newPath) => applyCategoryRename(excelRef, oldPath, newPath),
+    onRenamed: (oldPath, newPath) => store.renameCategory(oldPath, newPath),
     onRowsFixed: async (rowsToFix, newValue) => {
-      for (const r of rowsToFix) {
-        await updateTableRowByIndex(excelRef, TABLE1, r.rowIndex, r.rawValues, table1Headers, { Category: newValue });
-        // Keep this row's own in-memory copies in sync immediately: later write-backs for the same
-        // row (Status/Submitted/Notes, below and in the catch-block error path) reuse this same
-        // rawValues array as updateTableRowByIndex's "currentValues" and would otherwise silently
-        // revert this fix by re-sending the stale Category value alongside their own changes.
-        if (categoryIdx !== -1) r.rawValues[categoryIdx] = newValue;
-        r.data["Category"] = newValue;
-      }
+      await store.fixCategory(rowsToFix, newValue);
     },
   };
 
@@ -699,7 +634,7 @@ async function runGroupSteps(
 
   const uploadReceipt = async () => {
     await browserInfo(page, `Downloading and uploading the receipt "${group.mainReceiptFile}"...`);
-    await downloadItem(folderRef.driveId, mainReceiptChild.id, mainReceiptPath);
+    await store.download(mainReceiptChild.id, mainReceiptPath);
     console.log(`Uploading main receipt "${group.mainReceiptFile}"...`);
     await uploadFile(page, mainReceiptPath);
     receiptUploaded = true;
@@ -744,7 +679,7 @@ async function runGroupSteps(
       console.log(`\nStepUp couldn't read "${group.mainReceiptFile}" at all — opening it for you to check.`);
       const preview = await openLabeledPreview(
         page.context(),
-        folderRef,
+        store,
         mainReceiptChild.id,
         mainReceiptPath,
         group.mainReceiptFile,
@@ -764,18 +699,9 @@ async function runGroupSteps(
       await preview.close();
 
       if (choice === BROKEN) {
-        const today = new Date().toISOString().slice(0, 10);
-        const note = `[${today}] StepUp couldn't read "${group.mainReceiptFile}" and it didn't open properly for you either — needs a real fix in the spreadsheet.`;
-        for (const row of group.rows) {
-          const existingNotes = (row.data["Notes"] ?? "").trim();
-          const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
-          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-            Notes: updatedNotes,
-            Status: MISSING_THINGS_STATUS,
-          });
-        }
-        console.log(`Marked ${group.rows.length} row(s) as "${MISSING_THINGS_STATUS}" — document is broken.`);
-        throw new Error(`"${group.mainReceiptFile}" is broken — marked "${MISSING_THINGS_STATUS}" in the spreadsheet, skipping this group.`);
+        await store.markNeedsAttention(group.rows, `StepUp couldn't read "${group.mainReceiptFile}" and it didn't open properly for you either — needs a real fix in the spreadsheet.`);
+        console.log(`Marked ${group.rows.length} row(s) as needing attention — document is broken.`);
+        throw new Error(`"${group.mainReceiptFile}" is broken — flagged as needing attention, skipping this group.`);
       }
 
       // Confirmed genuinely readable — treat exactly like the ordinary "read fine, found nothing"
@@ -831,17 +757,9 @@ async function runGroupSteps(
       result = await fillItemDetails(page, group.rows, scanOutcome === "notDetected", allRows, categoryFixHooks);
     } catch (err) {
       if (!(err instanceof MissingServiceDateError)) throw err;
-      const today = new Date().toISOString().slice(0, 10);
-      const note = `[${today}] Missing Service Date — required for this category (found on ID ${err.row.data["ID"]}), needs filling in spreadsheet.`;
-      for (const row of group.rows) {
-        const existingNotes = (row.data["Notes"] ?? "").trim();
-        await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-          Notes: existingNotes ? `${existingNotes} | ${note}` : note,
-          Status: MISSING_THINGS_STATUS,
-        });
-      }
+      await store.markNeedsAttention(group.rows, `Missing Service Date — required for this category (found on ID ${err.row.data["ID"]}), needs filling in spreadsheet.`);
       console.log(
-        `\n${err.message}\nMarked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as "${MISSING_THINGS_STATUS}" ` +
+        `\n${err.message}\nMarked ${group.rows.length} row(s) (ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) as needing attention ` +
           `with a note, and skipping to the next group. Fill in the Service Date, set the status back to "Unfiled (Ready to Submit)" and re-run.`
       );
       throw new GroupSkippedMissingDataError(err.message);
@@ -875,7 +793,7 @@ async function runGroupSteps(
         continue;
       }
       const localPath = path.join(dataDir, fileName);
-      await downloadItem(folderRef.driveId, child.id, localPath);
+      await store.download(child.id, localPath);
       additionalPaths.push(localPath);
     }
     await clearBanner(page);
@@ -891,17 +809,8 @@ async function runGroupSteps(
         ]
       );
       if (choice === "note") {
-        const today = new Date().toISOString().slice(0, 10);
-        const note = `[${today}] Missing documentation file(s) referenced: ${missingAdditionalFiles.join(", ")} — needs fixing in spreadsheet.`;
-        for (const row of group.rows) {
-          const existingNotes = (row.data["Notes"] ?? "").trim();
-          const updatedNotes = existingNotes ? `${existingNotes} | ${note}` : note;
-          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-            Notes: updatedNotes,
-            Status: MISSING_THINGS_STATUS,
-          });
-        }
-        console.log(`Marked ${group.rows.length} row(s) as "${MISSING_THINGS_STATUS}" and noted the documentation issue.`);
+        await store.markNeedsAttention(group.rows, `Missing documentation file(s) referenced: ${missingAdditionalFiles.join(", ")} — needs fixing in spreadsheet.`);
+        console.log(`Marked ${group.rows.length} row(s) as needing attention and noted the documentation issue.`);
         throw new Error(`Group stopped — documentation issue noted in spreadsheet for missing file(s): ${missingAdditionalFiles.join(", ")}`);
       }
       if (choice !== "proceed") {
@@ -995,13 +904,7 @@ async function runGroupSteps(
       }
       if (seq) {
         draftSeq = seq;
-        const idCol = table1Headers.indexOf("Reimbursement ID");
-        for (const row of group.rows) {
-          if ((row.data["Reimbursement ID"] ?? "").trim() === seq) continue;
-          await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, { "Reimbursement ID": seq });
-          if (idCol !== -1) row.rawValues[idCol] = seq;
-          row.data["Reimbursement ID"] = seq;
-        }
+        await store.recordDraftNumber(group.rows.filter((row) => (row.data["Reimbursement ID"] ?? "").trim() !== seq), seq);
         console.log(`[draft] Recorded Reimbursement #${seq} on ${group.rows.length} row(s).`);
       }
     }
@@ -1014,17 +917,9 @@ async function runGroupSteps(
   });
   const skipGroupForNow = async (): Promise<never> => {
     if (splitRequested()) {
-      const today = new Date().toISOString().slice(0, 10);
-      const note = `[${today}] Needs to be split — the receipt has multiple items, so this row must be itemized into separate rows in the spreadsheet.`;
-      for (const row of group.rows) {
-        const existingNotes = (row.data["Notes"] ?? "").trim();
-        await updateTableRowByIndex(excelRef, TABLE1, row.rowIndex, row.rawValues, table1Headers, {
-          Notes: existingNotes ? `${existingNotes} | ${note}` : note,
-          Status: MISSING_THINGS_STATUS,
-        });
-      }
+      await store.markNeedsAttention(group.rows, "Needs to be split — the receipt has multiple items, so this row must be itemized into separate rows in the spreadsheet.");
       console.log(
-        `\nYou flagged this group as needing to be split. Marked ${group.rows.length} row(s) (ID ${groupRowIds.join(", ")}) as "${MISSING_THINGS_STATUS}" ` +
+        `\nYou flagged this group as needing to be split. Marked ${group.rows.length} row(s) (ID ${groupRowIds.join(", ")}) as needing attention ` +
           `with an itemization note, and skipping to the next group. Split the row in the spreadsheet, set the status back to "Unfiled (Ready to Submit)" and re-run.`
       );
       throw new GroupSkippedMissingDataError("Needs to be split (itemization required).");
@@ -1101,9 +996,9 @@ async function runGroupSteps(
     throw new Error(`Submitted as Reimbursement #${reimbursementId}, but no item details were ever filled in by this run — update the spreadsheet rows manually.`);
   }
 
-  await markRowsSubmitted(excelRef, table1Headers, matchedRows, reimbursementId, new Date().toISOString().slice(0, 10));
+  await store.markSubmitted(matchedRows, reimbursementId, new Date().toISOString().slice(0, 10));
   await deleteDraftRecord(groupRowIds);
-  console.log(`Updated ${matchedRows.length} row(s) in the spreadsheet.`);
+  console.log(`Recorded ${matchedRows.length} item(s) in ${store.describe}.`);
 
   // Deliberately not navigating away from the confirmation page here — it stays up so you can see
   // it until the next group is actually selected, at which point ensureOnNewReimbursementForm()

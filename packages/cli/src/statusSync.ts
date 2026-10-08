@@ -16,7 +16,7 @@ interface ApiLineItem {
   ItemAmount: number;
 }
 
-interface ApiResponse {
+export interface ApiResponse {
   Results: Array<{ LineItems: ApiLineItem[] }>;
 }
 
@@ -163,6 +163,11 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
  * for 2 hours. Only a response with real data to sync counts as a sync.
  */
 export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): void {
+  attachStatusSyncListenerWith(page, (body) => syncStatusesFromApiResponse(excelRef, body));
+}
+
+/** Same throttled listener, with the way the statuses get applied supplied by the caller (spreadsheet or ledger). */
+export function attachStatusSyncListenerWith(page: Page, apply: (body: ApiResponse) => Promise<number>): void {
   page.on("response", async (response) => {
     if (!API_URL_PATTERN.test(response.url())) return;
     if (Date.now() - (await getLastSyncAt()) < THROTTLE_MS) return;
@@ -170,7 +175,7 @@ export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): vo
     try {
       const body = (await response.json()) as ApiResponse;
       if (!body.Results || body.Results.length === 0) return;
-      const updated = await syncStatusesFromApiResponse(excelRef, body);
+      const updated = await apply(body);
       await setLastSyncAt(Date.now());
       console.log(`\n[status sync] Updated ${updated} row(s) from the reimbursements list.`);
     } catch (err) {

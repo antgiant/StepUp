@@ -1,0 +1,178 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import type { Page } from "playwright";
+import {
+  applyStepUpStatuses,
+  filingGroups,
+  recordCategoryFix,
+  recordDraftNumber,
+  recordNeedsAttention,
+  recordSubmitted,
+  redactedCopyOf,
+  resolveReference,
+  validateCategoryReference,
+  type CategoryReference,
+  type DocumentRec,
+  type FilingGroup,
+  type ResolvedReference,
+  type RulesContext,
+} from "@step-up/shared";
+import { downloadItem, type FolderChild } from "../graph/onedrive.js";
+import type { OpenedYear } from "../ledgerYear.js";
+import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
+import { attachCategoryTreeListener } from "../categorySync.js";
+import { attachStatusSyncListenerWith } from "../statusSync.js";
+import type { FilingStore } from "./store.js";
+
+const REFERENCE_FILE = path.resolve(process.cwd(), "packages/web/public/reference/categories.json");
+
+/** The published category tree, if present and valid; without it every category counts as known (as in the web app). */
+function loadReference(): CategoryReference | undefined {
+  try {
+    const data: unknown = JSON.parse(readFileSync(REFERENCE_FILE, "utf-8"));
+    return validateCategoryReference(data).length === 0 ? (data as CategoryReference) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Files from the ledger: documents are found by OneDrive item id, and every result is appended to this device's event log. */
+export class LedgerStore implements FilingStore {
+  readonly kind = "ledger" as const;
+  readonly describe: string;
+  private readonly drive: string;
+  private docs = new Map<string, DocumentRec>();
+  private groups: FilingGroup[] = [];
+
+  constructor(private readonly opened: OpenedYear) {
+    this.describe = `the ${opened.year.label} ledger`;
+    this.drive = opened.driveId;
+  }
+
+  private get ledger() {
+    return this.opened.ledger;
+  }
+
+  private rules(): RulesContext {
+    const base = loadReference();
+    const ref: ResolvedReference | undefined = base ? resolveReference(base, this.ledger.state.categories) : undefined;
+    return {
+      today: new Date().toISOString().slice(0, 10),
+      // Ids from older imports that the tree does not know stay accepted, as in the web app.
+      category: (id) => {
+        if (!ref) return { id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true };
+        return ref.category(id) ?? (id.startsWith("legacy-cat-") ? { id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true } : undefined);
+      },
+    };
+  }
+
+  private itemIds(rows: Table1Row[]): string[] {
+    return rows.map((r) => r.data["ID"]!).filter(Boolean);
+  }
+
+  async loadRows(): Promise<Table1Row[]> {
+    await this.ledger.refresh();
+    const { groups, blocked } = filingGroups(this.ledger.state, this.rules());
+    this.groups = groups;
+    this.docs.clear();
+    const rows: Table1Row[] = [];
+    for (const g of groups) {
+      for (const d of [g.receipt, ...g.additionalDocs]) this.docs.set(d.filename ?? d.id, d);
+      for (const r of g.rows) {
+        rows.push({ rowIndex: -1, data: r.data, rawValues: [], documentationFiles: [g.receipt.filename ?? g.receipt.id, ...g.additionalDocs.map((d) => d.filename ?? d.id)] });
+      }
+    }
+    if (blocked.length > 0) {
+      console.log(`\n${blocked.length} item(s) are not ready to file:`);
+      for (const b of blocked.slice(0, 15)) console.log(`  ${b.item.description ?? b.item.id}: ${b.reasons.map((r) => r.message).join("; ")}`);
+      if (blocked.length > 15) console.log(`  ... and ${blocked.length - 15} more (see the web app's list).`);
+    }
+    for (const g of groups) {
+      for (const name of g.unredactedStatements) console.log(`\nWarning: "${name}" would be sent as it is (no redacted copy). Make one in the web app first if it shows other charges.`);
+    }
+    return rows;
+  }
+
+  async buildGroups(rows: Table1Row[]): Promise<ReimbursementGroup[]> {
+    const byId = new Map(rows.map((r) => [r.data["ID"]!, r]));
+    return this.groups.map((g) => ({
+      child: g.child,
+      mainReceiptFile: g.receipt.filename ?? g.receipt.id,
+      rows: g.rows.map((r) => byId.get(r.itemId)!).filter(Boolean),
+      additionalFiles: g.additionalDocs.map((d) => d.filename ?? d.id),
+    }));
+  }
+
+  async files(): Promise<FolderChild[]> {
+    const seen = new Map<string, DocumentRec>();
+    for (const [name, doc] of this.docs) {
+      const clash = seen.get(name);
+      if (clash && clash.id !== doc.id) console.warn(`Warning: two different documents are both called "${name}"; the first one will be used.`);
+      seen.set(name, doc);
+    }
+    return [...this.docs.entries()].flatMap(([name, d]) => (d.driveItemId ? [{ id: d.driveItemId, name, isFolder: false, size: d.sizeBytes ?? 0, ...(d.webUrl ? { webUrl: d.webUrl } : {}) }] : []));
+  }
+
+  download(fileId: string, destPath: string): Promise<void> {
+    return downloadItem(this.drive, fileId, destPath);
+  }
+
+  async childScholarships(): Promise<Map<string, string>> {
+    return new Map(Object.values(this.ledger.state.children).flatMap((c) => (c.name && c.scholarship ? [[c.name, c.scholarship] as [string, string]] : [])));
+  }
+
+  async eligibilityMismatches(): Promise<ScholarshipMismatch[]> {
+    return []; // already a readiness rule: an item whose category is ineligible for its child is not offered at all
+  }
+
+  async checkReady(): Promise<void> {
+    if (!this.ledger.store) throw new Error("No ledger store.");
+  }
+
+  private async save(): Promise<void> {
+    await this.ledger.flush();
+  }
+
+  async markNeedsAttention(rows: Table1Row[], note: string): Promise<void> {
+    recordNeedsAttention(this.ledger, this.itemIds(rows), note, new Date().toISOString().slice(0, 10));
+    await this.save();
+  }
+
+  async markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string): Promise<void> {
+    recordSubmitted(this.ledger, this.itemIds(rows), { reimbursementId, submittedAt: submittedDate });
+    await this.save();
+  }
+
+  async recordDraftNumber(rows: Table1Row[], reimbursementId: string): Promise<void> {
+    recordDraftNumber(this.ledger, this.itemIds(rows), reimbursementId);
+    for (const r of rows) r.data["Reimbursement ID"] = reimbursementId;
+    await this.save();
+  }
+
+  async fixCategory(rows: Table1Row[], newValue: string): Promise<void> {
+    recordCategoryFix(this.ledger, this.itemIds(rows), newValue);
+    for (const r of rows) r.data["Category"] = newValue;
+    await this.save();
+  }
+
+  async renameCategory(oldPath: string, newPath: string): Promise<void> {
+    console.log(`[category] StepUp lists "${newPath}" where we had "${oldPath}". Items were updated; run "npm run reference:build" to refresh the shared list.`);
+  }
+
+  attachListeners(page: Page): void {
+    attachStatusSyncListenerWith(page, async (body) => {
+      const lineItems = (body.Results ?? []).flatMap((r) => r.LineItems ?? []);
+      const changed = applyStepUpStatuses(this.ledger, lineItems);
+      await this.save();
+      return changed;
+    });
+    attachCategoryTreeListener(page, undefined);
+    // Pre-authorization status is not part of the ledger yet (plan: Pre-Auth is its own flow), so it is not synced here.
+  }
+
+  async finish(): Promise<void> {
+    await this.save();
+  }
+}
+
+export { redactedCopyOf };

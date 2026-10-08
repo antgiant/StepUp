@@ -117,3 +117,16 @@ Everything year-specific lives in `.env`, not code:
 - Applicant/child PII in the strict sense (SSNs, addresses, DOBs — none of which this spreadsheet actually stores) is never printed. Item descriptions, dollar amounts, vendor names, and filenames *are* printed to the terminal where relevant (e.g. to confirm an item match) — the same information already visible in your own spreadsheet, needed for the tool to be usable.
 - Writes to the spreadsheet go through the Graph Excel API's row-level update, which only ever touches the specific column(s) being set — never a full-file re-upload, so concurrent edits from other collaborators aren't at risk of being clobbered or the file corrupted.
 - `.env`, `.cache/` (your auth token cache), `.chrome-profile/`, and `data/` (downloaded receipts, temporary) are all gitignored — don't commit them.
+
+## Filing from the ledger (new)
+
+`npm start` still files from the Excel workbook exactly as before. To file from a ledger year instead:
+
+```
+npm start -- --ledger=2026-2027
+```
+
+- Items that are **ready** (per the same readiness rules the web app shows) are grouped one per StepUp submission (a purchase x a child) and filed through the same supervised browser flow. Receipts and additional documents are found by their OneDrive item ids; if a statement has a redacted copy, that copy is what gets uploaded (and you are warned about any statement sent as it is).
+- Everything the run learns is recorded in the ledger instead of the spreadsheet: submitted items (reimbursement number, line number, date), items that could not be filed (held with the reason in their notes, so they are not offered again until a person clears the hold in the web app), draft numbers (so a crash loses nothing), category names corrected from StepUp's live list, and statuses/paid amounts seen on StepUp's reimbursements list.
+- Pre-authorization syncing and the category table sync are spreadsheet-only; in ledger mode the category cache is kept and `npm run reference:build` folds it into the shared category list.
+- Nothing is written to OneDrive until a step in the flow actually records something, and a real submission still needs you to click the final Submit in StepUp.

@@ -35,5 +35,7 @@ export * from "./pdf/imagePdf.js";
 export * from "./statements/match.js";
 export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
+export * from "./submit/filing.js";
+export * from "./submit/record.js";
 export * from "./graph/browse.js";
 export * from "./workspace/pointer.js";
