@@ -24,6 +24,8 @@ import {
   reallocateTax,
   observeActivity,
   yearSummary,
+  itemsBeingFiled,
+  displayStatus,
   parseStatementText,
   saveStatement,
   matchStatement,
@@ -501,6 +503,49 @@ function header(): string {
     ${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
 }
 
+/** Who is filing which items right now (from the CLI's claims). Empty unless someone is mid-run. */
+const filingNow = () => itemsBeingFiled(ledger.state, Date.now());
+const clockTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+/** Banner on the list page: purchases whose items are being filed this minute, so they are not mistaken for idle ones. */
+function filingBanner(): string {
+  const active = filingNow();
+  const ids = Object.keys(active);
+  if (ids.length === 0) return "";
+  const state = ledger.state;
+  const byPurchase = new Map<string, { actor: string; since: string; count: number }>();
+  for (const id of ids) {
+    const pid = state.items[id]?.purchaseId;
+    if (!pid) continue;
+    const have = byPurchase.get(pid);
+    byPurchase.set(pid, { actor: active[id]!.actor, since: have && have.since < active[id]!.claimedAt ? have.since : active[id]!.claimedAt, count: (have?.count ?? 0) + 1 });
+  }
+  const rows = [...byPurchase.entries()].map(([pid, f]) => `<li><span><strong>${esc(f.actor)}</strong> is filing <button data-open="${esc(pid)}" class="link">${esc(purchaseLabel(pid))}</button> <small>(${f.count} item(s), since ${esc(clockTime(f.since))})</small></span></li>`);
+  return `<section class="filing-banner"><div class="filing-head"><strong>Being filed with StepUp right now</strong><button id="refresh-now">Refresh</button></div>
+    <ul>${rows.join("")}</ul><p class="note">These are in the middle of being submitted from the command line. They are not idle: wait for them to finish before changing them. This list refreshes by itself every minute.</p></section>`;
+}
+
+/** The StepUp draft (if any) covering these items, so "ready" but not yet submitted has an explanation. */
+function draftNote(itemIds: string[]): string {
+  const want = new Set(itemIds);
+  const d = Object.values(ledger.state.drafts).find((x) => x.itemIds?.some((i) => want.has(i)));
+  if (!d) return "";
+  const number = d.sequenceNumber ? `Reimbursement #${esc(d.sequenceNumber)}` : "a draft";
+  return `<p class="note">A StepUp draft (${number}) was started for these items${d.actor ? ` by ${esc(d.actor)}` : ""}${d.lastStep ? `, last at the <em>${esc(d.lastStep)}</em> step` : ""}${d.skipped ? "; it was set aside part-way" : ""}. It is not submitted yet; the next filing run offers to resume it.</p>`;
+}
+
+let claimPoll: ReturnType<typeof setTimeout> | undefined;
+/** While anything is being filed, look again every minute so the page does not show stale "ready" items. */
+function scheduleClaimPoll(): void {
+  if (claimPoll || !workspace || Object.keys(filingNow()).length === 0) return;
+  claimPoll = setTimeout(() => {
+    claimPoll = undefined;
+    const ws = workspace;
+    if (ws && !ws.fromCache && pending === 0 && document.visibilityState === "visible") void refreshInBackground(ws).finally(scheduleClaimPoll);
+    else scheduleClaimPoll();
+  }, 60_000);
+}
+
 function queueView(): string {
   const state = ledger.state;
   const entries = buildQueue(state, ctx());
@@ -508,6 +553,7 @@ function queueView(): string {
   const childForm = `<details><summary>Children (${children.length})</summary>
     <ul>${children.map((c) => `<li>${esc(c.name)} ${c.scholarship ? `<small>${esc(c.scholarship)}</small>` : ""}</li>`).join("")}</ul>
     <form id="add-child" class="row"><input name="name" placeholder="Name" required><input name="scholarship" placeholder="Scholarship (e.g. FES-UA)"><button>Add child</button></form></details>`;
+  const banner = filingBanner();
   const uploads = workspace
     ? ` <label class="btn">Add receipt files<input type="file" id="upload" multiple accept="application/pdf,image/*" hidden></label>
         <label class="btn">Take a photo<input type="file" id="photo" accept="image/*" capture="environment" hidden></label>`
@@ -517,7 +563,7 @@ function queueView(): string {
   const archivedList = archived.length
     ? `<details><summary>Archived purchases (${archived.length})</summary><ul class="queue">${archived.map((p) => `<li class="q"><span>${esc(p.vendor ?? state.documents[p.receiptDocumentId ?? ""]?.filename ?? "Untitled purchase")} <small>${esc(p.date)}</small></span><button data-unarchive="${esc(p.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
-  if (entries.length === 0) return `${childForm}${startBlank}<p>Nothing needs attention.</p>${archivedList}`;
+  if (entries.length === 0) return `${banner}${childForm}${startBlank}<p>Nothing needs attention.</p>${archivedList}`;
   const rows = entries.map((e) => {
     const sugg = (e.suggestions ?? []).map((s) => {
       const name = s.target.kind === "purchase" ? state.purchases[s.target.id]?.vendor ?? s.target.id : state.items[s.target.id]?.description ?? s.target.id;
@@ -530,7 +576,7 @@ function queueView(): string {
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}<br><small>${esc(e.reasons.join("; "))}</small></div><div class="actions">${actions}</div></li>`;
   });
-  return `${childForm}${startBlank}<h2>Needs your attention (${entries.length})</h2><ul class="queue">${rows.join("")}</ul>${archivedList}`;
+  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${entries.length})</h2><ul class="queue">${rows.join("")}</ul>${archivedList}`;
 }
 
 function summaryView(): string {
@@ -556,6 +602,7 @@ function summaryView(): string {
     <h3>Awards</h3>
     ${rows.length ? `<table><thead><tr><th>Student</th><th>Award</th><th>Paid</th><th>Approved</th><th>Pending</th><th>Remaining</th><th>Not yet filed</th></tr></thead><tbody>${rows.join("")}</tbody></table>
       <p class="note">Remaining = award &minus; paid &minus; approved &minus; pending. "Not yet filed" is informational and not counted against the award.</p>` : `<p>Add a student on the list page first.</p>`}
+    ${Object.keys(filingNow()).length ? `<p class="banner">${Object.keys(filingNow()).length} item(s) are being filed with StepUp right now (see the list page).</p>` : ""}
     <h3>Items by status</h3>
     ${counts.length ? `<ul class="queue">${counts.map(([k, n]) => `<li><span>${esc(k)}</span><strong>${n}</strong></li>`).join("")}</ul>` : "<p>No items yet.</p>"}`;
 }
@@ -695,11 +742,19 @@ function purchaseView(id: string, draft = false): string {
   const next = suggestNextItem(state, id);
   const children = Object.values(state.children);
   const money = (c: number | undefined) => (c === undefined ? "" : (c / 100).toFixed(2));
+  const filing = filingNow();
+  const statusCell = (i: (typeof items)[number], ev: ReturnType<typeof evaluateItem>): string => {
+    const mine = filing[i.id];
+    if (mine) return `<span class="badge filing">Being filed by ${esc(mine.actor)}</span>`;
+    const label = displayStatus(i, ev, ctx(), state.settings["year"]?.submissionDeadline);
+    if (i.stepUpStatus || i.submissionId) return `<span class="ok">${esc(label)}</span>`;
+    return ev.readiness === "ready" ? `<span class="ok">Ready to file</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`;
+  };
   const rows = items.map((i) => {
     const ev = evaluateItem(state, i.id, ctx());
     return `<tr><td>${esc(state.children[i.childId ?? ""]?.name ?? "?")}</td><td>${esc(i.description)}</td><td class="num">${formatCents(i.amountCents)}</td>
       <td class="num">${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " <small>est.</small>" : ""}</td><td>${esc(categoryLabel(i))}</td>
-      <td>${ev.readiness === "ready" ? `<span class="ok">Ready</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`}</td>
+      <td>${statusCell(i, ev)}</td>
       <td><button data-dup="${esc(i.id)}">Duplicate</button></td></tr>`;
   });
   if (draft) {
@@ -717,7 +772,13 @@ function purchaseView(id: string, draft = false): string {
   const categories = reference()
     ? reference()!.choices.map((c) => c.label)
     : [...new Set(Object.values(state.items).map((i) => categoryLabel(i)).filter(Boolean))];
+  const filers = [...new Set(items.map((i) => filing[i.id]?.actor).filter((a): a is string => Boolean(a)))];
+  const filingNotice = filers.length
+    ? `<section class="filing-banner"><div class="filing-head"><strong>${esc(filers.join(" and "))} ${filers.length > 1 ? "are" : "is"} filing this purchase with StepUp right now</strong><button id="refresh-now">Refresh</button></div>
+        <p class="note">Wait for the run to finish before changing it; edits made now may not be picked up. This page refreshes by itself every minute.</p></section>`
+    : "";
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
+  ${filingNotice}${draftNote(items.map((i) => i.id))}
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
   ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button></p>` : ""}
   ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
@@ -809,6 +870,7 @@ function render(): void {
   const onboarding = account && !workspace;
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + redactionPanel() + previewPanel() + body;
+  scheduleClaimPoll();
 }
 
 function go(next: View): void {
@@ -865,6 +927,9 @@ root.addEventListener("click", async (ev) => {
       a.click();
       URL.revokeObjectURL(url);
     }, "Preparing export…");
+  } else if (t.id === "refresh-now") {
+    if (workspace) await refreshInBackground(workspace);
+    render();
   } else if (t.id === "update-mirror") {
     await guarded(async () => {
       const result = await publishMirrorNow();

@@ -73,3 +73,19 @@ export function renewClaims(ledger: Ledger, itemIds: string[], me: ClaimOwner, n
     if (ledger.state.claims[id] && !ledger.state.claims[id]!.released) ledger.set("claim", id, { claimedAt }, { label: "claim.renewed" });
   }
 }
+
+export interface FilingActivity {
+  actor: string;
+  claimedAt: string;
+}
+
+/** Every item someone is filing right now (an active, winning claim), by item id. Used to show "being filed by ..." so a ready item that is mid-filing is not mistaken for an idle one. */
+export function itemsBeingFiled(state: LedgerState, now: number): Record<string, FilingActivity> {
+  const out: Record<string, FilingActivity> = {};
+  for (const c of Object.values(state.claims)) {
+    if (!c.itemId || out[c.itemId]) continue;
+    const win = winningClaim(state, c.itemId, now);
+    if (win) out[c.itemId] = { actor: win.actor ?? "someone", claimedAt: win.claimedAt! };
+  }
+  return out;
+}

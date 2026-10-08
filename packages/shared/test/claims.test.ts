@@ -8,6 +8,7 @@ import {
   claimItems,
   claimedByOthers,
   deleteDraft,
+  itemsBeingFiled,
   findDraft,
   releaseItems,
   saveDraft,
@@ -82,5 +83,22 @@ describe("drafts in the ledger", () => {
     expect(findDraft(a.state, ["i1", "i2"])).toBeUndefined();
     saveDraft(a, { ...record, guid: "99999999-2222-3333-4444-555555555555" }, "alice", new Date("2026-10-21T10:00:00Z"));
     expect(findDraft(a.state, ["i1", "i2"])?.guid).toBe("99999999-2222-3333-4444-555555555555");
+  });
+});
+
+describe("itemsBeingFiled", () => {
+  it("lists items with an active winning claim, and drops released and expired ones", async () => {
+    const { a, b } = pair();
+    const t0 = 1_700_000_000_000;
+    await claimItems(a, ["i1", "i2"], alice, () => t0);
+    await b.refresh();
+    expect(itemsBeingFiled(b.state, t0 + 1000)).toEqual({
+      i1: { actor: "alice@example.com", claimedAt: new Date(t0).toISOString() },
+      i2: { actor: "alice@example.com", claimedAt: new Date(t0).toISOString() },
+    });
+    await releaseItems(a, ["i1"], alice);
+    await b.refresh();
+    expect(Object.keys(itemsBeingFiled(b.state, t0 + 1000))).toEqual(["i2"]);
+    expect(itemsBeingFiled(b.state, t0 + CLAIM_TTL_MS + 1)).toEqual({});
   });
 });
