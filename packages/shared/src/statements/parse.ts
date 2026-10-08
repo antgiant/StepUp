@@ -8,6 +8,8 @@ export interface ParsedStatement extends StatementData {
 }
 
 export interface ParseOptions {
+  /** Subtracted from every row's confidence; used for text read by OCR, which is less reliable than a PDF text layer. */
+  confidencePenalty?: number;
   /** Year to assume for dates that carry none when the statement has no readable period (default: this year). */
   defaultYear?: number;
 }
@@ -42,7 +44,7 @@ export function parseStatementText(text: string, opts: ParseOptions = {}): Parse
   const warnings: string[] = [];
   const { refYear, refMonth, hasPeriod, ...header } = readStatementHeader(lines, text, opts);
   if (!hasPeriod) warnings.push("Could not find the statement period; dates without a year are assumed to be in " + refYear + ".");
-  const { rows, unparsedLines } = readRows(lines, { refYear, refMonth, hasPeriod });
+  const { rows, unparsedLines } = readRows(lines, { refYear, refMonth, hasPeriod, penalty: opts.confidencePenalty });
   const transactions = rows.map((r) => r.txn);
   if (transactions.length === 0) warnings.push("No transactions were found. The statement can still be attached by hand.");
   return { ...header, transactions, unparsedLines, warnings };
@@ -93,7 +95,7 @@ function toIso(raw: string, refYear: number, refMonth = 12): string | undefined 
  * Reads transaction rows out of lines of text. `index` is the position in `lines`, so a caller that has the geometry of
  * each line (redaction) can tell which line is which charge. Ids depend only on the rows' content and order.
  */
-export function readRows(lines: string[], ref: { refYear: number; refMonth: number; hasPeriod: boolean }): { rows: Array<{ index: number; txn: StatementTransaction }>; unparsedLines: string[] } {
+export function readRows(lines: string[], ref: { refYear: number; refMonth: number; hasPeriod: boolean; penalty?: number }): { rows: Array<{ index: number; txn: StatementTransaction }>; unparsedLines: string[] } {
   const rows: Array<{ index: number; txn: StatementTransaction }> = [];
   const unparsedLines: string[] = [];
   const seen = new Map<string, number>();
@@ -115,6 +117,7 @@ export function readRows(lines: string[], ref: { refYear: number; refMonth: numb
     let confidence = 0.95;
     if (!hasYear && !ref.hasPeriod) confidence -= 0.2;
     if (descriptor.length < 3) confidence -= 0.3;
+    confidence -= ref.penalty ?? 0;
     const key = `${date}|${amountCents}|${descriptor.toLowerCase()}`;
     const nth = (seen.get(key) ?? 0) + 1;
     seen.set(key, nth);
@@ -127,7 +130,7 @@ export function readRows(lines: string[], ref: { refYear: number; refMonth: numb
         descriptor,
         amountCents,
         kind: classify(descriptor, amountCents),
-        confidence: Math.round(confidence * 100) / 100,
+        confidence: Math.max(0, Math.round(confidence * 100) / 100),
       },
     });
   });

@@ -1,3 +1,4 @@
+import { ocrCanvas } from "./ocr.js";
 import { buildImagePdf, positionedLines, type ImagePage, type PositionedLine, type RedactionPlan, type TextItem } from "@step-up/shared/web";
 
 /** pdf.js is large, so it is loaded only when a PDF is read. Nothing is uploaded: everything happens on this device. */
@@ -9,25 +10,52 @@ async function openPdf(file: Blob) {
   return { task, doc: await task.promise };
 }
 
-/** The PDF's text layer as positioned lines, one list per page. A scanned PDF has no text layer and yields empty pages. */
-export async function pdfLines(file: Blob): Promise<PositionedLine[][]> {
+/** Pages with fewer characters than this have no real text layer (a scan or a photo saved as PDF) and are read with OCR. */
+const MIN_TEXT_CHARS = 20;
+const OCR_SCALE = 2.5;
+
+/**
+ * The PDF's text as positioned lines, one list per page. Pages without a text layer are rendered and read with OCR;
+ * `ocr` says whether that happened, because OCR text is less reliable and callers should flag it for checking.
+ */
+export async function pdfLines(file: Blob): Promise<{ pages: PositionedLine[][]; ocr: boolean }> {
   const { task, doc } = await openPdf(file);
   try {
     const pages: PositionedLine[][] = [];
+    let ocr = false;
     for (let n = 1; n <= doc.numPages; n++) {
-      const content = await (await doc.getPage(n)).getTextContent();
+      const page = await doc.getPage(n);
+      const content = await page.getTextContent();
       const items: TextItem[] = content.items.flatMap((i) => ("str" in i ? [{ str: i.str, x: i.transform[4] as number, y: i.transform[5] as number, width: i.width, height: i.height }] : []));
-      pages.push(positionedLines(items));
+      if (items.reduce((sum, i) => sum + i.str.trim().length, 0) >= MIN_TEXT_CHARS) {
+        pages.push(positionedLines(items));
+        continue;
+      }
+      ocr = true;
+      const viewport = page.getViewport({ scale: OCR_SCALE });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      await page.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport }).promise;
+      pages.push(
+        (await ocrCanvas(canvas)).map((l) => {
+          // Image pixels (y down) back to PDF points (y up), so redaction boxes line up with the page.
+          const [ax, ay] = viewport.convertToPdfPoint(l.x0, l.y1) as [number, number];
+          const [bx, by] = viewport.convertToPdfPoint(l.x1, l.y0) as [number, number];
+          return { text: l.text, x0: Math.min(ax, bx), x1: Math.max(ax, bx), y0: Math.min(ay, by), y1: Math.max(ay, by) };
+        })
+      );
     }
-    return pages;
+    return { pages, ocr };
   } finally {
     await task.destroy();
   }
 }
 
 /** The PDF's text, line by line (pages separated by a blank line). */
-export async function pdfToText(file: Blob): Promise<string> {
-  return (await pdfLines(file)).map((lines) => lines.map((l) => l.text).join("\n")).join("\n\n");
+export async function pdfToText(file: Blob): Promise<{ text: string; ocr: boolean }> {
+  const { pages, ocr } = await pdfLines(file);
+  return { text: pages.map((lines) => lines.map((l) => l.text).join("\n")).join("\n\n"), ocr };
 }
 
 /**

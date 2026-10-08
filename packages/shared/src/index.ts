@@ -28,6 +28,7 @@ export * from "./workspace/ingest.js";
 export * from "./workspace/upload.js";
 export * from "./reference/categories.js";
 export * from "./statements/parse.js";
+export * from "./receipts/read.js";
 export * from "./statements/lines.js";
 export * from "./statements/redact.js";
 export * from "./pdf/imagePdf.js";

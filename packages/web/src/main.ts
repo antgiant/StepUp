@@ -34,6 +34,7 @@ import {
   learnAlias,
   purchaseTotalCents,
   planRedaction,
+  readReceiptText,
   redactedCopyOf,
   type RedactionPlan,
   type StatementData,
@@ -60,6 +61,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, readCache, readOutbox, writeCache, writeOutbox } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
+import { onOcrProgress, ocrImage } from "./ocr.js";
 import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
@@ -152,7 +154,9 @@ async function makeRedaction(docId: string): Promise<void> {
   const keep = new Set(Object.values(ledger.state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId!));
   if (keep.size === 0) throw new Error("Link at least one charge to a purchase first; only linked charges stay visible.");
   note("Finding what to keep…");
-  const plan = planRedaction(await pdfLines(got.blob), { keepTransactionIds: keep });
+  const read = await pdfLines(got.blob);
+  const plan = planRedaction(read.pages, { keepTransactionIds: keep });
+  if (read.ocr) plan.warnings.push("Some pages were read with OCR, so the boxes may be less exact. Check every page carefully.");
   if (plan.keptTransactions === 0) throw new Error(plan.warnings.join(" ") || "Nothing on this statement could be kept.");
   note("Blacking out the rest…");
   const bytes = await renderRedactedPdf(got.blob, plan);
@@ -257,6 +261,12 @@ function paintBusy(): void {
   busyEl.hidden = false;
   document.body.setAttribute("aria-busy", "true");
 }
+onOcrProgress(({ status, progress }) => {
+  if (status === "recognizing text") note(`Reading text on this device… ${Math.round(progress * 100)}%`);
+  else if (status.includes("core")) note("Loading the text-reading engine (first time only)…");
+  else if (status.includes("language") || status.includes("traineddata")) note("Loading language data (first time only)…");
+});
+
 /** Names the current operation; shown whenever no more specific request is in flight. */
 function note(label: string): void {
   fallbackLabel = label;
@@ -610,17 +620,59 @@ function statementReview(id: string): string {
 /** Downloads a statement PDF, reads its text on this device, saves the charges and links the confident matches. */
 async function readStatement(docId: string): Promise<void> {
   const got = await loadDocument(docId);
-  if (got.kind !== "pdf") throw new Error("Only PDF statements can be read automatically. Attach other files to a purchase by hand.");
   note("Reading the statement on this device…");
-  const parsed = parseStatementText(await pdfToText(got.blob));
+  let text: string;
+  let ocr = false;
+  if (got.kind === "pdf") ({ text, ocr } = await pdfToText(got.blob));
+  else if (got.kind === "image") ({ text } = await ocrImage(got.blob)), (ocr = true);
+  else throw new Error("This file type can't be read. Attach it to a purchase by hand.");
+  const parsed = parseStatementText(text, { confidencePenalty: ocr ? 0.2 : 0 });
   if (parsed.transactions.length === 0) {
-    status = parsed.warnings.join(" ") + " If this is a scanned PDF it has no text to read.";
+    status = parsed.warnings.join(" ") + (ocr ? " The text was read by OCR and may be too unclear." : "");
     return;
   }
   saveStatement(ledger, docId, parsed);
   const auto = linkConfidentMatches(ledger, docId, matchStatement(ledger.state, docId, parsed));
   await ledger.flush();
-  status = `Read ${parsed.transactions.length} line(s); linked ${auto} charge(s) automatically.${parsed.unparsedLines.length ? ` ${parsed.unparsedLines.length} line(s) could not be read.` : ""}`;
+  status = `Read ${parsed.transactions.length} line(s)${ocr ? " using OCR (check each row)" : ""}; linked ${auto} charge(s) automatically.${parsed.unparsedLines.length ? ` ${parsed.unparsedLines.length} line(s) could not be read.` : ""}`;
+}
+
+/** The text of a receipt or other document: its text layer, or OCR for scans and photos. Kept for the session. */
+const documentTexts = new Map<string, { text: string; ocr: boolean }>();
+async function documentText(docId: string): Promise<{ text: string; ocr: boolean }> {
+  const cached = documentTexts.get(docId);
+  if (cached) return cached;
+  const got = await loadDocument(docId);
+  note("Reading the receipt on this device…");
+  let read: { text: string; ocr: boolean };
+  if (got.kind === "pdf") read = await pdfToText(got.blob);
+  else if (got.kind === "image") read = { text: (await ocrImage(got.blob)).text, ocr: true };
+  else throw new Error("This file type can't be read. Fill in the details by hand.");
+  documentTexts.set(docId, read);
+  return read;
+}
+
+/** Fills only the blank fields of a purchase from its receipt, and records whether the receipt itself shows payment. */
+async function readReceipt(purchaseId: string): Promise<void> {
+  const p = ledger.state.purchases[purchaseId];
+  const docId = p?.receiptDocumentId;
+  if (!p || !docId) return;
+  const { text, ocr } = await documentText(docId);
+  const r = readReceiptText(text);
+  const fields: Record<string, string | number> = {};
+  if (!p.vendor && r.vendor) fields["vendor"] = r.vendor;
+  if (!p.date && r.date) fields["date"] = r.date;
+  if (!p.invoiceNo && r.invoiceNo) fields["invoiceNo"] = r.invoiceNo;
+  if (p.orderTotalCents === undefined && r.totalCents !== undefined) fields["orderTotalCents"] = r.totalCents;
+  if (p.taxShippingTotalCents === undefined && r.taxShippingCents !== undefined) fields["taxShippingTotalCents"] = r.taxShippingCents;
+  if (Object.keys(fields).length) ledger.set("purchase", purchaseId, fields, { label: "purchase.readFromReceipt" });
+  if (fields["taxShippingTotalCents"] !== undefined) reallocateTax(ledger, purchaseId);
+  if (r.paymentEvidence) ledger.set("document", docId, { paymentEvidenceConfidence: r.paymentEvidence.confidence, paymentEvidenceSnippet: r.paymentEvidence.snippet }, { label: "document.paymentEvidence" });
+  await ledger.flush();
+  const names: Record<string, string> = { vendor: "vendor", date: "date", invoiceNo: "invoice #", orderTotalCents: "total", taxShippingTotalCents: "tax/shipping" };
+  const filled = Object.keys(fields).map((k) => names[k]);
+  const proof = r.paymentEvidence ? (r.paymentEvidence.confidence >= 0.8 ? " The receipt shows payment, so it counts as proof." : " It does not clearly show payment; a statement may be needed.") : " No sign of payment was found on it.";
+  status = filled.length || r.paymentEvidence ? `${filled.length ? `Filled in ${filled.join(", ")}${ocr ? " (read by OCR: please check)" : ""}.` : "Nothing new to fill in."}${proof}` : "Could not read anything useful from this receipt. Fill in the details by hand.";
 }
 
 function tabs(): string {
@@ -662,7 +714,8 @@ function purchaseView(id: string, draft = false): string {
     : [...new Set(Object.values(state.items).map((i) => categoryLabel(i)).filter(Boolean))];
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
-  ${doc?.driveItemId && workspace ? `<p><button data-preview="${esc(doc.id)}">Preview receipt</button></p>` : ""}
+  ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button></p>` : ""}
+  ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
@@ -839,6 +892,9 @@ root.addEventListener("click", async (ev) => {
     view = { name: "statement", id: d["statement"] };
     render();
     if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
+  } else if (d["readReceipt"]) {
+    await guarded(() => readReceipt(d["readReceipt"]!), "Reading the receipt…");
+    persist();
   } else if (d["readStatement"]) {
     await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
     persist();

@@ -102,6 +102,8 @@ export interface DocumentRec {
   statement?: StatementData;
   /** Receipt shows payment was made (e.g. "$0.00 owed"); confidence 0..1. */
   paymentEvidenceConfidence?: number;
+  /** The line of the receipt that showed payment (what the confidence is based on). */
+  paymentEvidenceSnippet?: string;
 }
 
 export type AdditionalDocKind = "payment-proof" | "explanation" | "preauth" | "other";

@@ -1,0 +1,87 @@
+import { describe, expect, it } from "vitest";
+import { PAYMENT_EVIDENCE_MIN, parseStatementText, readReceiptText } from "../src/index.js";
+
+// Made-up receipts.
+const ONLINE = `
+amazon.com
+Order Placed: September 17, 2026
+Order # 112-0000000-1234567
+Item(s) Subtotal: $50.00
+Shipping & Handling: $0.00
+Estimated tax to be collected: $3.50
+Grand Total: $53.50
+Paid with Visa ending in 4242
+`;
+
+const STORE = `
+Star Learning Supply
+123 Main St
+09/20/26 14:32
+Workbook          12.00
+Pencils            3.00
+SUBTOTAL          15.00
+TAX                1.05
+TOTAL             16.05
+VISA **** 4242     16.05
+Thank you!
+`;
+
+const INVOICE = `
+Acme Tutoring
+Invoice #A-10045
+Invoice Date: 2026-10-01
+Tutoring, 4 sessions   $200.00
+Total: $200.00
+Amount Due: $200.00
+`;
+
+const PAID = `
+Acme Tutoring
+Invoice #A-10046
+Date: 10/01/2026
+Total: $200.00
+Payment received - thank you
+Balance due: $0.00
+`;
+
+describe("readReceiptText", () => {
+  it("reads an online order", () => {
+    const r = readReceiptText(ONLINE);
+    expect(r).toMatchObject({ vendor: "Amazon", date: "2026-09-17", invoiceNo: "112-0000000-1234567", totalCents: 5350, taxShippingCents: 350, last4: "4242" });
+    expect(r.paymentEvidence!.confidence).toBeGreaterThanOrEqual(PAYMENT_EVIDENCE_MIN);
+  });
+
+  it("reads a till receipt: takes TOTAL not SUBTOTAL, and a card line is payment evidence", () => {
+    const r = readReceiptText(STORE);
+    expect(r).toMatchObject({ vendor: "Star Learning Supply", date: "2026-09-20", totalCents: 1605, taxShippingCents: 105, last4: "4242" });
+    expect(r.paymentEvidence!.confidence).toBeGreaterThanOrEqual(PAYMENT_EVIDENCE_MIN);
+  });
+
+  it("an unpaid invoice is not proof of payment", () => {
+    const r = readReceiptText(INVOICE);
+    expect(r).toMatchObject({ vendor: "Acme Tutoring", date: "2026-10-01", invoiceNo: "A-10045", totalCents: 20000 });
+    expect(r.paymentEvidence!.confidence).toBeLessThan(PAYMENT_EVIDENCE_MIN);
+  });
+
+  it("a zero balance or 'payment received' is strong evidence", () => {
+    const r = readReceiptText(PAID);
+    expect(r.paymentEvidence!.confidence).toBeGreaterThanOrEqual(PAYMENT_EVIDENCE_MIN);
+    expect(r.paymentEvidence!.snippet).toMatch(/Balance due|Payment received/i);
+  });
+
+  it("does not take a screen heading for the vendor", () => {
+    expect(readReceiptText("Transaction details X\nYouTube Premium\nAug 3, 2025\nTotal $26.12").vendor).toBe("YouTube Premium");
+  });
+
+  it("returns only what it found", () => {
+    expect(readReceiptText("hello world")).toEqual({});
+  });
+});
+
+describe("OCR confidence", () => {
+  it("lowers row confidence so uncertain OCR rows are flagged", () => {
+    const text = "Statement Period 09/15/2026 - 10/14/2026\n09/18 09/19 SHOP 5.00";
+    expect(parseStatementText(text).transactions[0]!.confidence).toBeGreaterThan(0.9);
+    expect(parseStatementText(text, { confidencePenalty: 0.2 }).transactions[0]!.confidence).toBeLessThan(0.8);
+  });
+});
