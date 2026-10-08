@@ -196,3 +196,122 @@ export function learnAlias(ledger: Ledger, descriptor: string, vendor: string | 
   ledger.set("setting", "year", { vendorAliases: { ...known, [key]: merged } }, { label: "setting.aliasLearned" });
   return true;
 }
+
+export interface RefundMatch {
+  transactionId: string;
+  purchaseId: string;
+  /** The amount that came back, in cents (positive). */
+  amountCents: number;
+  confidence: number;
+  reasons: string[];
+}
+
+/**
+ * Refunds on a statement (negative charges) that look like they belong to a purchase: same vendor, the amount equals the
+ * purchase (or one of its items) or is no more than it, and it came after the purchase. Always a suggestion: a person confirms.
+ */
+export function matchRefunds(state: LedgerState, statementDocId: string, data: StatementData, options: MatchOptions = {}): RefundMatch[] {
+  const aliases = options.aliases ?? state.settings["year"]?.vendorAliases;
+  const done = new Set(Object.values(state.additionalDocs).filter((a) => a.kind === "refund" && a.documentId === statementDocId && a.transactionId).map((a) => a.transactionId!));
+  const out: RefundMatch[] = [];
+  for (const t of data.transactions) {
+    if (t.kind !== "credit" || done.has(t.id)) continue;
+    const back = -t.amountCents;
+    let best: RefundMatch | undefined;
+    for (const p of Object.values(state.purchases)) {
+      if (p.archived) continue;
+      const total = purchaseTotalCents(state, p);
+      const pd = purchaseDate(state, p);
+      if (total === undefined || back > total) continue;
+      const vendor = words(p.vendor ?? "");
+      const descriptor = words(t.descriptor);
+      const vendorHit = descriptor.some((w) => vendor.some((v) => v === w || v.startsWith(w) || w.startsWith(v)) || aliases?.[w]?.some((a) => vendor.includes(a)));
+      if (!vendorHit) continue;
+      const reasons = ["vendor matches"];
+      let confidence = 0.5;
+      const items = Object.values(state.items).filter((i) => i.purchaseId === p.id && !i.archived);
+      if (back === total) (confidence += 0.3), reasons.push("whole purchase");
+      else if (items.some((i) => requestedCents(i) === back)) (confidence += 0.3), reasons.push("one item's amount");
+      if (pd) {
+        const lag = days(t.postDate ?? t.date) - days(pd);
+        if (lag < 0 || lag > 120) continue;
+        confidence += 0.15;
+        reasons.push("after the purchase");
+      }
+      const cand = { transactionId: t.id, purchaseId: p.id, amountCents: back, confidence: Math.round(Math.min(1, confidence) * 100) / 100, reasons };
+      if (!best || cand.confidence > best.confidence) best = cand;
+    }
+    if (best) out.push(best);
+  }
+  return out;
+}
+
+const refundId = (purchaseId: string, docId: string, transactionId: string) => `add-${hashString(`refund:${purchaseId}::${docId}::${transactionId}`)}`;
+
+/** Records a refund seen on a statement against a purchase. A refund in full makes the purchase "refunded" (not to be filed). */
+export function linkRefund(ledger: Ledger, purchaseId: string, statementDocId: string, transactionId: string, amountCents: number): void {
+  ledger.set("additionalDoc", refundId(purchaseId, statementDocId, transactionId), { ownerKind: "purchase", ownerId: purchaseId, documentId: statementDocId, kind: "refund", transactionId, amountCents, source: "manual" }, { label: "refund.linked" });
+}
+
+export function unlinkRefund(ledger: Ledger, purchaseId: string, statementDocId: string, transactionId: string): void {
+  ledger.delete("additionalDoc", refundId(purchaseId, statementDocId, transactionId), { label: "refund.unlinked" });
+}
+
+export interface SplitMatch {
+  purchaseId: string;
+  transactionIds: string[];
+  confidence: number;
+}
+
+/**
+ * One order, several charges (partial shipments): for purchases with no single charge that fits, finds 2 to 4 of the
+ * statement's unlinked charges from the same vendor, close to the purchase date, that add up to the purchase total.
+ * A suggestion only.
+ */
+export function matchSplitCharges(state: LedgerState, statementDocId: string, data: StatementData, options: MatchOptions = {}): SplitMatch[] {
+  const opts = { tolerance: options.tolerance ?? ((total: number) => Math.max(100, Math.round(total * 0.02))), maxLagDays: options.maxLagDays ?? 30, aliases: options.aliases ?? state.settings["year"]?.vendorAliases };
+  const linked = new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === statementDocId && a.transactionId).map((a) => a.transactionId!));
+  const proven = new Set(Object.values(state.additionalDocs).filter((a) => a.kind === "payment-proof" && a.ownerKind === "purchase").map((a) => a.ownerId!));
+  const free = data.transactions.filter((t) => t.kind === "purchase" && !linked.has(t.id));
+  const out: SplitMatch[] = [];
+  const used = new Set<string>();
+  for (const p of Object.values(state.purchases)) {
+    if (p.archived || proven.has(p.id)) continue;
+    const total = purchaseTotalCents(state, p);
+    if (total === undefined) continue;
+    const vendor = words(p.vendor ?? "");
+    const pd = purchaseDate(state, p);
+    const pool = free.filter((t) => {
+      if (used.has(t.id) || t.amountCents >= total) return false;
+      if (!words(t.descriptor).some((w) => vendor.some((v) => v === w || v.startsWith(w) || w.startsWith(v)) || opts.aliases?.[w]?.some((a) => vendor.includes(a)))) return false;
+      if (!pd) return true;
+      const lag = days(t.postDate ?? t.date) - days(pd);
+      return lag >= -3 && lag <= opts.maxLagDays;
+    });
+    if (pool.length < 2 || pool.length > 14) continue;
+    const found = subsetsSumming(pool, total, opts.tolerance(total));
+    if (found) {
+      found.forEach((t) => used.add(t.id));
+      out.push({ purchaseId: p.id, transactionIds: found.map((t) => t.id), confidence: Math.abs(found.reduce((s, t) => s + t.amountCents, 0) - total) === 0 ? 0.8 : 0.65 });
+    }
+  }
+  return out;
+}
+
+/** The smallest group of 2 to 4 charges whose total is within `tolerance` of `target` (exact sums preferred), or undefined. */
+function subsetsSumming(pool: StatementTransaction[], target: number, tolerance: number): StatementTransaction[] | undefined {
+  let best: { set: StatementTransaction[]; diff: number } | undefined;
+  const walk = (start: number, chosen: StatementTransaction[], sum: number) => {
+    if (chosen.length >= 2) {
+      const diff = Math.abs(sum - target);
+      if (diff <= tolerance && (!best || diff < best.diff || (diff === best.diff && chosen.length < best.set.length))) best = { set: [...chosen], diff };
+    }
+    if (chosen.length === 4) return;
+    for (let i = start; i < pool.length; i++) {
+      if (sum + pool[i]!.amountCents > target + tolerance) continue;
+      walk(i + 1, [...chosen, pool[i]!], sum + pool[i]!.amountCents);
+    }
+  };
+  walk(0, [], 0);
+  return best?.set;
+}

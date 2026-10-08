@@ -131,3 +131,34 @@ describe("redacted copies in the submission plan", () => {
     expect(group.unredactedStatements).toEqual([]);
   });
 });
+
+import { checkRedactionOutput } from "../src/index.js";
+
+describe("redaction modes and output check", () => {
+  const text = [...PAGE1, ...PAGE2].join("\n");
+  const parsed = parseStatementText(text);
+  const id = (re: RegExp) => parsed.transactions.find((t) => re.test(t.descriptor))!.id;
+  const three: string[] = ["PAGE 1 line", "PAGE 2 line", "PAGE 3"];
+
+  it("can leave out pages that have no kept charge, but always keeps the first", () => {
+    const pagesText = [PAGE1, PAGE2, ["Nothing here", "09/30 09/30 SOME ROW 1.00"]];
+    const all = planRedaction(layout(pagesText), { keepTransactionIds: new Set([id(/AMZN/)]) });
+    expect(all.pages.map((p) => p.omit)).toEqual([undefined, undefined, undefined]);
+    const matched = planRedaction(layout(pagesText), { keepTransactionIds: new Set([id(/AMZN/)]), pages: "matched" });
+    expect(matched.pages.map((p) => p.omit)).toEqual([undefined, true, true]);
+    void three;
+  });
+
+  it("the finished copy passes when kept charges are legible and nothing else is", () => {
+    const kept = [{ descriptor: "AMZN", amountCents: 5428 }, { descriptor: "STAR", amountCents: 1200 }];
+    expect(checkRedactionOutput(["CHASE\nStatement Period: 09/15/2026 - 10/14/2026\n09/18 AMZN Mktp 54.28\n10/02 STAR LEARNING CO 12.00"], kept)).toEqual({ legible: 2, unreadable: [], leaks: [] });
+  });
+
+  it("flags a charge it cannot read, an extra amount and an account number", () => {
+    const kept = [{ descriptor: "AMZN", amountCents: 5428 }, { descriptor: "STAR", amountCents: 1200 }];
+    const bad = checkRedactionOutput(["09/18 AMZN Mktp 54.28\nNew Balance $1,812.44\nAccount 1234 5678 9012 3456"], kept);
+    expect(bad.unreadable).toEqual(["STAR"]);
+    expect(bad.leaks.join()).toMatch(/1812\.44/);
+    expect(bad.leaks.join()).toMatch(/account number/);
+  });
+});

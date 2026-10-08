@@ -25,6 +25,7 @@ export type ReasonCode =
   | "missing-description"
   | "missing-amount"
   | "missing-benefit-message"
+  | "refunded"
   | "missing-category"
   | "unknown-category"
   | "category-ineligible"
@@ -124,6 +125,9 @@ export function evaluateItem(state: LedgerState, itemId: string, ctx: RulesConte
       if ((receipt.sizeBytes ?? 0) > MAX_UPLOAD_BYTES) add("receipt-too-large", "Receipt is over StepUp's 5 MB limit");
       if (additional.some((a) => a.documentId === receiptId)) add("receipt-also-additional", "The receipt is also listed as additional documentation");
     }
+    const refunded = additional.filter((a) => a.kind === "refund").reduce((sum, a) => sum + (a.amountCents ?? 0), 0);
+    const total = purchase.orderTotalCents ?? Object.values(state.items).filter((i) => i.purchaseId === purchase.id).reduce((s, i) => s + requestedCents(i), 0);
+    if (refunded > 0 && total > 0 && refunded >= total) add("refunded", "This purchase was refunded in full; do not file it");
     if (receipt && !hasPaymentProof(state, purchase, additional)) {
       add("awaiting-proof", "Needs proof of payment: a receipt that shows payment, or a statement");
     }

@@ -211,3 +211,70 @@ describe("learnAlias", () => {
     expect(matchStatement(l.state, "stmt", next)[0]).toMatchObject({ best: { purchaseId: q }, auto: true });
   });
 });
+
+import { evaluateItem as evalItem, linkRefund, matchRefunds, matchSplitCharges, unlinkRefund } from "../src/index.js";
+
+describe("refunds", () => {
+  const STMT = `Statement Period 10/01/2026 - 10/31/2026
+10/02 10/03 AMZN Mktp US*AA1 54.28
+10/20 10/21 AMZN Mktp US*RETURN (54.28)
+10/22 10/22 SOME OTHER SHOP (54.28)`;
+
+  it("suggests the purchase a refund belongs to, and a full refund stops the purchase being filed", () => {
+    const l = newLedger();
+    l.set("child", "kid", { name: "Kid" });
+    l.set("document", "stmt", { contentKind: "statement" });
+    l.set("document", "rcpt", { filename: "r.pdf", contentKind: "receipt-like", sizeBytes: 10, paymentEvidenceConfidence: 0.9 });
+    const p = createPurchase(l, { vendor: "Amazon", date: "2026-10-01", orderTotalCents: 5428, receiptDocumentId: "rcpt" });
+    const item = addItem(l, p, { childId: "kid", description: "Book", amountCents: 5000, taxShippingCents: 428, categoryId: "c", benefitMessage: "m" });
+    const data = parseStatementText(STMT);
+
+    const refunds = matchRefunds(l.state, "stmt", data, { aliases: { amzn: ["amazon"] } });
+    expect(refunds).toHaveLength(1); // the other shop's refund has no matching purchase
+    expect(refunds[0]).toMatchObject({ purchaseId: p, amountCents: 5428 });
+    expect(refunds[0]!.reasons).toContain("whole purchase");
+
+    const ctx2: RulesContext = { today: "2026-11-01", category: (id) => ({ id, path: [id], requiresServiceDate: false, eligibleScholarships: [], isActive: true }) };
+    expect(evalItem(l.state, item, ctx2).reasons.map((r) => r.code)).not.toContain("refunded");
+    linkRefund(l, p, "stmt", refunds[0]!.transactionId, refunds[0]!.amountCents);
+    expect(evalItem(l.state, item, ctx2).reasons.map((r) => r.code)).toContain("refunded");
+    expect(matchRefunds(l.state, "stmt", data, { aliases: { amzn: ["amazon"] } })).toEqual([]); // already linked
+    unlinkRefund(l, p, "stmt", refunds[0]!.transactionId);
+    expect(evalItem(l.state, item, ctx2).reasons.map((r) => r.code)).not.toContain("refunded");
+  });
+
+  it("a partial refund is a suggestion but does not block the purchase", () => {
+    const l = newLedger();
+    l.set("document", "stmt", { contentKind: "statement" });
+    const p = createPurchase(l, { vendor: "Acme", date: "2026-10-01", orderTotalCents: 5000 });
+    const data = parseStatementText("Statement Period 10/01/2026 - 10/31/2026\n10/15 10/15 ACME STORE (12.00)");
+    const [m] = matchRefunds(l.state, "stmt", data);
+    expect(m).toMatchObject({ purchaseId: p, amountCents: 1200 });
+  });
+});
+
+describe("one order, several charges", () => {
+  it("finds charges that add up to a purchase no single charge fits", () => {
+    const l = newLedger();
+    l.set("document", "stmt", { contentKind: "statement" });
+    const p = createPurchase(l, { vendor: "Star Learning", date: "2026-10-02", orderTotalCents: 6000 });
+    const data = parseStatementText(`Statement Period 10/01/2026 - 10/31/2026
+10/03 10/04 STAR LEARNING 20.00
+10/09 10/10 STAR LEARNING 40.00
+10/10 10/10 STAR LEARNING 15.00
+10/11 10/11 UNRELATED SHOP 40.00`);
+    const [m] = matchSplitCharges(l.state, "stmt", data);
+    expect(m!.purchaseId).toBe(p);
+    expect(m!.transactionIds.map((id) => data.transactions.find((t) => t.id === id)!.amountCents).sort()).toEqual([2000, 4000]);
+    expect(matchSplitCharges(l.state, "stmt", parseStatementText("Statement Period 10/01/2026 - 10/31/2026\n10/03 10/04 STAR LEARNING 20.00\n10/09 10/10 STAR LEARNING 15.00"))).toEqual([]);
+  });
+
+  it("does not offer a purchase that already has proof of payment", () => {
+    const l = newLedger();
+    l.set("document", "stmt", { contentKind: "statement" });
+    const p = createPurchase(l, { vendor: "Star Learning", date: "2026-10-02", orderTotalCents: 6000 });
+    l.set("additionalDoc", "x", { ownerKind: "purchase", ownerId: p, documentId: "stmt", kind: "payment-proof", transactionId: "t" });
+    const data = parseStatementText("Statement Period 10/01/2026 - 10/31/2026\n10/03 10/04 STAR LEARNING 20.00\n10/09 10/10 STAR LEARNING 40.00");
+    expect(matchSplitCharges(l.state, "stmt", data)).toEqual([]);
+  });
+});

@@ -33,6 +33,12 @@ import {
   saveStatement,
   matchStatement,
   linkTransaction,
+  matchRefunds,
+  matchSplitCharges,
+  linkRefund,
+  unlinkRefund,
+  checkRedactionOutput,
+  type RedactionCheck,
   unlinkTransaction,
   linkConfidentMatches,
   relinkAllStatements,
@@ -164,7 +170,7 @@ function scanPanel(): string {
 }
 
 /** A redacted copy that has been made but not saved: the person checks every page before it can be used. */
-let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan } | undefined;
+let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan; check: RedactionCheck } | undefined;
 const MAX_PROOF_BYTES = 5 * 1024 * 1024;
 
 function discardRedaction(): void {
@@ -176,21 +182,25 @@ function discardRedaction(): void {
  * Builds the redacted copy of a statement on this device: everything is blacked out except the issuer, the period, the
  * column headings and the charges already linked to purchases (plan §3.10a). Shown for review; nothing is saved yet.
  */
-async function makeRedaction(docId: string): Promise<void> {
+async function makeRedaction(docId: string, options: { pages: "all" | "matched"; purchaseId?: string } = { pages: "all" }): Promise<void> {
   const got = await loadDocument(docId);
   if (got.kind !== "pdf") throw new Error("Only PDF statements can be redacted here.");
-  const keep = new Set(Object.values(ledger.state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId!));
+  const links = Object.values(ledger.state.additionalDocs).filter((a) => a.documentId === docId && a.kind === "payment-proof" && a.transactionId && (!options.purchaseId || a.ownerId === options.purchaseId));
+  const keep = new Set(links.map((a) => a.transactionId!));
   if (keep.size === 0) throw new Error("Link at least one charge to a purchase first; only linked charges stay visible.");
   note("Finding what to keep…");
   const read = await pdfLines(got.blob);
-  const plan = planRedaction(read.pages, { keepTransactionIds: keep });
+  const plan = planRedaction(read.pages, { keepTransactionIds: keep, pages: options.pages });
   if (read.ocr) plan.warnings.push("Some pages were read with OCR, so the boxes may be less exact. Check every page carefully.");
   if (plan.keptTransactions === 0) throw new Error(plan.warnings.join(" ") || "Nothing on this statement could be kept.");
-  note("Blacking out the rest…");
-  const bytes = await renderRedactedPdf(got.blob, plan);
+  note("Blacking out the rest, then reading the result to check it…");
+  const { bytes, ocrTexts } = await renderRedactedPdf(got.blob, plan);
   if (bytes.byteLength > MAX_PROOF_BYTES) throw new Error("The redacted copy is over StepUp's 5 MB limit.");
+  const missing = new Set(plan.missing);
+  const keptTxns = (ledger.state.documents[docId]?.statement?.transactions ?? []).filter((t) => keep.has(t.id) && !missing.has(t.id));
+  const check = checkRedactionOutput(ocrTexts, keptTxns);
   discardRedaction();
-  redactionDraft = { docId, bytes, url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" })), plan };
+  redactionDraft = { docId, bytes, url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" })), plan, check };
 }
 
 async function saveRedaction(): Promise<void> {
@@ -223,10 +233,14 @@ function redactionPanel(): string {
   const name = esc(ledger.state.documents[d.docId]?.filename ?? "statement");
   const missing = d.plan.missing.length ? `<p class="warn">${d.plan.missing.length} linked charge(s) could not be found in the PDF and will be blacked out.</p>` : "";
   const warnings = d.plan.warnings.map((w) => `<p class="warn">${esc(w)}</p>`).join("");
+  const c = d.check;
+  const verdict = c.leaks.length || c.unreadable.length
+    ? `<p class="warn"><strong>Check failed.</strong> ${c.leaks.length ? `Something that should be hidden can be read: ${esc(c.leaks.join("; "))}. ` : ""}${c.unreadable.length ? `Could not read ${c.unreadable.length} kept charge(s): ${esc(c.unreadable.join(", "))}.` : ""} Look at every page before saving.</p>`
+    : `<p class="note"><span class="ok">Checked by reading the result again:</span> all ${c.legible} kept charge(s) are legible and nothing else (no other amounts, no account numbers) could be read.</p>`;
   return `<section class="preview"><div class="preview-bar"><strong>Redacted copy of ${name}</strong>
       <span><button id="save-redaction"><strong>Looks right: save it</strong></button><button id="discard-redaction">Discard</button></span></div>
     <p class="note" style="padding:8px 14px;margin:0">Check every page. Only the issuer, the period, the column headings and ${d.plan.keptTransactions} linked charge(s) should be readable; everything else must be black.</p>
-    ${missing}${warnings}<iframe src="${esc(d.url)}" title="Redacted copy"></iframe></section>`;
+    ${verdict}${missing}${warnings}<iframe src="${esc(d.url)}" title="Redacted copy"></iframe></section>`;
 }
 
 function previewPanel(): string {
@@ -666,8 +680,16 @@ function statementReview(id: string): string {
   if (!doc) return `<p>That statement no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
   const head = `<p><a href="#" data-go="statements">&larr; All statements</a></p><h2>${esc(doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read statement"}</button>${data ? `<button data-relink="1">Match again</button><button data-redact="${esc(id)}">Make redacted copy</button>` : ""}</p>`;
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read statement"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
+  const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
+  const redactForm = data && proofOwners.length
+    ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Keep every page</option><option value="matched">Only pages with the linked charges</option></select></label>
+        <label>Charges to show<select name="purchase"><option value="">Every charge linked this year</option>${proofOwners.map((o) => `<option value="${esc(o)}">Only ${esc(purchaseLabel(o))}</option>`).join("")}</select></label>
+        <button>Make redacted copy</button></form>`
+    : "";
   const redacted = redactedCopyOf(state, doc);
+  const refundSuggestions = new Map(data ? matchRefunds(state, id, data).map((r) => [r.transactionId, r]) : []);
+  const refundLinks = new Map(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "refund" && a.transactionId).map((a) => [a.transactionId!, a]));
   const redactedNote = redacted ? `<p class="note"><span class="ok">Redacted copy saved</span>: ${esc(redacted.filename)} <button data-preview="${esc(redacted.id)}">Preview</button> It is sent to StepUp instead of this statement.</p>` : data ? `<p class="note">No redacted copy yet: this statement would be sent as it is. Make one once its charges are linked.</p>` : "";
   if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>`;
 
@@ -683,7 +705,17 @@ function statementReview(id: string): string {
   const rows = data.transactions.map((t) => {
     const amount = `<td class="num">${formatCents(t.amountCents)}</td>`;
     const base = `<td>${esc(t.date)}</td><td>${esc(t.descriptor)}${t.confidence < 0.8 ? ` <small class="warn">check this row</small>` : ""}</td>${amount}`;
-    if (t.kind !== "purchase") return `<tr class="muted">${base}<td><small>${t.kind === "payment" ? "Payment to the card" : t.kind === "credit" ? "Refund or credit" : "Fee or interest"}</small></td></tr>`;
+    if (t.kind === "credit") {
+      const done = refundLinks.get(t.id);
+      const suggestion = refundSuggestions.get(t.id);
+      const cell = done?.ownerId
+        ? `<span class="ok">Refund of</span> ${esc(purchaseLabel(done.ownerId))} <button data-unlink-refund="${esc(done.ownerId)}" data-txn="${esc(t.id)}" data-doc="${esc(id)}">Undo</button>`
+        : suggestion
+          ? `<small>Refund or credit.</small> <button data-link-refund="${esc(suggestion.purchaseId)}" data-txn="${esc(t.id)}" data-doc="${esc(id)}" data-amount="${suggestion.amountCents}" title="${esc(suggestion.reasons.join(", "))}">Mark as a refund of ${esc(purchaseLabel(suggestion.purchaseId))}</button>`
+          : `<small>Refund or credit</small>`;
+      return `<tr class="${done ? "" : "muted"}">${base}<td>${cell}</td></tr>`;
+    }
+    if (t.kind !== "purchase") return `<tr class="muted">${base}<td><small>${t.kind === "payment" ? "Payment to the card" : "Fee or interest"}</small></td></tr>`;
     const link = links.get(t.id);
     if (link?.ownerId) {
       return `<tr>${base}<td><span class="ok">Linked</span> to ${esc(purchaseLabel(link.ownerId))}${link.source === "auto" ? ` <small>(automatic)</small>` : ""}
@@ -695,8 +727,17 @@ function statementReview(id: string): string {
     return `<tr>${base}<td>${buttons || `<small>No matching purchase yet</small>`}</td></tr>`;
   });
   const charges = data.transactions.filter((t) => t.kind === "purchase");
+  const splits = matchSplitCharges(state, id, data);
+  const splitSection = splits.length
+    ? `<h3>Charges that add up to one purchase</h3><ul class="queue">${splits.map((s) => {
+        const txns = s.transactionIds.map((tid) => data.transactions.find((t) => t.id === tid)!);
+        return `<li class="q"><span>${txns.map((t) => `${esc(t.date)} ${formatCents(t.amountCents)}`).join(" + ")} = ${formatCents(txns.reduce((a, t) => a + t.amountCents, 0))}</span>
+          <button data-link-split="${esc(s.purchaseId)}" data-txns="${esc(s.transactionIds.join(","))}" data-doc="${esc(id)}">Link all to ${esc(purchaseLabel(s.purchaseId))}</button></li>`;
+      }).join("")}</ul><p class="note">One order shipped in parts is charged in parts. Each charge is linked as proof for the purchase.</p>`
+    : "";
   return `${head}${redactedNote}<p class="note">${esc(data.issuer ?? "Card statement")}${data.last4 ? ` ending ${esc(data.last4)}` : ""} &middot; ${esc(period)} &middot; ${charges.filter((t) => links.has(t.id)).length} of ${charges.length} charges linked</p>${card}
-    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    ${redactForm}
+    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${rows.join("")}</tbody></table>${splitSection}`;
 }
 
 /** Downloads a statement PDF, reads its text on this device, saves the charges and links the confident matches. */
@@ -1063,15 +1104,22 @@ root.addEventListener("click", async (ev) => {
   } else if (d["readStatement"]) {
     await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
     persist();
-  } else if (d["redact"]) {
-    await guarded(() => makeRedaction(d["redact"]!), "Making the redacted copy…");
-    window.scrollTo({ top: 0 });
   } else if (t.id === "save-redaction") {
     await guarded(saveRedaction, "Saving the redacted copy…");
     persist();
   } else if (t.id === "discard-redaction") {
     discardRedaction();
     render();
+  } else if (d["linkRefund"]) {
+    linkRefund(ledger, d["linkRefund"], d["doc"]!, d["txn"]!, Number(d["amount"]));
+    await save();
+  } else if (d["unlinkRefund"]) {
+    unlinkRefund(ledger, d["unlinkRefund"], d["doc"]!, d["txn"]!);
+    await save();
+  } else if (d["linkSplit"]) {
+    for (const tid of d["txns"]!.split(",")) linkTransaction(ledger, d["linkSplit"], d["doc"]!, tid, "manual");
+    status = "Linked all of those charges to the purchase.";
+    await save();
   } else if (d["relink"]) {
     const n = relinkAllStatements(ledger);
     status = n ? `Linked ${n} more charge(s).` : "No new confident matches.";
@@ -1153,6 +1201,14 @@ root.addEventListener("submit", async (ev) => {
       attach(await openWorkspace(pointer, store.clientId));
       pendingYear = undefined;
     }, "Setting up the school year…");
+    return;
+  }
+  if (form.id === "redact-form") {
+    const docId = form.dataset["doc"]!;
+    const pages = (form.elements.namedItem("pages") as HTMLSelectElement).value === "matched" ? "matched" : "all";
+    const purchaseId = (form.elements.namedItem("purchase") as HTMLSelectElement).value || undefined;
+    await guarded(() => makeRedaction(docId, { pages, ...(purchaseId ? { purchaseId } : {}) }), "Making the redacted copy…");
+    window.scrollTo({ top: 0 });
     return;
   }
   if (form.id === "scan-form" && scan && workspace) {

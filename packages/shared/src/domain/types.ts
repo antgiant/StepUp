@@ -110,7 +110,7 @@ export interface DocumentRec {
   paymentEvidenceSnippet?: string;
 }
 
-export type AdditionalDocKind = "payment-proof" | "explanation" | "preauth" | "other";
+export type AdditionalDocKind = "payment-proof" | "refund" | "explanation" | "preauth" | "other";
 
 /** Link of a non-receipt document to a purchase or to a single line item. Its id is deterministic so concurrent adds merge. */
 export interface AdditionalDoc {
@@ -121,6 +121,8 @@ export interface AdditionalDoc {
   kind?: AdditionalDocKind;
   /** For payment proof: which transaction on the statement shows this purchase's charge. */
   transactionId?: string;
+  /** For a refund seen on a statement: how much came back, in cents. */
+  amountCents?: number;
   /** 0..1 for an automatic match; a person's own link has none. */
   confidence?: number;
   source?: "auto" | "manual";

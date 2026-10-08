@@ -63,11 +63,13 @@ export async function pdfToText(file: Blob): Promise<{ text: string; ocr: boolea
  * never "covered" content: pixels outside the kept boxes are never copied, so they cannot be recovered from the result.
  * The output is an image-only PDF (no text layer).
  */
-export async function renderRedactedPdf(file: Blob, plan: RedactionPlan, scale = 2): Promise<Uint8Array> {
+export async function renderRedactedPdf(file: Blob, plan: RedactionPlan, scale = 2): Promise<{ bytes: Uint8Array; ocrTexts: string[] }> {
   const { task, doc } = await openPdf(file);
   try {
     const out: ImagePage[] = [];
+    const ocrTexts: string[] = [];
     for (let n = 1; n <= doc.numPages; n++) {
+      if (plan.pages[n - 1]?.omit) continue; // left out of the copy altogether
       const page = await doc.getPage(n);
       const viewport = page.getViewport({ scale });
       const source = document.createElement("canvas");
@@ -90,12 +92,14 @@ export async function renderRedactedPdf(file: Blob, plan: RedactionPlan, scale =
         const h = Math.min(result.height - y, Math.ceil(Math.abs(by - ay)));
         if (w > 0 && h > 0) ctx.drawImage(source, x, y, w, h, x, y, w, h);
       }
+      // Read the finished page again, exactly as it will be sent: what OCR can read here is what anyone can read.
+      ocrTexts.push((await ocrCanvas(result)).map((l) => l.text).join("\n"));
       const jpeg = await new Promise<Blob | null>((resolve) => result.toBlob(resolve, "image/jpeg", 0.8));
       if (!jpeg) throw new Error("Could not encode the redacted page.");
       const base = page.getViewport({ scale: 1 });
       out.push({ jpeg: new Uint8Array(await jpeg.arrayBuffer()), pxWidth: result.width, pxHeight: result.height, widthPt: base.width, heightPt: base.height });
     }
-    return buildImagePdf(out);
+    return { bytes: buildImagePdf(out), ocrTexts };
   } finally {
     await task.destroy();
   }

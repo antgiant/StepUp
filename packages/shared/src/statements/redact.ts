@@ -1,4 +1,5 @@
 import type { PositionedLine, Rect } from "./lines.js";
+import type { StatementTransaction } from "../domain/types.js";
 import { readRows, readStatementHeader } from "./parse.js";
 
 export interface RedactionOptions {
@@ -6,12 +7,16 @@ export interface RedactionOptions {
   keepTransactionIds: ReadonlySet<string>;
   /** Extra room around each kept line, in PDF points. */
   pad?: number;
+  /** `all` keeps every page (most are fully black); `matched` leaves out pages with no kept charge (the first page is always kept). */
+  pages?: "all" | "matched";
 }
 
 export interface PageRedaction {
   /** The only parts of this page that stay visible. Everything else is blacked out. */
   keep: Rect[];
   keptText: string[];
+  /** True when this page is left out of the copy altogether (`pages: "matched"`). */
+  omit?: boolean;
 }
 
 export interface RedactionPlan {
@@ -23,7 +28,7 @@ export interface RedactionPlan {
 }
 
 // Account-number shapes: long digit groups, or "ending/account/card ... 1234".
-const SENSITIVE = /\d{4}[- ]?\d{4}|(?:ending|account|acct|card)\D{0,15}\d{4}|x{3,}[- ]?\d{4}|\*{3,}[- ]?\d{4}/i;
+export const SENSITIVE = /\d{4}[- ]?\d{4}|(?:ending|account|acct|card)\D{0,15}\d{4}|x{3,}[- ]?\d{4}|\*{3,}[- ]?\d{4}/i;
 const COLUMN_HEADER = /date.*(description|merchant|details|transaction).*amount/i;
 
 /**
@@ -74,9 +79,35 @@ export function planRedaction(pages: PositionedLine[][], opts: RedactionOptions)
     out[page]!.keptText.push(texts[n]!);
   }
 
+  if (opts.pages === "matched") out.forEach((p, i) => { if (i > 0 && p.keep.length === 0) p.omit = true; });
+
   const missing = [...opts.keepTransactionIds].filter((id) => !keptIds.has(id));
   const warnings: string[] = [];
   if (keptIds.size === 0) warnings.push("None of the linked charges were found in this PDF, so every line would be blacked out.");
   if (periodLine < 0) warnings.push("The statement period was not found; the copy will not show which period it covers.");
   return { pages: out, keptTransactions: keptIds.size, missing, warnings };
+}
+
+export interface RedactionCheck {
+  /** Kept charges whose amount can be read in the finished copy. */
+  legible: number;
+  /** Kept charges whose amount could not be found in it. */
+  unreadable: string[];
+  /** Things that should not be there: an amount that is not one of the kept charges, or an account-number shape. */
+  leaks: string[];
+}
+
+/**
+ * Checks the finished copy by reading it again (OCR of the output pages): every kept charge must be legible, and nothing
+ * else that looks like money or an account number may be. A regression guard, not a replacement for looking at the pages.
+ */
+export function checkRedactionOutput(pageTexts: string[], kept: Pick<StatementTransaction, "descriptor" | "amountCents">[]): RedactionCheck {
+  const text = pageTexts.join("\n");
+  const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
+  const found = new Set([...text.matchAll(/\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2}/g)].map((m) => m[0].replace(/,/g, "")));
+  const expected = new Set(kept.map((k) => money(k.amountCents)));
+  const unreadable = kept.filter((k) => !found.has(money(k.amountCents))).map((k) => k.descriptor);
+  const leaks = [...found].filter((f) => !expected.has(f)).map((f) => `an amount (${f}) that is not a kept charge`);
+  if (SENSITIVE.test(text.replace(/\b(19|20)\d{2}\b/g, ""))) leaks.push("something shaped like an account number");
+  return { legible: kept.length - unreadable.length, unreadable, leaks };
 }
