@@ -1,4 +1,4 @@
-import type { CachedLog, YearInfo } from "@step-up/shared/web";
+import type { CachedLog, LedgerEvent, YearInfo } from "@step-up/shared/web";
 
 /**
  * What the browser remembers about a workspace between visits so the app can paint instantly and then ask OneDrive
@@ -15,22 +15,26 @@ export interface WorkspaceCache {
 
 const DB = "stepup-cache";
 const STORE = "workspaces";
+/** Edits made but not yet uploaded, so a reload, a crash or a lost connection never loses them. */
+const OUTBOX = "outbox";
 
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    const req = indexedDB.open(DB, 2);
+    req.onupgradeneeded = () => {
+      for (const name of [STORE, OUTBOX]) if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 
-async function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T | undefined> {
+async function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>, store = STORE): Promise<T | undefined> {
   try {
     const db = await open();
     return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction(STORE, mode);
-      const req = fn(tx.objectStore(STORE));
+      const tx = db.transaction(store, mode);
+      const req = fn(tx.objectStore(store));
       tx.oncomplete = () => {
         db.close();
         resolve(req.result);
@@ -62,4 +66,15 @@ export async function deleteCache(key: string): Promise<void> {
 
 export async function clearCache(): Promise<void> {
   await run("readwrite", (s) => s.clear());
+  await run("readwrite", (s) => s.clear(), OUTBOX);
+}
+
+export async function readOutbox(key: string): Promise<LedgerEvent[]> {
+  return ((await run("readonly", (s) => s.get(key), OUTBOX)) as LedgerEvent[] | undefined) ?? [];
+}
+
+/** Saves the current unflushed events (an empty list clears the entry). */
+export async function writeOutbox(key: string, events: readonly LedgerEvent[]): Promise<void> {
+  if (events.length === 0) await run("readwrite", (s) => s.delete(key), OUTBOX);
+  else await run("readwrite", (s) => s.put([...events], key), OUTBOX);
 }

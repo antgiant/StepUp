@@ -32,6 +32,23 @@ export class Ledger {
     return this.pending.length;
   }
 
+  /** Called whenever the set of unflushed events changes, so a host can keep it somewhere that survives a reload or a lost connection. */
+  onPendingChange?: (pending: readonly LedgerEvent[]) => void;
+
+  /** Takes back events saved by `onPendingChange` in an earlier session. Replays are harmless (events are idempotent by id). */
+  restorePending(events: LedgerEvent[]): void {
+    const have = new Set(this.pending.map((e) => e.id));
+    const fresh = events.filter((e) => !have.has(e.id));
+    if (fresh.length === 0) return;
+    for (const e of fresh) {
+      this.clock.observe(e.hlc);
+      applyEventInPlace(this.raw, e);
+    }
+    this.pending.push(...fresh);
+    this.cached = undefined;
+    this.onPendingChange?.(this.pending);
+  }
+
   async refresh(): Promise<void> {
     this.loadKnown(await this.store.readAll());
   }
@@ -61,6 +78,7 @@ export class Ledger {
     await this.store.appendOwn(batch);
     const flushed = new Set(batch.map((e) => e.id));
     this.pending = this.pending.filter((e) => !flushed.has(e.id));
+    this.onPendingChange?.(this.pending);
   }
 
   private write(
@@ -87,6 +105,7 @@ export class Ledger {
     this.pending.push(event);
     applyEventInPlace(this.raw, event);
     this.cached = undefined;
+    this.onPendingChange?.(this.pending);
     return event;
   }
 }

@@ -212,3 +212,28 @@ describe("file name hints", () => {
     expect(copyChildren(ledger, last.state)).toBe(0);
   });
 });
+
+describe("pending persistence", () => {
+  it("reports changes to unflushed events and restores them into a fresh ledger", async () => {
+    const backend = new MemoryBackend();
+    const a = new Ledger(new MemoryEventStore(backend, "dev-a"), new HlcClock("dev-a", { now: () => 1000 }), "alice");
+    let saved: unknown[] = [];
+    a.onPendingChange = (p) => (saved = JSON.parse(JSON.stringify(p)));
+    a.set("child", "kid", { name: "Kid" });
+    expect(saved).toHaveLength(1);
+
+    // The tab closed before the upload; a later session restores and uploads once.
+    const b = new Ledger(new MemoryEventStore(backend, "dev-a"), new HlcClock("dev-a", { now: () => 1000 }), "alice");
+    b.restorePending(saved as never);
+    b.restorePending(saved as never); // idempotent
+    expect(b.unflushedCount).toBe(1);
+    expect(b.state.children["kid"]?.name).toBe("Kid");
+    let after: unknown[] = ["unset"];
+    b.onPendingChange = (p) => (after = [...p]);
+    await b.flush();
+    expect(after).toEqual([]);
+    const c = new Ledger(new MemoryEventStore(backend, "dev-a"), new HlcClock("dev-a"), "alice");
+    await c.refresh();
+    expect(c.state.children["kid"]?.name).toBe("Kid");
+  });
+});

@@ -10,7 +10,7 @@ attach a file as a receipt or as additional documentation, and the receipt works
 items below with child/amount/category carry-over, estimated then real tax/shipping, per-item readiness reasons).
 Events are stored in this browser's localStorage; Import/Export events moves a ledger as `events.jsonl`.
 
-**Not yet:** offline queue / PWA, join and new-year screens.
+**Not yet:** join and new-year screens.
 
 **Onboarding:** sign in with Microsoft, pick a folder in the built-in navigator (your OneDrive or folders shared with you; you can create a new one), and if it has no school year yet, create one. The choice is remembered in this browser.
 
@@ -25,3 +25,5 @@ Events are stored in this browser's localStorage; Import/Export events moves a l
 **Categories:** the picker and the readiness rules use the published StepUp category tree (`public/reference/categories.json`, built by `npm run reference:build` from the CLI's category cache and checked by `npm run reference:validate` and a test). If it cannot load, every category is accepted.
 
 **Category fixes:** a missing category, or one that needs a Service Date, is recorded for the year in the ledger (item page -> *Category missing, or needs a Service Date?*). *Advanced -> Share category fixes* downloads them as `category-edits.json`; a maintainer merges that with `npm run reference:promote -- category-edits.json`. Everything under "Testing and Assessments" requires a Service Date by default.
+
+**Offline:** edits are written to this device (IndexedDB outbox) the moment you make them and uploaded as soon as OneDrive is reachable; anything left over from a closed tab or lost connection is recovered and uploaded on the next visit, and the header shows when you are offline. Signing out or disconnecting with unuploaded changes asks first. The site is installable (web manifest) and its own files are cached by a service worker (`public/sw.js`); Microsoft traffic is never cached.

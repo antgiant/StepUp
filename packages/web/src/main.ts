@@ -41,7 +41,7 @@ import {
 } from "@step-up/shared/web";
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
-import { cacheKey, clearCache, deleteCache, readCache, writeCache } from "./cache.js";
+import { cacheKey, clearCache, deleteCache, readCache, readOutbox, writeCache, writeOutbox } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
@@ -218,8 +218,28 @@ function persist(): void {
   if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace));
 }
 function forgetCache(): void {
-  if (account && workspace) void deleteCache(keyOf(workspace.pointer));
+  if (account && workspace) {
+    void deleteCache(keyOf(workspace.pointer));
+    void writeOutbox(keyOf(workspace.pointer), []);
+  }
 }
+
+/** Keeps unuploaded edits on this device, and takes back any left over from an earlier visit. */
+async function useOutbox(ws: OpenWorkspace): Promise<void> {
+  const key = keyOf(ws.pointer);
+  const left = await readOutbox(key);
+  ws.ledger.onPendingChange = (pending) => void writeOutbox(key, pending);
+  if (left.length === 0 || workspace !== ws) return;
+  ws.ledger.restorePending(left);
+  status = `Recovered ${left.length} change(s) that had not been saved to OneDrive; saving them now.`;
+  render();
+  await save();
+}
+window.addEventListener("online", () => {
+  if (workspace && ledger.unflushedCount > 0) void save();
+  else render();
+});
+window.addEventListener("offline", render);
 let lastRefresh = Date.now();
 const typing = () => document.activeElement instanceof HTMLElement && root.contains(document.activeElement) && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
 
@@ -276,6 +296,7 @@ function attach(next: OpenWorkspace | undefined): void {
     activeStore = ledger.store;
     void savePointer(next.pointer);
     if (!next.fromCache) persist();
+    void useOutbox(next);
     if (next.carriedChildren) {
       status = `Added ${next.carriedChildren} student(s) from last year.`;
       void ledger.flush().then(persist).catch((err) => { status = err instanceof Error ? err.message : String(err); render(); });
@@ -307,7 +328,7 @@ function shareForm(): string {
 function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue">Step Up Helper</a></h1>
-    <nav>${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}
+    <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}
     <details class="menu"><summary class="btn">Advanced</summary>
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
@@ -490,8 +511,12 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
   else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
-  else if (t.id === "sign-out") { forgetLocalPointer(); await clearCache(); showBusy("Signing out of Microsoft…"); await signOut(); }
+  else if (t.id === "sign-out") {
+    if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you sign out. Sign out anyway?`)) return;
+    forgetLocalPointer(); await clearCache(); showBusy("Signing out of Microsoft…"); await signOut();
+  }
   else if (t.id === "disconnect") {
+    if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you disconnect. Disconnect anyway?`)) return;
     await guarded(async () => {
       forgetCache();
       clearPreviews();
@@ -695,3 +720,8 @@ void loadReference().then((r) => {
   referenceBase = r;
   if (r && !typing()) render();
 });
+
+// Installable / works offline: the page and its scripts are cached by the service worker (public/sw.js).
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => undefined);
+}
