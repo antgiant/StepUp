@@ -69,6 +69,7 @@ p.warn { background: var(--surface); border-left: 4px solid var(--warn); border-
 
 /* Waiting-on-OneDrive indicator */
 .busy { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 10px; padding: 9px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow), 0 8px 24px rgba(20, 30, 60, .15); font-size: .92rem; max-width: calc(100vw - 32px); }
+.busy small { color: var(--muted); white-space: nowrap; }
 .busy[hidden] { display: none; }
 .spinner { flex: none; width: 18px; height: 18px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

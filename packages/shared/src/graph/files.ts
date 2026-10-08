@@ -1,4 +1,4 @@
-import { GraphError, graphFetch, graphJson } from "./client.js";
+import { GraphError, graphFetch, graphJson, trackActivity } from "./client.js";
 import { sendUploadChunk } from "./uploadTransport.js";
 
 /** Simple PUT upload is limited to ~4 MB by Graph; anything larger needs an upload session. */
@@ -108,12 +108,15 @@ export async function writeFile(driveId: string, parentId: string, name: string,
   });
   const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : body;
   let last: DriveItemJson | undefined;
-  for (let start = 0; start < bytes.byteLength; start += UPLOAD_CHUNK) {
-    const end = Math.min(start + UPLOAD_CHUNK, bytes.byteLength);
-    // The upload URL is pre-authorized; sending our bearer token to it is rejected, so use the raw transport.
-    const res = await uploadChunk(session.uploadUrl, bytes.subarray(start, end), start, end - 1, bytes.byteLength);
-    if (res) last = res;
-  }
+  await trackActivity(`Uploading ${name}…`, async (update) => {
+    for (let start = 0; start < bytes.byteLength; start += UPLOAD_CHUNK) {
+      const end = Math.min(start + UPLOAD_CHUNK, bytes.byteLength);
+      update(`Uploading ${name} — ${Math.round((start / bytes.byteLength) * 100)}%`);
+      // The upload URL is pre-authorized; sending our bearer token to it is rejected, so use the raw transport.
+      const res = await uploadChunk(session.uploadUrl, bytes.subarray(start, end), start, end - 1, bytes.byteLength);
+      if (res) last = res;
+    }
+  });
   if (!last) throw new Error(`Upload session for "${name}" finished without returning the file`);
   return { id: last.id, name: last.name, eTag: last.eTag, size: last.size, webUrl: last.webUrl };
 }

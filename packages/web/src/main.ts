@@ -22,6 +22,7 @@ import {
   itemsOf,
   newId,
   reallocateTax,
+  observeActivity,
   setPurchaseArchived,
   remainingToItemize,
   startPurchaseFromDocument,
@@ -76,18 +77,41 @@ const busyEl = Object.assign(document.createElement("div"), { className: "busy",
 busyEl.setAttribute("aria-live", "polite");
 document.body.append(busyEl);
 let pending = 0;
-function showBusy(label: string): void {
-  pending++;
-  busyEl.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(label)}</span>`;
+let fallbackLabel = "";
+/** Requests in flight right now, by id, with their plain-language label (see describeRequest in shared). */
+const active = new Map<number, string>();
+observeActivity((ev) => {
+  if (ev.type === "end") active.delete(ev.id);
+  else active.set(ev.id, ev.label);
+  paintBusy();
+});
+/** Shows what we are actually waiting on (the newest request), else the operation the person started. */
+function paintBusy(): void {
+  const labels = [...active.values()];
+  const main = labels[labels.length - 1] ?? fallbackLabel;
+  if (!main || (pending === 0 && labels.length === 0)) {
+    busyEl.hidden = true;
+    document.body.removeAttribute("aria-busy");
+    return;
+  }
+  const more = labels.length > 1 ? `<small>+${labels.length - 1} more</small>` : "";
+  busyEl.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(main)}</span>${more}`;
   busyEl.hidden = false;
   document.body.setAttribute("aria-busy", "true");
 }
+/** Names the current operation; shown whenever no more specific request is in flight. */
+function note(label: string): void {
+  fallbackLabel = label;
+  paintBusy();
+}
+function showBusy(label: string): void {
+  pending++;
+  note(label);
+}
 function hideBusy(): void {
   pending = Math.max(0, pending - 1);
-  if (pending === 0) {
-    busyEl.hidden = true;
-    document.body.removeAttribute("aria-busy");
-  }
+  if (pending === 0) fallbackLabel = "";
+  paintBusy();
 }
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -317,13 +341,13 @@ root.addEventListener("click", async (ev) => {
   if (d["go"]) { ev.preventDefault(); go({ name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
-    if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]));
+    if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");
   }
-  else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))));
-  else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!));
+  else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))), "Opening the folder…");
+  else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
   else if (t.id === "pick-again") await guarded(pickerTop);
-  else if (t.id === "sign-in") await signIn();
-  else if (t.id === "sign-out") { forgetLocalPointer(); await signOut(); }
+  else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
+  else if (t.id === "sign-out") { forgetLocalPointer(); showBusy("Signing out of Microsoft…"); await signOut(); }
   else if (t.id === "disconnect") {
     await guarded(async () => {
       await savePointer(undefined);
@@ -387,7 +411,7 @@ root.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const form = ev.target as HTMLFormElement;
   if (form.id === "pick-link") {
-    await guarded(async () => useFolder(await folderFromLink(val(form, "link"))));
+    await guarded(async () => useFolder(await folderFromLink(val(form, "link"))), "Opening the shared link…");
     return;
   }
   if (form.id === "new-folder") {
@@ -395,7 +419,7 @@ root.addEventListener("submit", async (ev) => {
       const made = await createSubfolder(picker.path[picker.path.length - 1]!, val(form, "name"));
       await pickerOpen(picker.path);
       status = `Created "${made.name}".`;
-    });
+    }, "Creating the folder…");
     return;
   }
   if (form.id === "share-form" && workspace) {
@@ -405,7 +429,7 @@ root.addEventListener("submit", async (ev) => {
       await inviteToFolder(folder, email, `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
       status = `Invited ${email}. If they do not get an email, share the folder with them in OneDrive instead.`;
       sharing = false;
-    });
+    }, "Inviting them to the folder…");
     return;
   }
   if (form.id === "start-year") {
@@ -413,7 +437,7 @@ root.addEventListener("submit", async (ev) => {
       const pointer = await startYear(pendingYear!, val(form, "label"));
       attach(await openWorkspace(pointer, store.clientId));
       pendingYear = undefined;
-    });
+    }, "Setting up the school year…");
     return;
   }
   if (form.id === "add-child") {
@@ -452,7 +476,7 @@ root.addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
-    await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)));
+    await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);
     return;
   }
   if (input.id !== "import" || !input.files?.[0]) return;
@@ -466,7 +490,9 @@ root.addEventListener("change", async (ev) => {
 await ledger.refresh();
 render();
 await guarded(async () => {
+  note("Completing Microsoft sign-in…");
   account = await initAuth();
+  if (account) note("Finding your saved folder…");
   const pointer = account ? await loadPointer() : undefined;
   if (account && pointer) {
     try {

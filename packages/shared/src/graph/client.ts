@@ -37,6 +37,70 @@ export function currentGraphConfig(): GraphConfig {
   return config;
 }
 
+/** Something the app is waiting on from OneDrive/Microsoft, described for people ("Downloading receipt.pdf"). */
+export type ActivityEvent =
+  | { type: "start"; id: number; label: string }
+  | { type: "update"; id: number; label: string }
+  | { type: "end"; id: number };
+
+let observer: ((event: ActivityEvent) => void) | undefined;
+let nextActivityId = 1;
+
+/** The UI registers here to show what is in flight (one observer; pass undefined to stop). */
+export function observeActivity(fn: ((event: ActivityEvent) => void) | undefined): void {
+  observer = fn;
+}
+
+/** Reports `work` as an activity for its duration. `update` changes the label (retries, upload progress). */
+export async function trackActivity<T>(label: string, work: (update: (label: string) => void) => Promise<T>): Promise<T> {
+  const id = nextActivityId++;
+  observer?.({ type: "start", id, label });
+  try {
+    return await work((next) => observer?.({ type: "update", id, label: next }));
+  } finally {
+    observer?.({ type: "end", id });
+  }
+}
+
+const decode = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
+
+/** Plain-language description of a Graph request, from its method and URL (and body for folder creation). */
+export function describeRequest(method: string, url: string, body?: unknown): string {
+  const path = url.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, "");
+  const named = /:\/([^:?]+)(?::|\?|$)/.exec(path)?.[1];
+  const name = named ? decode(named) : undefined;
+  if (path.includes("/workbook/")) return method === "GET" ? "Reading the Excel workbook…" : "Updating the Excel workbook…";
+  if (path.includes("/invite")) return "Sending the invitation…";
+  if (path.startsWith("/shares/")) return "Opening the shared link…";
+  if (path.includes("sharedWithMe")) return "Finding folders shared with you…";
+  if (path.includes("/special/approot")) return method === "GET" ? "Loading your saved settings…" : "Saving your settings…";
+  if (path.startsWith("/me/drive/root")) return "Opening your OneDrive…";
+  if (path.includes("/createUploadSession")) return `Uploading ${name ?? "a file"}…`;
+  if (method === "PUT" && path.includes("/content")) {
+    if (name?.endsWith(".jsonl")) return "Saving your changes to OneDrive…";
+    return `Uploading ${name ?? "a file"}…`;
+  }
+  if (method === "GET" && path.includes("/content")) return "Downloading a file…";
+  if (method === "POST" && path.endsWith("/children")) {
+    let folder: string | undefined;
+    try {
+      folder = typeof body === "string" ? (JSON.parse(body) as { name?: string }).name : undefined;
+    } catch { /* label falls back to the generic text */ }
+    return folder ? `Creating the folder ${folder}…` : "Creating a folder…";
+  }
+  if (method === "GET" && /\/children(\?|$)/.test(path)) return "Reading the folder's contents…";
+  if (method === "GET" && name) return `Looking for ${name}…`;
+  if (method === "GET" && path.includes("$select=eTag")) return "Checking the file's version…";
+  if (method === "GET") return "Reading from OneDrive…";
+  return "Saving to OneDrive…";
+}
+
 export class GraphError extends Error {
   constructor(public status: number, public body: string, method: string, url: string) {
     super(`Graph API ${method} ${url} failed with ${status}: ${body}`);
@@ -57,17 +121,31 @@ function retryDelayMs(response: Response | undefined, attempt: number): number {
  * Retries 429/502/503/504 and network errors with backoff (honouring Retry-After), and refreshes the token once on 401.
  * A request body must be re-sendable (string/Blob/ArrayBuffer/Uint8Array), not a one-shot stream.
  */
-export async function graphFetch(
-  path: string,
-  init: RequestInit & { rawBody?: boolean } = {}
+export function graphFetch(path: string, init: RequestInit & { rawBody?: boolean } = {}): Promise<Response> {
+  const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
+  const label = describeRequest(init.method ?? "GET", url, init.body);
+  return trackActivity(label, (update) => graphFetchTracked(url, init, label, update));
+}
+
+async function graphFetchTracked(
+  url: string,
+  init: RequestInit & { rawBody?: boolean },
+  label: string,
+  update: (label: string) => void
 ): Promise<Response> {
   if (!tokenProvider) throw new Error("No Graph token provider registered — call setTokenProvider() first.");
-  const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
   const method = init.method ?? "GET";
   let refreshed = false;
+  const waitThenResume = async (ms: number, why: string) => {
+    update(`${why} Retrying in ${Math.max(1, Math.round(ms / 1000))}s…`);
+    await config.sleep(ms);
+    update(label);
+  };
 
   for (let attempt = 0; ; attempt++) {
+    update("Checking your Microsoft sign-in…");
     const token = await tokenProvider();
+    update(label);
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
     if (!init.rawBody && init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -77,7 +155,7 @@ export async function graphFetch(
       response = await config.fetch(url, { ...init, headers });
     } catch (err) {
       if (attempt >= config.maxRetries) throw err;
-      await config.sleep(retryDelayMs(undefined, attempt));
+      await waitThenResume(retryDelayMs(undefined, attempt), "Connection problem.");
       continue;
     }
 
@@ -87,7 +165,7 @@ export async function graphFetch(
       continue;
     }
     if (RETRYABLE.has(response.status) && attempt < config.maxRetries) {
-      await config.sleep(retryDelayMs(response, attempt));
+      await waitThenResume(retryDelayMs(response, attempt), response.status === 429 ? "OneDrive asked us to slow down." : "OneDrive is busy.");
       continue;
     }
     const body = await response.text().catch(() => "");
