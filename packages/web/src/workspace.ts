@@ -3,6 +3,7 @@ import {
   Ledger,
   OneDriveEventStore,
   YEAR_FOLDER_RE,
+  GraphError,
   ensureFolder,
   graphJson,
   ensureLedgerFolders,
@@ -99,4 +100,9 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
 export async function workspaceFolder(pointer: Pointer): Promise<FolderEntry> {
   const item = await graphJson<{ name: string }>(`/drives/${pointer.driveId}/items/${pointer.rootId}?$select=name`);
   return { driveId: pointer.driveId, itemId: pointer.rootId, name: item.name };
+}
+
+/** The saved folder no longer exists or this account can no longer reach it (deleted, moved out of reach, or access removed). */
+export function isDeadPointer(err: unknown): boolean {
+  return err instanceof GraphError && [400, 403, 404, 410].includes(err.status);
 }

@@ -32,7 +32,7 @@ import {
 } from "@step-up/shared/web";
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
-import { loadPointer, openWorkspace, NoLedgerYearError, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { loadPointer, openWorkspace, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import "./style.css";
 
 const CLIENT_KEY = "stepup.clientId";
@@ -78,7 +78,18 @@ async function guarded(action: () => Promise<void>): Promise<void> {
   try {
     await action();
   } catch (err) {
-    status = err instanceof Error ? err.message : String(err);
+    if (workspace && isDeadPointer(err)) {
+      // The folder was deleted or access was removed while open: same as having no folder.
+      await savePointer(undefined);
+      workspace = undefined;
+      activeStore = store;
+      ledger = new Ledger(store, new HlcClock(store.clientId), "web");
+      await ledger.refresh();
+      await pickerTop().catch(() => undefined);
+      status = "That folder is no longer available. Choose a folder to continue.";
+    } else {
+      status = err instanceof Error ? err.message : String(err);
+    }
   }
   render();
 }
@@ -372,9 +383,13 @@ await guarded(async () => {
       attach(await openWorkspace(pointer, store.clientId));
     } catch (err) {
       if (err instanceof NoLedgerYearError) pendingYear = pointer;
-      else {
-        status = `Could not open the saved folder (${err instanceof Error ? err.message : err}). Choose it again.`;
+      else if (isDeadPointer(err)) {
+        // A pointer to a folder that is gone is the same as no pointer: forget it and start onboarding.
         await savePointer(undefined);
+        await pickerTop();
+      } else {
+        // Probably a temporary problem (network, throttling): keep the saved choice and let the person retry.
+        status = `Could not reach your saved folder (${err instanceof Error ? err.message : err}). Reload to try again, or choose another folder.`;
         await pickerTop();
       }
     }
