@@ -7,6 +7,7 @@ import {
   evaluateItem,
   formatCents,
   toCents,
+  yearSummary,
   type CategoryInfo,
   type LedgerState,
   type RulesContext,
@@ -138,5 +139,15 @@ describe("money", () => {
   it("estimates tax at 7% by default and uses a given rate", () => {
     expect(estimateTaxCents(10_000)).toBe(700);
     expect(estimateTaxCents(10_000, 0.065)).toBe(650);
+  });
+});
+
+describe("yearSummary", () => {
+  it("rolls budgets, status counts and the deadline into one result", () => {
+    const st = baseState();
+    const summary = yearSummary(st, { ...ctx, today: "2027-06-20" });
+    expect(summary.children.map((c) => c.childId)).toEqual(Object.keys(st.children).sort());
+    expect(summary.deadline).toEqual({ date: "2027-06-30", daysLeft: 10 });
+    expect(Object.values(summary.statusCounts).reduce((a, n) => a + n, 0)).toBe(Object.keys(st.items).length);
   });
 });

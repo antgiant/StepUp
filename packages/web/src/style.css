@@ -93,3 +93,12 @@ label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--f
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 18px 14px; box-shadow: var(--shadow); }
 .card h3 { margin-top: 14px; }
 h4 { margin: 14px 0 6px; font-size: .9rem; }
+
+/* Tabs and summary */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 8px 0 12px; }
+.tabs a { padding: 8px 14px; text-decoration: none; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.banner { padding: 8px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+form.inline { display: flex; gap: 6px; } form.inline input { width: 7.5em; padding: 4px 8px; } form.inline button { padding: 4px 10px; background: transparent; color: var(--fg); border-color: var(--line); }
+.bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 6px; overflow: hidden; } .bar span { display: block; height: 100%; background: var(--accent); }
+.queue > li strong { font-variant-numeric: tabular-nums; }

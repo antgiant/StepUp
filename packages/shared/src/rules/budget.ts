@@ -1,5 +1,5 @@
 import type { LedgerState } from "../domain/types.js";
-import { isFiled, requestedCents } from "./readiness.js";
+import { displayStatus, evaluateItem, isFiled, requestedCents, type RulesContext } from "./readiness.js";
 
 export interface ChildBudget {
   childId: string;
@@ -43,4 +43,30 @@ export function childBudget(state: LedgerState, childId: string): ChildBudget {
 export function daysUntil(deadline: string, today: string): number {
   const ms = Date.parse(`${deadline}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`);
   return Math.round(ms / 86_400_000);
+}
+
+export interface YearSummary {
+  children: ChildBudget[];
+  /** Items by their display status ("Unfiled (Ready to Submit)", "Submitted", "Paid", ...), archived items excluded. */
+  statusCounts: Record<string, number>;
+  /** Present when the year has a submission deadline; `daysLeft` is negative once it has passed. */
+  deadline?: { date: string; daysLeft: number };
+}
+
+/** Everything the summary page shows, in one pure call. */
+export function yearSummary(state: LedgerState, ctx: RulesContext): YearSummary {
+  const date = Object.values(state.settings)[0]?.submissionDeadline;
+  const statusCounts: Record<string, number> = {};
+  for (const item of Object.values(state.items)) {
+    if (item.archived) continue;
+    const status = displayStatus(item, evaluateItem(state, item.id, ctx), ctx, date);
+    statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+  }
+  return {
+    children: Object.values(state.children)
+      .sort((a, c) => (a.name ?? a.id).localeCompare(c.name ?? c.id))
+      .map((c) => childBudget(state, c.id)),
+    statusCounts,
+    ...(date ? { deadline: { date, daysLeft: daysUntil(date, ctx.today) } } : {}),
+  };
 }

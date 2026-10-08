@@ -23,6 +23,7 @@ import {
   newId,
   reallocateTax,
   observeActivity,
+  yearSummary,
   fetchItemContent,
   uploadReceipt,
   setPurchaseArchived,
@@ -145,7 +146,7 @@ async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
   }, "Uploading to OneDrive…");
 }
 
-type View = { name: "queue" } | { name: "purchase"; id: string; draft?: boolean };
+type View = { name: "queue" } | { name: "summary" } | { name: "purchase"; id: string; draft?: boolean };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
@@ -391,6 +392,38 @@ function queueView(): string {
   return `${childForm}${startBlank}<h2>Needs your attention (${entries.length})</h2><ul class="queue">${rows.join("")}</ul>${archivedList}`;
 }
 
+function summaryView(): string {
+  const state = ledger.state;
+  const s = yearSummary(state, ctx());
+  const money = (c: number) => formatCents(c);
+  const d = s.deadline;
+  const banner = d
+    ? `<p class="${d.daysLeft < 0 ? "warn" : d.daysLeft <= 30 ? "warn" : "note"} banner">${d.daysLeft < 0 ? `The submission deadline passed ${-d.daysLeft} day(s) ago (${esc(d.date)}).` : `${d.daysLeft} day(s) until the submission deadline (${esc(d.date)}).`}</p>`
+    : `<p class="note banner">No submission deadline set.</p>`;
+  const deadlineForm = `<form id="deadline-form" class="row"><label>Submission deadline<input name="deadline" type="date" value="${esc(d?.date)}"></label><button>Save deadline</button></form>`;
+  const rows = s.children.map((b) => {
+    const c = state.children[b.childId]!;
+    const width = b.capCents > 0 ? Math.min(100, Math.round(((b.paidCents + b.approvedCents + b.pendingCents) / b.capCents) * 100)) : 0;
+    return `<tr><td><strong>${esc(c.name ?? c.id)}</strong><br><small>${esc(c.scholarship)}</small></td>
+      <td><form class="inline" data-cap="${esc(c.id)}"><input name="cap" inputmode="decimal" aria-label="Award for ${esc(c.name)}" value="${b.capCents ? (b.capCents / 100).toFixed(2) : ""}" placeholder="0.00"><button>Save</button></form>
+        <div class="bar" title="${width}% used"><span style="width:${width}%"></span></div></td>
+      <td class="num">${money(b.paidCents)}</td><td class="num">${money(b.approvedCents)}</td><td class="num">${money(b.pendingCents)}</td>
+      <td class="num ${b.remainingCents < 0 ? "warn" : "ok"}">${money(b.remainingCents)}</td><td class="num">${money(b.unfiledCents)}</td></tr>`;
+  });
+  const counts = Object.entries(s.statusCounts).sort(([a], [b]) => a.localeCompare(b));
+  return `<h2>Summary</h2>${banner}${deadlineForm}
+    <h3>Awards</h3>
+    ${rows.length ? `<table><thead><tr><th>Student</th><th>Award</th><th>Paid</th><th>Approved</th><th>Pending</th><th>Remaining</th><th>Not yet filed</th></tr></thead><tbody>${rows.join("")}</tbody></table>
+      <p class="note">Remaining = award &minus; paid &minus; approved &minus; pending. "Not yet filed" is informational and not counted against the award.</p>` : `<p>Add a student on the list page first.</p>`}
+    <h3>Items by status</h3>
+    ${counts.length ? `<ul class="queue">${counts.map(([k, n]) => `<li><span>${esc(k)}</span><strong>${n}</strong></li>`).join("")}</ul>` : "<p>No items yet.</p>"}`;
+}
+
+function tabs(): string {
+  const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
+  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("summary", "Summary")}</div>`;
+}
+
 function purchaseView(id: string, draft = false): string {
   const state = ledger.state;
   const p = state.purchases[id] ?? (draft ? { id } : undefined);
@@ -511,8 +544,9 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 }
 
 function render(): void {
-  const body = account && !workspace ? onboardingView() : view.name === "queue" ? queueView() : purchaseView(view.id, view.draft);
-  root.innerHTML = header() + previewPanel() + body;
+  const onboarding = account && !workspace;
+  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : purchaseView(view.id, view.draft);
+  root.innerHTML = header() + (onboarding ? "" : tabs()) + previewPanel() + body;
 }
 
 function go(next: View): void {
@@ -525,7 +559,7 @@ root.addEventListener("click", async (ev) => {
   if (!t) return;
   if (!t.closest(".menu")) root.querySelector<HTMLDetailsElement>("details.menu")?.removeAttribute("open");
   const d = t.dataset;
-  if (d["go"]) { ev.preventDefault(); go({ name: "queue" }); }
+  if (d["go"]) { ev.preventDefault(); go({ name: d["go"] === "summary" ? "summary" : "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
     if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");
@@ -657,7 +691,12 @@ root.addEventListener("submit", async (ev) => {
     }, "Setting up the school year…");
     return;
   }
-  if (form.id === "category-form") {
+  if (form.id === "deadline-form") {
+    ledger.set("setting", "year", { submissionDeadline: val(form, "deadline") }, { label: "setting.deadlineSet" });
+  } else if (form.dataset["cap"]) {
+    const cap = toCents(val(form, "cap"));
+    ledger.set("child", form.dataset["cap"], { capCents: cap ?? 0 }, { label: "child.awardSet" });
+  } else if (form.id === "category-form") {
     const ref = reference();
     if (ref) {
       const needs = (form.elements.namedItem("needsDate") as HTMLInputElement).checked;
