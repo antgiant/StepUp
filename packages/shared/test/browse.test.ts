@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configureGraph, createSubfolder, setTokenProvider, sharedFolders, subfolders } from "../src/index.js";
+import { configureGraph, createSubfolder, inviteToFolder, loadRemotePointer, saveRemotePointer, setTokenProvider, sharedFolders, subfolders } from "../src/index.js";
 
 const responses: Record<string, unknown> = {
   "/me/drive/sharedWithMe?$top=200": {
@@ -41,5 +41,22 @@ describe("folder browsing", () => {
   it("rejects folder names OneDrive cannot store", async () => {
     await expect(createSubfolder({ driveId: "d", itemId: "f", name: "F" }, "a/b")).rejects.toThrow();
     await expect(createSubfolder({ driveId: "d", itemId: "f", name: "F" }, "  ")).rejects.toThrow();
+  });
+});
+
+describe("sharing and pointer", () => {
+  it("invites with write access and required sign-in", async () => {
+    let sent: { url: string; body: any } | undefined;
+    configureGraph({ fetch: (async (url: string, init: RequestInit) => { sent = { url: String(url), body: JSON.parse(String(init.body)) }; return new Response("{}", { status: 200 }); }) as typeof fetch });
+    await inviteToFolder({ driveId: "d", itemId: "f", name: "F" }, " a@b.com ");
+    expect(sent!.url).toContain("/drives/d/items/f/invite");
+    expect(sent!.body).toMatchObject({ recipients: [{ email: "a@b.com" }], requireSignIn: true, roles: ["write"] });
+    await expect(inviteToFolder({ driveId: "d", itemId: "f", name: "F" }, "nope")).rejects.toThrow();
+  });
+
+  it("reports no pointer when the app folder is unavailable", async () => {
+    configureGraph({ fetch: (async () => new Response("{}", { status: 404 })) as typeof fetch });
+    expect(await loadRemotePointer()).toBeUndefined();
+    expect(await saveRemotePointer({ driveId: "d", rootId: "r" })).toBe(false);
   });
 });

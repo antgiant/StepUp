@@ -4,23 +4,23 @@ import {
   OneDriveEventStore,
   YEAR_FOLDER_RE,
   ensureFolder,
+  graphJson,
   ensureLedgerFolders,
   type FolderEntry,
   listYears,
   openLedgerFolders,
+  loadRemotePointer,
   parentOf,
+  saveRemotePointer,
+  type Pointer,
   type YearInfo,
 } from "@step-up/shared/web";
 
 const KEY = "stepup.workspace.v1";
 
-export interface Pointer {
-  driveId: string;
-  rootId: string;
-  year?: string;
-}
+export type { Pointer };
 
-export function loadPointer(): Pointer | undefined {
+function readLocal(): Pointer | undefined {
   try {
     return JSON.parse(localStorage.getItem(KEY) ?? "null") ?? undefined;
   } catch {
@@ -28,14 +28,30 @@ export function loadPointer(): Pointer | undefined {
   }
 }
 
-export function savePointer(p: Pointer | undefined): void {
+function writeLocal(p: Pointer | undefined): void {
   try {
     if (p) localStorage.setItem(KEY, JSON.stringify(p));
     else localStorage.removeItem(KEY);
   } catch {
-    /* storage blocked: the pointer just isn't remembered */
+    /* storage blocked: the browser copy just isn't kept */
   }
 }
+
+/** The account's own saved choice (OneDrive app folder) wins, so a new device needs no setup; the browser copy is the fallback. */
+export async function loadPointer(): Promise<Pointer | undefined> {
+  const remote = await loadRemotePointer().catch(() => undefined);
+  if (remote) writeLocal(remote);
+  return remote ?? readLocal();
+}
+
+/** Remembers the choice on this browser and, best effort, in the account. `undefined` forgets it everywhere. */
+export async function savePointer(p: Pointer | undefined): Promise<void> {
+  writeLocal(p);
+  await saveRemotePointer(p).catch(() => false);
+}
+
+/** Forgets only this browser's copy (used on sign-out so the account keeps its choice). */
+export const forgetLocalPointer = () => writeLocal(undefined);
 
 /** A picked folder is either the workspace root (holding year folders) or one of its year folders. */
 export async function pointerFromFolder(folder: FolderEntry): Promise<Pointer> {
@@ -77,4 +93,10 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const ledger = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
   await ledger.refresh();
   return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger };
+}
+
+/** The workspace root as a shareable folder entry. */
+export async function workspaceFolder(pointer: Pointer): Promise<FolderEntry> {
+  const item = await graphJson<{ name: string }>(`/drives/${pointer.driveId}/items/${pointer.rootId}?$select=name`);
+  return { driveId: pointer.driveId, itemId: pointer.rootId, name: item.name };
 }

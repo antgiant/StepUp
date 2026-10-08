@@ -2,6 +2,7 @@ import {
   HlcClock,
   Ledger,
   createSubfolder,
+  inviteToFolder,
   listLooseFiles,
   myDriveRoot,
   sharedFolders,
@@ -31,7 +32,7 @@ import {
 } from "@step-up/shared/web";
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
-import { loadPointer, openWorkspace, NoLedgerYearError, pointerFromFolder, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { loadPointer, openWorkspace, NoLedgerYearError, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import "./style.css";
 
 const CLIENT_KEY = "stepup.clientId";
@@ -56,6 +57,7 @@ let status = "";
 /** Folder picker (onboarding): `path` empty means the top level (own OneDrive + folders shared with the person). */
 let picker: { path: FolderEntry[]; mine?: FolderEntry; shared: FolderEntry[]; list: FolderEntry[] } = { path: [], shared: [], list: [] };
 let pendingYear: Pointer | undefined;
+let sharing = false;
 
 // Category rules are shared reference data (plan §3.8) and are not loaded yet: every category counts as known.
 const ctx = (): RulesContext => ({
@@ -90,7 +92,7 @@ function attach(next: OpenWorkspace | undefined): void {
   if (next) {
     ledger = next.ledger;
     activeStore = ledger.store;
-    savePointer(next.pointer);
+    void savePointer(next.pointer);
   }
 }
 
@@ -100,7 +102,13 @@ function connectionBar(): string {
   if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    <button id="check-files">Check for new files</button> <button id="disconnect">Disconnect</button> <button id="sign-out">Sign out</button></p>`;
+    <button id="check-files">Check for new files</button> <button id="share">Share</button> <button id="disconnect">Disconnect</button> <button id="sign-out">Sign out</button></p>`;
+}
+
+function shareForm(): string {
+  return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Microsoft account email" required>
+    <button>Invite to edit</button></form>
+    <p class="note">They get an email from OneDrive and must sign in with that account. After accepting, they open ${esc(location.origin)}, sign in, and pick this folder from "Shared with you".</p>`;
 }
 
 function header(): string {
@@ -108,7 +116,7 @@ function header(): string {
   return `<header><h1><a href="#" data-go="queue">Step Up Helper</a></h1>
     <nav><label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
     <button id="export">Export events</button>${unsaved ? `<span class="warn">${unsaved} unsaved</span>` : ""}</nav></header>
-    ${connectionBar()}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
+    ${connectionBar()}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
 }
 
 function queueView(): string {
@@ -244,8 +252,9 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!));
   else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") await signIn();
-  else if (t.id === "sign-out") { savePointer(undefined); await signOut(); }
-  else if (t.id === "disconnect") { savePointer(undefined); workspace = undefined; activeStore = store; ledger = new Ledger(store, new HlcClock(store.clientId), "web"); await ledger.refresh(); await guarded(pickerTop); }
+  else if (t.id === "sign-out") { forgetLocalPointer(); await signOut(); }
+  else if (t.id === "disconnect") { await savePointer(undefined); workspace = undefined; activeStore = store; ledger = new Ledger(store, new HlcClock(store.clientId), "web"); await ledger.refresh(); await guarded(pickerTop); }
+  else if (t.id === "share") { sharing = !sharing; render(); }
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
       const plan = planIngest(ledger.state, await listLooseFiles(workspace!.driveId, workspace!.year.folderId));
@@ -293,6 +302,16 @@ root.addEventListener("submit", async (ev) => {
       const made = await createSubfolder(picker.path[picker.path.length - 1]!, val(form, "name"));
       await pickerOpen(picker.path);
       status = `Created "${made.name}".`;
+    });
+    return;
+  }
+  if (form.id === "share-form" && workspace) {
+    await guarded(async () => {
+      const email = val(form, "email");
+      const folder = await workspaceFolder(workspace!.pointer);
+      await inviteToFolder(folder, email, `Sharing our Step Up Helper folder. Sign in at ${location.origin}/ and choose it under "Shared with you".`);
+      status = `Invited ${email}. If they do not get an email, share the folder with them in OneDrive instead.`;
+      sharing = false;
     });
     return;
   }
@@ -347,7 +366,7 @@ await ledger.refresh();
 render();
 await guarded(async () => {
   account = await initAuth();
-  const pointer = loadPointer();
+  const pointer = account ? await loadPointer() : undefined;
   if (account && pointer) {
     try {
       attach(await openWorkspace(pointer, store.clientId));
@@ -355,7 +374,7 @@ await guarded(async () => {
       if (err instanceof NoLedgerYearError) pendingYear = pointer;
       else {
         status = `Could not open the saved folder (${err instanceof Error ? err.message : err}). Choose it again.`;
-        savePointer(undefined);
+        await savePointer(undefined);
         await pickerTop();
       }
     }

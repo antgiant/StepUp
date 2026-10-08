@@ -22,3 +22,4 @@ export * from "./graph/files.js";
 export * from "./events/onedriveStore.js";
 export * from "./workspace/workspace.js";
 export * from "./graph/browse.js";
+export * from "./workspace/pointer.js";

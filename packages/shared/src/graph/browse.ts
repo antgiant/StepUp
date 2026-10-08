@@ -64,3 +64,16 @@ export async function createSubfolder(parent: FolderEntry, name: string): Promis
   if (!clean || /[\\/:*?"<>|]/.test(clean)) throw new Error('Folder names cannot be empty or contain \\ / : * ? " < > |');
   return { driveId: parent.driveId, itemId: await ensureFolder(parent.driveId, parent.itemId, clean), name: clean };
 }
+
+/**
+ * Invites a person (by the email of their Microsoft account) to edit a folder. They must sign in, so the folder is never
+ * reachable by link alone. Graph emails them; the folder then appears under "Shared with you".
+ */
+export async function inviteToFolder(folder: FolderEntry, email: string, message?: string): Promise<void> {
+  const address = email.trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) throw new Error("Enter a valid email address.");
+  await graphJson(`/drives/${folder.driveId}/items/${folder.itemId}/invite`, {
+    method: "POST",
+    body: JSON.stringify({ recipients: [{ email: address }], requireSignIn: true, sendInvitation: true, roles: ["write"], ...(message ? { message } : {}) }),
+  });
+}
