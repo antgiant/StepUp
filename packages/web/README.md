@@ -10,7 +10,7 @@ attach a file as a receipt or as additional documentation, and the receipt works
 items below with child/amount/category carry-over, estimated then real tax/shipping, per-item readiness reasons).
 Events are stored in this browser's localStorage; Import/Export events moves a ledger as `events.jsonl`.
 
-**Not yet:** MSAL sign-in and the OneDrive event store, receipt preview/upload/capture, shared category reference
+**Not yet:** shared category reference
 data (every category is currently accepted), offline queue / PWA, join and new-year screens.
 
 **Onboarding:** sign in with Microsoft, pick a folder in the built-in navigator (your OneDrive or folders shared with you; you can create a new one), and if it has no school year yet, create one. The choice is remembered in this browser.
@@ -20,3 +20,5 @@ data (every category is currently accepted), offline queue / PWA, join and new-y
 **Settings:** the header's **Advanced** menu holds Import events, Export events and Disconnect. Anything that waits on OneDrive shows a labelled spinner; the caching strategy for slow Graph calls is in `docs/PLAN.md` §3.2b.
 
 **Caching:** the last-known ledger for the open year is kept in this browser (IndexedDB) so the page appears immediately and then refreshes from OneDrive, downloading only event logs whose ETag changed. It is cleared on sign-out and Disconnect.
+
+**Receipts:** once a folder is open, **Add receipt files** and **Take a photo** upload into the year folder and add the files to the list (identical files are skipped, name clashes get "(2)", big photos are shrunk). **Preview** shows a receipt from OneDrive (images and PDFs) without leaving the page.

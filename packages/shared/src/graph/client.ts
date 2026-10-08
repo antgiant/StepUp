@@ -121,11 +121,15 @@ function retryDelayMs(response: Response | undefined, attempt: number): number {
  * Retries 429/502/503/504 and network errors with backoff (honouring Retry-After), and refreshes the token once on 401.
  * A request body must be re-sendable (string/Blob/ArrayBuffer/Uint8Array), not a one-shot stream.
  */
-export function graphFetch(path: string, init: RequestInit & { rawBody?: boolean } = {}): Promise<Response> {
+export function graphFetch(path: string, init: GraphInit = {}): Promise<Response> {
   const url = path.startsWith("http") ? path : `${GRAPH_BASE}${path}`;
-  const label = describeRequest(init.method ?? "GET", url, init.body);
-  return trackActivity(label, (update) => graphFetchTracked(url, init, label, update));
+  const { label: given, ...rest } = init;
+  const label = given ?? describeRequest(rest.method ?? "GET", url, rest.body);
+  return trackActivity(label, (update) => graphFetchTracked(url, rest, label, update));
 }
+
+/** `label` overrides the automatic description when the caller knows more (e.g. the file name being downloaded). */
+export type GraphInit = RequestInit & { rawBody?: boolean; label?: string };
 
 async function graphFetchTracked(
   url: string,
@@ -173,7 +177,7 @@ async function graphFetchTracked(
   }
 }
 
-export async function graphJson<T>(path: string, init: RequestInit & { rawBody?: boolean } = {}): Promise<T> {
+export async function graphJson<T>(path: string, init: GraphInit = {}): Promise<T> {
   const response = await graphFetch(path, init);
   return (await response.json()) as T;
 }

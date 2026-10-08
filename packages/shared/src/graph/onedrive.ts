@@ -68,8 +68,8 @@ export async function listFolderChildren(ref: DriveItemRef): Promise<FolderChild
 }
 
 /** Fetches a file item's raw content; callers stream it to disk (Node) or read it as a Blob (browser). */
-export function fetchItemContent(driveId: string, itemId: string): Promise<Response> {
-  return graphFetch(`/drives/${driveId}/items/${itemId}/content`, { rawBody: true });
+export function fetchItemContent(driveId: string, itemId: string, label?: string): Promise<Response> {
+  return graphFetch(`/drives/${driveId}/items/${itemId}/content`, { rawBody: true, label });
 }
 
 /** Finds the best filename match in a folder for a loose document description (case-insensitive substring match). */

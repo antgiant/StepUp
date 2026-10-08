@@ -23,6 +23,8 @@ import {
   newId,
   reallocateTax,
   observeActivity,
+  fetchItemContent,
+  uploadReceipt,
   setPurchaseArchived,
   remainingToItemize,
   startPurchaseFromDocument,
@@ -36,6 +38,7 @@ import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, readCache, writeCache } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
 
 const CLIENT_KEY = "stepup.clientId";
@@ -69,6 +72,56 @@ const ctx = (): RulesContext => ({
 });
 
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
+/** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
+let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string } | undefined;
+const downloaded = new Map<string, { url: string; kind: PreviewKind }>();
+
+async function openPreview(docId: string): Promise<void> {
+  const doc = ledger.state.documents[docId];
+  if (!doc?.driveItemId || !workspace) return;
+  const filename = doc.filename ?? "receipt";
+  let got = downloaded.get(docId);
+  if (!got) {
+    const res = await fetchItemContent(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
+    const blob = await res.blob();
+    const kind = previewKind(filename, blob.type);
+    const typed = kind === "pdf" && blob.type !== "application/pdf" ? new Blob([blob], { type: "application/pdf" }) : blob;
+    got = { url: URL.createObjectURL(typed), kind };
+    downloaded.set(docId, got);
+  }
+  preview = { docId, filename, ...got, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
+}
+
+function previewPanel(): string {
+  if (!preview) return "";
+  const open = preview.webUrl?.startsWith("https://") ? ` <a href="${esc(preview.webUrl)}" target="_blank" rel="noopener">Open in OneDrive</a>` : "";
+  const body =
+    preview.kind === "image" ? `<img src="${esc(preview.url)}" alt="${esc(preview.filename)}">`
+    : preview.kind === "pdf" ? `<iframe src="${esc(preview.url)}" title="${esc(preview.filename)}"></iframe>`
+    : `<p class="note">This file type cannot be previewed here.${open}</p>`;
+  return `<section class="preview"><div class="preview-bar"><strong>${esc(preview.filename)}</strong><span>${preview.kind === "other" ? "" : open}<button id="close-preview">Close</button></span></div>${body}</section>`;
+}
+
+async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
+  if (!workspace || files.length === 0) return;
+  const ws = workspace;
+  await guarded(async () => {
+    let added = 0;
+    const dupes: string[] = [];
+    for (const [i, file] of files.entries()) {
+      note(`Preparing ${file.name} (${i + 1} of ${files.length})…`);
+      const prepared = await prepareUpload(file);
+      const name = fromCamera ? photoName(file) : prepared.name;
+      const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body: prepared.body, sha256: (await sha256Hex(prepared.body)) || undefined });
+      if (result.status === "uploaded") added++;
+      else dupes.push(result.name);
+      await ledger.flush();
+    }
+    persist();
+    status = [added ? `Added ${added} file(s) to the list.` : "", dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : ""].filter(Boolean).join(" ");
+  }, "Uploading to OneDrive…");
+}
+
 type View = { name: "queue" } | { name: "purchase"; id: string; draft?: boolean };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
@@ -121,6 +174,7 @@ const val = (form: HTMLFormElement, name: string) => (form.elements.namedItem(na
 /** The folder was deleted or access was removed while open: same as having no folder. */
 async function dropWorkspace(): Promise<void> {
   forgetCache();
+  clearPreviews();
   await savePointer(undefined);
   workspace = undefined;
   activeStore = store;
@@ -128,6 +182,12 @@ async function dropWorkspace(): Promise<void> {
   await ledger.refresh();
   await pickerTop().catch(() => undefined);
   status = "That folder is no longer available. Choose a folder to continue.";
+}
+
+function clearPreviews(): void {
+  preview = undefined;
+  for (const d of downloaded.values()) URL.revokeObjectURL(d.url);
+  downloaded.clear();
 }
 
 /** Browser cache of the open workspace (see cache.ts). Best effort: failures just mean a slower next visit. */
@@ -242,7 +302,11 @@ function queueView(): string {
   const childForm = `<details><summary>Children (${children.length})</summary>
     <ul>${children.map((c) => `<li>${esc(c.name)} ${c.scholarship ? `<small>${esc(c.scholarship)}</small>` : ""}</li>`).join("")}</ul>
     <form id="add-child" class="row"><input name="name" placeholder="Name" required><input name="scholarship" placeholder="Scholarship (e.g. FES-UA)"><button>Add child</button></form></details>`;
-  const startBlank = `<p><button id="new-purchase">New purchase without a file</button></p>`;
+  const uploads = workspace
+    ? ` <label class="btn">Add receipt files<input type="file" id="upload" multiple accept="application/pdf,image/*" hidden></label>
+        <label class="btn">Take a photo<input type="file" id="photo" accept="image/*" capture="environment" hidden></label>`
+    : "";
+  const startBlank = `<p class="row"><button id="new-purchase">New purchase without a file</button>${uploads}</p>`;
   const archived = Object.values(state.purchases).filter((p) => p.archived);
   const archivedList = archived.length
     ? `<details><summary>Archived purchases (${archived.length})</summary><ul class="queue">${archived.map((p) => `<li class="q"><span>${esc(p.vendor ?? state.documents[p.receiptDocumentId ?? ""]?.filename ?? "Untitled purchase")} <small>${esc(p.date)}</small></span><button data-unarchive="${esc(p.id)}">Restore</button></li>`).join("")}</ul></details>`
@@ -255,7 +319,7 @@ function queueView(): string {
     }).join("");
     const actions =
       e.kind === "unattached-document"
-        ? `<button data-start="${esc(e.id)}">Start purchase</button>${sugg}`
+        ? `<button data-start="${esc(e.id)}">Start purchase</button>${state.documents[e.id]?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${sugg}`
         : `<button data-open="${esc(e.purchaseId ?? e.id)}">Open</button>${e.kind === "purchase-needs-items" ? `<button data-archive="${esc(e.id)}">Archive</button>` : ""}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}<br><small>${esc(e.reasons.join("; "))}</small></div><div class="actions">${actions}</div></li>`;
@@ -295,6 +359,7 @@ function purchaseView(id: string, draft = false): string {
   const categories = [...new Set(Object.values(state.items).map((i) => i.categoryId).filter(Boolean))];
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
+  ${doc?.driveItemId && workspace ? `<p><button data-preview="${esc(doc.id)}">Preview receipt</button></p>` : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
@@ -367,7 +432,7 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 
 function render(): void {
   const body = account && !workspace ? onboardingView() : view.name === "queue" ? queueView() : purchaseView(view.id, view.draft);
-  root.innerHTML = header() + body;
+  root.innerHTML = header() + previewPanel() + body;
 }
 
 function go(next: View): void {
@@ -393,6 +458,7 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "disconnect") {
     await guarded(async () => {
       forgetCache();
+      clearPreviews();
       await savePointer(undefined);
       workspace = undefined;
       activeStore = store;
@@ -432,6 +498,12 @@ root.addEventListener("click", async (ev) => {
     const result = d["role"] === "receipt" ? attachAsReceipt(ledger, target.id, d["attach"]) : attachAdditional(ledger, target, d["attach"]);
     if (!result.ok) alert(`Could not attach: ${result.reason}`);
     await save();
+  } else if (d["preview"]) {
+    await guarded(() => openPreview(d["preview"]!), "Downloading the receipt…");
+    window.scrollTo({ top: 0 });
+  } else if (t.id === "close-preview") {
+    preview = undefined;
+    render();
   } else if (d["archive"]) {
     if (confirm("Archive this purchase? It and its items are hidden from the list, plan and budget. You can restore it later.")) {
       setPurchaseArchived(ledger, d["archive"]);
@@ -520,6 +592,12 @@ root.addEventListener("change", async (ev) => {
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
     await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);
+    return;
+  }
+  if ((input.id === "upload" || input.id === "photo") && input.files?.length) {
+    const files = [...input.files];
+    input.value = "";
+    await uploadFiles(files, input.id === "photo");
     return;
   }
   if (input.id !== "import" || !input.files?.[0]) return;

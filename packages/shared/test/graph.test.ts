@@ -11,6 +11,7 @@ import {
   graphJson,
   readTextFile,
   setTokenProvider,
+  uploadReceipt,
   writeFile,
   type LedgerEvent,
 } from "../src/index.js";
@@ -195,5 +196,25 @@ describe("OneDriveEventStore cache", () => {
     await again.appendOwn([event("dev-a", 2, "i2", { description: "y" })]);
     expect(contentGets()).toBe(0);
     expect(g.text(g.child(folder, "dev-a.jsonl")!.id).trim().split("\n")).toHaveLength(2);
+  });
+});
+
+describe("uploadReceipt", () => {
+  it("uploads and registers, renames on a name clash, and skips an identical file", async () => {
+    const year = await ensureFolder("d", g.rootId, "2026-2027");
+    const ledger = new Ledger(new OneDriveEventStore("d", await ensureFolder("d", year, "events"), "dev-a"), new HlcClock("dev-a"), "t");
+    const bytes = (s: string) => new TextEncoder().encode(s);
+
+    const first = await uploadReceipt(ledger, "d", year, { name: "Acme 07 28 2026 Books.pdf", body: bytes("one"), sha256: "aa" });
+    expect(first.status).toBe("uploaded");
+    expect(ledger.state.documents[first.documentId]).toMatchObject({ filename: "Acme 07 28 2026 Books.pdf", source: "upload", contentKind: "receipt-like", sha256: "aa" });
+
+    const clash = await uploadReceipt(ledger, "d", year, { name: "Acme 07 28 2026 Books.pdf", body: bytes("two"), sha256: "bb" });
+    expect(clash).toMatchObject({ status: "uploaded", name: "Acme 07 28 2026 Books (2).pdf" });
+    expect(g.text(g.child(year, "Acme 07 28 2026 Books.pdf")!.id)).toBe("one");
+
+    const again = await uploadReceipt(ledger, "d", year, { name: "other.pdf", body: bytes("one"), sha256: "aa" });
+    expect(again).toMatchObject({ status: "duplicate", documentId: first.documentId });
+    expect(g.child(year, "other.pdf")).toBeUndefined();
   });
 });
