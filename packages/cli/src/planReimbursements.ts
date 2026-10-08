@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { closePrompt, waitForEnter } from "./form/pause.js";
 import { resolveShareLink } from "./graph/onedrive.js";
+import { planFromEventsFile, planFromYear } from "./planLedger.js";
 import { buildGroups, loadUnfiledRows } from "./reimbursements.js";
 
 function requireEnv(name: string): string {
@@ -10,6 +11,11 @@ function requireEnv(name: string): string {
 }
 
 async function main() {
+  const ledgerFile = process.argv.find((a) => a.startsWith("--ledger="))?.slice("--ledger=".length);
+  if (ledgerFile) return planFromEventsFile(ledgerFile).then(closePrompt);
+  const yearLabel = process.argv.find((a) => a.startsWith("--year="))?.slice("--year=".length);
+  if (yearLabel) return planFromYear(yearLabel).then(closePrompt);
+
   const excelRef = await resolveShareLink(requireEnv("ONEDRIVE_EXCEL_URL"));
 
   const rows = await loadUnfiledRows(excelRef);

@@ -1,5 +1,7 @@
 # Step Up Helper
 
+This is a system for tracking and managing the documentation and reimbursement requests for the Florida [StepUp For Students](https://apply.stepupforstudents.org/) program. It is available at https://stepup.wooleys.us however all data lives in your personal OneDrive account.
+
 Semi-automated Playwright helper for filing **FES-UA reimbursement requests** on [StepUp For Students](https://apply.stepupforstudents.org/), driven by your "FES UA Tracking Spreadsheet" on OneDrive. It:
 
 - Reads unfiled purchase rows (`Status = "Unfiled (Ready to Submit)"`) directly from your OneDrive Excel workbook via the **Microsoft Graph API** — not a downloaded copy — so it's always current and safe to use even while other collaborators have the sheet open.
