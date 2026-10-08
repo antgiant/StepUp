@@ -13,7 +13,7 @@ function cellValue(cell: MirrorCell, col: MirrorColumn | undefined): string | nu
 export async function renderMirrorXlsx(model: MirrorWorkbook): Promise<Uint8Array> {
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Step Up Automator";
+  wb.creator = "Step Up Helper";
   wb.description = `Generated mirror. State ${model.stateHash}`;
 
   for (const sheet of model.sheets) {

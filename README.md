@@ -1,4 +1,4 @@
-# Step Up Automator
+# Step Up Helper
 
 Semi-automated Playwright helper for filing **FES-UA reimbursement requests** on [StepUp For Students](https://apply.stepupforstudents.org/), driven by your "FES UA Tracking Spreadsheet" on OneDrive. It:
 
@@ -38,7 +38,7 @@ We tried skipping this by reusing Microsoft's own well-known public client IDs (
 
 1. Go to <https://azure.microsoft.com/free> and sign up for a free Azure account. This asks for a card for identity verification only — nothing in this project ever creates a billable resource (app registrations and Graph API calls are free), so you won't be charged.
 2. Once your subscription is active, go to <https://portal.azure.com> → **Entra ID** → **App registrations** → **New registration**.
-3. Name it anything (e.g. "Step Up Automator").
+3. Name it anything (e.g. "Step Up Helper").
 4. Under **Supported account types**, choose **"Accounts in any organizational directory and personal Microsoft accounts"**.
 5. Leave Redirect URI blank. Click **Register**.
 6. On the app's Overview page, copy the **Application (client) ID**.
