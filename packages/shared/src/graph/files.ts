@@ -1,4 +1,4 @@
-import { GraphError, graphFetch, graphJson, trackActivity } from "./client.js";
+import { GraphError, graphFetch, graphJson, noteServerTime, trackActivity } from "./client.js";
 import { sendUploadChunk } from "./uploadTransport.js";
 
 /** Simple PUT upload is limited to ~4 MB by Graph; anything larger needs an upload session. */
@@ -23,6 +23,7 @@ interface DriveItemJson {
   size?: number;
   webUrl?: string;
   folder?: unknown;
+  lastModifiedDateTime?: string;
 }
 
 const encodeName = (name: string) => encodeURIComponent(name);
@@ -103,6 +104,7 @@ export async function writeFile(driveId: string, parentId: string, name: string,
       body: body as BodyInit,
       rawBody: true,
     });
+    noteServerTime(item.lastModifiedDateTime);
     return { id: item.id, name: item.name, eTag: item.eTag, size: item.size, webUrl: item.webUrl };
   }
 

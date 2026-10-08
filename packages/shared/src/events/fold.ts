@@ -1,4 +1,5 @@
 import type { LedgerState } from "../domain/types.js";
+import { upcastEvent } from "./upcast.js";
 import { SCHEMA_VERSION, type Json, type LedgerEvent } from "./types.js";
 
 /** Bump when fold semantics change; snapshots with a different version are rebuilt from the logs. */
@@ -33,7 +34,8 @@ function maxStr(a: string | undefined, b: string): string {
 }
 
 /** Mutating single-event merge (used by foldEvents and for cheap optimistic local writes). */
-export function applyEventInPlace(state: RawState, e: LedgerEvent): void {
+export function applyEventInPlace(state: RawState, original: LedgerEvent): void {
+  const e = upcastEvent(original);
   if (e.schemaVersion > SCHEMA_VERSION) {
     state.skipped[e.id] = true;
     return;

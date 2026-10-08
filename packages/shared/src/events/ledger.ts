@@ -28,6 +28,11 @@ export class Ledger {
     return (this.cached ??= materialize(this.raw));
   }
 
+  /** Events written by a newer version of the app than this one; they are kept but not shown, so the person should update. */
+  get fromNewerVersion(): number {
+    return Object.keys(this.raw.skipped).length;
+  }
+
   get unflushedCount(): number {
     return this.pending.length;
   }

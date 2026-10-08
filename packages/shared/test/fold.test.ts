@@ -154,3 +154,25 @@ describe("Ledger across clients", () => {
     expect((await store.readAll()).length).toBe(1);
   });
 });
+
+import { upcastEvent, SCHEMA_VERSION as CURRENT, type LedgerEvent as Ev } from "../src/index.js";
+
+describe("schema upcasting", () => {
+  const old = (v: number, fields: Record<string, unknown>): Ev => ({ id: "h1", hlc: "h1", clientId: "c", schemaVersion: v, op: "set", entity: "item", entityId: "i", fields: fields as never });
+
+  it("walks an old event up through the registered steps, one version at a time", () => {
+    const migrations = {
+      1: (e: Ev) => ({ ...e, fields: { ...e.fields, description: (e.fields as Record<string, unknown>)["name"] } as never }),
+      2: (e: Ev) => ({ ...e, fields: { ...e.fields, amountCents: Math.round(Number((e.fields as Record<string, unknown>)["amount"]) * 100) } as never }),
+    };
+    const up = upcastEvent(old(1, { name: "Book", amount: 12.5 }), migrations, 3);
+    expect(up.schemaVersion).toBe(3);
+    expect(up.fields).toMatchObject({ description: "Book", amountCents: 1250 });
+  });
+
+  it("a version with no step registered is treated as compatible, and current events are untouched", () => {
+    expect(upcastEvent(old(1, { a: 1 }), {}, 3).schemaVersion).toBe(3);
+    const now = old(CURRENT, { a: 1 });
+    expect(upcastEvent(now)).toBe(now);
+  });
+});

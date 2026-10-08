@@ -18,6 +18,8 @@
     "year": "tsx packages/cli/src/year.ts",
     "ingest": "tsx packages/cli/src/ingest.ts",
     "report": "tsx packages/cli/src/report.ts",
+    "verify": "tsx packages/cli/src/verify.ts",
+    "backup": "tsx packages/cli/src/backup.ts",
     "reference:build": "tsx packages/cli/src/referenceBuild.ts",
     "reference:promote": "tsx packages/cli/src/referenceBuild.ts promote",
     "reference:validate": "tsx packages/cli/src/referenceBuild.ts validate"

@@ -101,6 +101,20 @@ export function describeRequest(method: string, url: string, body?: unknown): st
   return "Saving to OneDrive…";
 }
 
+let skewMs: number | undefined;
+
+/** Records what OneDrive says the time is (a file's modified time right after we wrote it) to compare with this device's clock. */
+export function noteServerTime(iso: string | undefined, receivedAt = Date.now()): void {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isFinite(t)) skewMs = t - receivedAt;
+}
+
+/** How far this device's clock is behind (+) or ahead (-) of OneDrive's, from the last write; undefined until one has been made. */
+export const serverClockSkewMs = (): number | undefined => skewMs;
+
+/** True when the clocks differ enough to scramble the order of edits made on different devices. */
+export const clockLooksWrong = (maxMs = 2 * 60_000): boolean => skewMs !== undefined && Math.abs(skewMs) > maxMs;
+
 export class GraphError extends Error {
   constructor(public status: number, public body: string, method: string, url: string) {
     super(`Graph API ${method} ${url} failed with ${status}: ${body}`);

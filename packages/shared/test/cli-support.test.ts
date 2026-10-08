@@ -121,3 +121,26 @@ describe("publishYearMirror", () => {
     expect((await publishYearMirror(opts)).status).toBe("off");
   });
 });
+
+import { clockLooksWrong, noteServerTime, serverClockSkewMs, writeFile } from "../src/index.js";
+
+describe("clock skew", () => {
+  it("compares OneDrive's idea of the time (a file's modified time after a write) with this device's", async () => {
+    noteServerTime(new Date(Date.now()).toISOString());
+    expect(clockLooksWrong()).toBe(false);
+    g.clockOffsetMs = 10 * 60_000; // the server is ten minutes ahead of this machine
+    await writeFile("d", g.rootId, "probe.txt", "x");
+    expect(serverClockSkewMs()!).toBeGreaterThan(9 * 60_000);
+    expect(clockLooksWrong()).toBe(true);
+    g.clockOffsetMs = 0;
+    await writeFile("d", g.rootId, "probe.txt", "y");
+    expect(clockLooksWrong()).toBe(false);
+  });
+
+  it("ignores a missing or unreadable time", () => {
+    noteServerTime(new Date(Date.now()).toISOString());
+    noteServerTime(undefined);
+    noteServerTime("not a date");
+    expect(clockLooksWrong()).toBe(false);
+  });
+});

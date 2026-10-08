@@ -10,6 +10,8 @@ interface Node {
 
 export class FakeGraph {
   nodes = new Map<string, Node>();
+  /** Makes the fake server's clock differ from the test machine's (for clock-skew tests). */
+  clockOffsetMs = 0;
   requests: Array<{ method: string; url: string }> = [];
   /** Queue of status codes to return (once each) before behaving normally, for retry tests. */
   failNext: Array<{ status: number; retryAfter?: number }> = [];
@@ -40,7 +42,7 @@ export class FakeGraph {
   }
 
   private meta(n: Node) {
-    return { id: n.id, name: n.name, eTag: `"${n.id}-${n.version}"`, size: n.content.byteLength, webUrl: `https://fake/${n.id}`, parentReference: { id: n.parent }, ...(n.isFolder ? { folder: {} } : {}) };
+    return { id: n.id, name: n.name, eTag: `"${n.id}-${n.version}"`, size: n.content.byteLength, webUrl: `https://fake/${n.id}`, lastModifiedDateTime: new Date(Date.now() + this.clockOffsetMs).toISOString(), parentReference: { id: n.parent }, ...(n.isFolder ? { folder: {} } : {}) };
   }
 
   fetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
