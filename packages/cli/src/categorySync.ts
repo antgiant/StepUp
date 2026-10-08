@@ -28,7 +28,7 @@ const KNOWN_SCHOLARSHIP_NAMES: Record<string, string> = {
   fesua: "FES-UA",
 };
 
-function scholarshipDisplayName(code: string): string {
+export function scholarshipDisplayName(code: string): string {
   return KNOWN_SCHOLARSHIP_NAMES[code.toLowerCase()] ?? code.toUpperCase();
 }
 

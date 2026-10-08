@@ -1,0 +1,1424 @@
+{
+ "schemaVersion": 1,
+ "version": 1,
+ "hash": "18f25ee7273bd7",
+ "categories": [
+  {
+   "id": "00626ac9-ef34-408d-8693-4d5251ac906a",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Grade Results, Inc.",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "014d1cc3-fbbf-47de-906f-73a20d38b518",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Imagine Learning",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "0301d1bb-87a8-4b99-8ae9-b6148f4e5ff4",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Educational Subscription Kits",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "05c71118-7b48-49d5-b60e-0b7bbc1397b1",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Digital Periphery",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "092e6369-ef84-4a26-a10c-05379feac151",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "National and state standardized, norm-referenced assessments",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "0965053c-1109-4ec7-b146-fa2033dd316b",
+   "name": "Home Education Instructional Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "0fb13521-64d8-44c3-9318-f49ada4e64d8",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Device Use Training",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "1035f351-1067-4a0e-8c8b-35f2fe866b4f",
+   "name": "Annual Home Education Evaluation Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "11391577-1f28-4862-8c85-a57bfa571651",
+   "parentId": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "Field Trips",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "14bda666-dadd-40be-a8b0-8d3b4fa66f88",
+   "parentId": "82a2b9f6-8f9b-4511-a197-8219315ff770",
+   "name": "Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "15b04c2a-4a9f-4b62-9c45-0b27947d44a8",
+   "name": "Eligible Private School",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "15e3467c-7361-4a65-9bd5-db8e93bf14fd",
+   "name": "Specialized Services (Vision Therapy by Optometrists)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "179fd990-b03d-415f-b1b3-6c9af9f2b5d4",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Accelerate Education",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "1cb53cfa-29ff-44bf-8441-3077e2c72874",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "OptimaED, LLC",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "2152524c-cff0-4680-9d5c-728c007225ea",
+   "name": "Choice Navigator",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "25625247-d18f-4197-8da5-c4804ab7070a",
+   "parentId": "15b04c2a-4a9f-4b62-9c45-0b27947d44a8",
+   "name": "Fees for Full-Time Students",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "26738706-50bb-4a4f-8af8-bfad2fabe10d",
+   "parentId": "434eb44f-6028-4530-a1f3-caefffdde4e6",
+   "name": "Online",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "28ff683d-22c9-42e6-962d-fefc6162a9d3",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Industry certification examinations",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "2ef02c4c-4e17-4c73-b6fd-01330b32692e",
+   "name": "Specialized Services (OT)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "3002521e-071e-4818-ab15-fe8011795d79",
+   "parentId": "be88e302-6762-4252-ac53-c1bdc6e6eb22",
+   "name": "Physical Therapist (PT) Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "35f18a05-76cc-4a11-a1a7-303c5f91cc24",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Other Standardized Testing Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "Contracted Public School Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "38569a62-20a1-4e01-b794-b24ce07f2267",
+   "parentId": "2ef02c4c-4e17-4c73-b6fd-01330b32692e",
+   "name": "Occupational Therapist (OT) Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "38726a29-fc26-4325-88d3-75980c783b7e",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Musical Instruments and Equipment",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Testing and Assessments",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "434eb44f-6028-4530-a1f3-caefffdde4e6",
+   "name": "Curriculum/Course",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "4a60b963-aad0-42b6-9942-ac5bd89544af",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Advanced Placement (AP) examinations",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "4d5dc161-eb5a-49ba-bf86-7ea65887f7a2",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Transition assessments",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "4d637761-6ae3-44b3-8278-5ff39000d8e1",
+   "parentId": "9fcc1fe4-385c-44c0-989a-3699d9a8532d",
+   "name": "Speech-Language Pathologist (SLP) Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "55cde30d-8773-45b9-8227-c12cf3cf999b",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "K12 Florida",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "5e93fbe9-0144-46d9-bd57-482cbb32b584",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Digital Materials",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Instructional Material",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP",
+    "READ"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "5f0e2ad8-8c86-489f-8618-d79fe20c1c25",
+   "name": "Programs Offered by VPK and School Readiness Providers",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "5f565041-da11-423c-b283-4e0bf2e98b13",
+   "name": "Specialized Services (Psychotherapy/Counseling)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "5fb99d84-5df4-4ffe-b78d-30dc8324133d",
+   "parentId": "bfecf1e5-21cc-46ca-8ff8-4074aceec3dd",
+   "name": "Job Development",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "6027487f-aa24-4199-b6bd-95dc69f0d9d7",
+   "parentId": "bfecf1e5-21cc-46ca-8ff8-4074aceec3dd",
+   "name": "Career Exploration/Counseling",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "61f3c1b2-bb77-46d8-9f6f-19dc9b148924",
+   "parentId": "e0e90d84-4529-4cee-a1d6-8a18a117f812",
+   "name": "Day School Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "67c2d959-8329-407b-87c4-4330820df406",
+   "parentId": "5f565041-da11-423c-b283-4e0bf2e98b13",
+   "name": "Psychotherapy/Counseling Services by a Florida Licensed Psychologist, School Psychologist, Mental Health Counselor, Marriage & Family Therapist or Clinical Social Worker",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "699edb5a-5733-4913-8745-19300c1bdcb4",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Lux Mundi Learning",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "69fe091b-581e-4e88-88a0-b86d57cf747f",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Conducting career and interest assessments",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "6d91c9a6-012b-45eb-9993-abd2f0d5909c",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "At-Home Classroom Furnishings",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "6e1d8bb5-a8de-42eb-8ef1-4a0cf461c387",
+   "parentId": "15b04c2a-4a9f-4b62-9c45-0b27947d44a8",
+   "name": "Tuition for Part-Time Students",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "6f432428-4fdf-4c8e-bbe6-29c53a41c4e9",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "UCP of Central Florida",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "70580370-6bec-4380-abe8-7f2a0b8f642a",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "National Highway Safety Administration",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "75f5fec2-1048-4a14-a2e0-afd1532f736b",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Digital Devices",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "READ"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "75fd4d85-1131-4d6e-8996-bd7d9aaaf207",
+   "name": "Florida Virtual School (FLVS)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "799cd04a-f6e2-4782-93d0-5a3bcf11363e",
+   "parentId": "5f0e2ad8-8c86-489f-8618-d79fe20c1c25",
+   "name": "Tuition",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "79cdef2f-04c2-4da0-aec7-47b3b1323e27",
+   "parentId": "eb4cd4b2-3dcc-46be-a227-766b16f7d9e2",
+   "name": "Listening and Spoken Language Specialist (LSL) Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "7c0ee5ef-3aa6-49f0-aaa9-873b34e76853",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Physical Education Instruction/Membership/Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "7d9f789f-219c-497d-aa4c-4091454b97cd",
+   "name": "Hybrid Eligible Private School",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "7f7ef456-ff2c-4f68-bb60-32f7cf03c04a",
+   "parentId": "7d9f789f-219c-497d-aa4c-4091454b97cd",
+   "name": "Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "80ce7077-dba5-469b-a944-5a162130b2be",
+   "parentId": "b49c084f-7aa1-406b-b8cc-c9391d4201d1",
+   "name": "PATH International Certified Horse Therapy Centers",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "82a2b9f6-8f9b-4511-a197-8219315ff770",
+   "name": "Eligible Postsecondary Institution or Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "FLDOE Approved Virtual Instruction Program (VIP) Providers",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "8cbf07b6-c684-4bb2-abd6-c2e507bcd7fa",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Assessments related to postsecondary education",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "9127d1dc-3bec-4adb-8d7a-cb721e850673",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "School Supplies",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "958fa119-d0de-4531-aa73-238d4199e730",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Other FLDOE Approved Virtual Instruction Program (VIP) Providers",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "98245768-250b-4d8b-88ae-e3c088183864",
+   "parentId": "bfecf1e5-21cc-46ca-8ff8-4074aceec3dd",
+   "name": "Continued Onsite Job Coaching",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "9af9c204-3fcf-4973-83bc-36ed2b0caac9",
+   "parentId": "d4a097b5-47e6-4348-b429-eb3c498ce373",
+   "name": "Applied Behavior Analysis (ABA) Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "9b830902-d697-4ea4-b556-89bef362e2cc",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Accel Schools East",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "9d2dd847-f253-40c3-8435-aca795c923a5",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Elective Courses",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "9fcc1fe4-385c-44c0-989a-3699d9a8532d",
+   "name": "Specialized Services (SLP)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a0165d84-2045-4e22-9584-00b98c5c9117",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Sensory Material",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a37a4306-a982-4e8d-9b57-f231058c06b5",
+   "parentId": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "After-School/Summer Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a4d7c7a5-a3bf-4ec5-9e57-31eaa28bbc95",
+   "name": "Part-Time Tutoring Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a4fbbe88-dfd0-456c-8467-43d0e763f2ad",
+   "parentId": "bfecf1e5-21cc-46ca-8ff8-4074aceec3dd",
+   "name": "Job Training",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "FLDOE Approved Online Course Providers",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a7401770-e564-4a57-b1ac-90012cff5e20",
+   "parentId": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "Virtual Classes",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a847ad1a-9fac-42f7-aef1-239717527373",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "My Virtual Academy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a97e5527-c78c-4d39-883c-1c721f762545",
+   "parentId": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "Other Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "a9a8bc86-8e45-4b5c-80cd-43e5891d0edf",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Other FLDOE Approved Online Course Providers",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "ad2f0f8d-c11b-4e79-a9d6-1769991422b1",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Unbound Academy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "add4c3f1-8da5-4236-8836-7383f139544a",
+   "parentId": "15b04c2a-4a9f-4b62-9c45-0b27947d44a8",
+   "name": "Tuition for Full-Time Students",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "ae2e5d41-b81a-4931-ae5e-316a522e5012",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "eDynamic Learning ULC",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "af3603d5-7e28-4adb-8769-a7c9b851cdd6",
+   "parentId": "d51ef543-41fc-4dac-a864-a9d6a8c16402",
+   "name": "Full-Time Tutoring at a Commercial Building (Large Group)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "af5bfd3c-780c-430b-85f9-03b7da335afc",
+   "parentId": "15e3467c-7361-4a65-9bd5-db8e93bf14fd",
+   "name": "Vision Therapy by Optometrists",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "afda5a72-ae65-4a2f-996a-6849b1520aa1",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Somerset Virtual Academy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b124958a-1f74-402d-a926-c4f914b9f4d1",
+   "parentId": "434eb44f-6028-4530-a1f3-caefffdde4e6",
+   "name": "Hybrid",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b18a0d42-c1c6-4554-a81f-151d00fe934f",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Maintenance Agreement",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b1a9e6a1-266c-4077-8886-2dd57aa72823",
+   "parentId": "82a2b9f6-8f9b-4511-a197-8219315ff770",
+   "name": "Tuition",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b49c084f-7aa1-406b-b8cc-c9391d4201d1",
+   "name": "Horse Therapy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b533fc3c-dfc9-47d0-8796-4cc62d6439c4",
+   "name": "Preapprenticeship Programs",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b5ce3a9a-b0d6-42bf-9496-2601f5e27389",
+   "parentId": "e0e90d84-4529-4cee-a1d6-8a18a117f812",
+   "name": "After-School Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b62cfcc1-9472-400e-b0d2-f82efaf345bd",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Edmentum/Apex Learning",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "b75d7b3d-6cce-447a-af8b-068efe285a65",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Learning Manipulatives/Creative Play Items",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "ba877c16-e8a4-44c8-adba-411d9f373306",
+   "parentId": "422e7a5b-607a-4a04-b8bc-c0ac63c63a3d",
+   "name": "Initial or re-evaluation assessments",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "be88e302-6762-4252-ac53-c1bdc6e6eb22",
+   "name": "Specialized Services (PT)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "bfecf1e5-21cc-46ca-8ff8-4074aceec3dd",
+   "name": "Transition Services Provided by Job Coaches",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "c005aaf3-e2d6-469c-9da4-ca60fadc8782",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Harris Digital Learning",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "c90af6d0-1eb5-490e-ba8f-446c2136ce6c",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Books",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "cc058085-d9c9-41e6-9ff6-720a939ea882",
+   "name": "Specialized Summer Education Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "cc78c324-02a1-4c75-b50f-e772fe15f2a4",
+   "parentId": "bfecf1e5-21cc-46ca-8ff8-4074aceec3dd",
+   "name": "Programs Including Job Training/Coaching",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "cf4e7ee4-e798-4175-9420-bc48175e0991",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Connections Education of Florida, LLC",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "cfa11249-fce5-4925-a654-feb04d0645d1",
+   "parentId": "0965053c-1109-4ec7-b146-fa2033dd316b",
+   "name": "Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "d4a097b5-47e6-4348-b429-eb3c498ce373",
+   "name": "Specialized Services (ABA)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "d51ef543-41fc-4dac-a864-a9d6a8c16402",
+   "name": "Private Full-Time Tutoring Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "d5e6438d-975e-49b2-b004-7de3aede8dcd",
+   "parentId": "cc058085-d9c9-41e6-9ff6-720a939ea882",
+   "name": "Overnight or Day Educational Camp",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "d7550471-da21-4dd9-a206-5f9169ff99e9",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Internet Resources",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "d9bfccb1-fcd1-45fb-9505-fc3561520507",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Mater Virtual Academy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "dbe65de9-88b2-4dbb-b12a-606c195e5d1f",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Assistive Technology",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "de0e190c-7e2b-4e66-8fa2-fb4337e20111",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Lab Fees and Materials",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "dea4853d-8644-4ea3-b3cb-6a1f71d4df47",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "Founders Education LLC",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "dff873d6-23bb-47b9-af11-ccefc714aae7",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "K12 Preparatory Academy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e0e90d84-4529-4cee-a1d6-8a18a117f812",
+   "name": "Specialized After-School Education Program",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e1777bb3-9ef8-47d2-a26d-87c756c7de30",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Field Trips",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e30263e2-0c6f-448c-bf58-2def792500aa",
+   "name": "Music and Art Therapy",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e35f69e8-2d36-49f0-8456-caed3e54dff0",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Elective Course Equipment",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e3ca83aa-38eb-49e6-8f1e-8c1153514858",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Elective Course Supplies",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e4f13225-7a94-4aa4-accc-78f09bf10d38",
+   "parentId": "d51ef543-41fc-4dac-a864-a9d6a8c16402",
+   "name": "Private Full-Time Tutoring Services",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e5801176-f0f6-4d8b-adfc-fc3db3f7085c",
+   "parentId": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "Athletic/Club/Activity Participation",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "e5a5ceb5-952a-4230-9843-b0306a806c79",
+   "parentId": "380469e3-cebe-4e42-bfd3-83844e530eb1",
+   "name": "In-Person Classes",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "eaaa5a4d-ac94-4377-8118-9ddb36503323",
+   "parentId": "15b04c2a-4a9f-4b62-9c45-0b27947d44a8",
+   "name": "Fees for Part-Time Students",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "eb4cd4b2-3dcc-46be-a227-766b16f7d9e2",
+   "name": "Specialized Services (LSL)",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "ec94f615-8194-4664-ad45-88ce46d13bca",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Educational Software/Subscriptions",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "ef422a5a-8baa-436a-8cfa-5b38f2ff06ff",
+   "parentId": "5f0e2ad8-8c86-489f-8618-d79fe20c1c25",
+   "name": "Fees",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "f091f2d3-59d5-4eeb-996d-5d6df840859b",
+   "parentId": "5e995c9e-4384-4ae6-804c-61b8b7d3f927",
+   "name": "Physical Education Equipment/Supplies",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "f4fbc261-ec2d-4cf1-8770-1b8d1c730d8c",
+   "name": "Sales Tax",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "f5ee831d-8349-4448-be24-b870154dba7c",
+   "parentId": "434eb44f-6028-4530-a1f3-caefffdde4e6",
+   "name": "Print",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "f78e57b5-cd8d-4e45-bfaa-19a9278d0750",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Second Mile Education",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "fae2df89-6c3f-407c-9bfb-70746fa067a6",
+   "parentId": "8976bc9b-6c9f-469b-a51e-708978357b43",
+   "name": "Graduation Alliance",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  },
+  {
+   "id": "fcfde576-2815-44ba-8fb9-94d17fbf36d7",
+   "parentId": "a6c2cc51-e606-45fa-9e7c-45a1e1afc8ab",
+   "name": "2Sigma School, Inc.",
+   "isActive": true,
+   "eligibleScholarships": [
+    "FES-UA",
+    "FESEO",
+    "FTC",
+    "FTCPEP"
+   ],
+   "requiresServiceDate": false
+  }
+ ]
+}

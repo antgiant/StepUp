@@ -10,8 +10,7 @@ attach a file as a receipt or as additional documentation, and the receipt works
 items below with child/amount/category carry-over, estimated then real tax/shipping, per-item readiness reasons).
 Events are stored in this browser's localStorage; Import/Export events moves a ledger as `events.jsonl`.
 
-**Not yet:** shared category reference
-data (every category is currently accepted), offline queue / PWA, join and new-year screens.
+**Not yet:** offline queue / PWA, join and new-year screens.
 
 **Onboarding:** sign in with Microsoft, pick a folder in the built-in navigator (your OneDrive or folders shared with you; you can create a new one), and if it has no school year yet, create one. The choice is remembered in this browser.
 
@@ -22,3 +21,5 @@ data (every category is currently accepted), offline queue / PWA, join and new-y
 **Caching:** the last-known ledger for the open year is kept in this browser (IndexedDB) so the page appears immediately and then refreshes from OneDrive, downloading only event logs whose ETag changed. It is cleared on sign-out and Disconnect.
 
 **Receipts:** once a folder is open, **Add receipt files** and **Take a photo** upload into the year folder and add the files to the list (identical files are skipped, name clashes get "(2)", big photos are shrunk). **Preview** shows a receipt from OneDrive (images and PDFs) without leaving the page.
+
+**Categories:** the picker and the readiness rules use the published StepUp category tree (`public/reference/categories.json`, built by `npm run reference:build` from the CLI's category cache and checked by `npm run reference:validate` and a test). If it cannot load, every category is accepted.

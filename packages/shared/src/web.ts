@@ -17,6 +17,7 @@ export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
 export * from "./workspace/ingest.js";
 export * from "./workspace/upload.js";
+export * from "./reference/categories.js";
 export * from "./graph/client.js";
 export * from "./graph/onedrive.js";
 export * from "./graph/files.js";

@@ -26,6 +26,7 @@ export * from "./entry/actions.js";
 export * from "./entry/queue.js";
 export * from "./workspace/ingest.js";
 export * from "./workspace/upload.js";
+export * from "./reference/categories.js";
 export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
 export * from "./graph/browse.js";

@@ -5,6 +5,7 @@ import { formatHlc } from "../events/hlc.js";
 import { SCHEMA_VERSION, type Json, type LedgerEvent } from "../events/types.js";
 import { evaluateItem, type CategoryInfo, type RulesContext } from "../rules/readiness.js";
 import { parseCategoryLevels } from "../rules.js";
+import { categoryIdForPath } from "../reference/categories.js";
 import { hashString } from "../util/hash.js";
 
 /** Imports are stamped well in the past so any later human edit in the app always wins over imported values. */
@@ -275,7 +276,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
     }
     if (hold) {
       report.holds.push({ itemId, hold });
-      if (hold === "missing-service-date" && categoryPath.length) requiresServiceDate.add(`legacy-cat-${slug(categoryPath.join(" "))}`);
+      if (hold === "missing-service-date" && categoryPath.length) requiresServiceDate.add(categoryIdForPath(categoryPath));
     }
 
     emit(
@@ -287,7 +288,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
         serviceDate: toIsoDate(v["Service Date"]),
         serviceProvider: provider,
         description: str(v["Item"]) || str(v["Description"]),
-        categoryId: categoryPath.length ? `legacy-cat-${slug(categoryPath.join(" "))}` : undefined,
+        categoryId: categoryPath.length ? categoryIdForPath(categoryPath) : undefined,
         categoryPath: categoryPath.length ? categoryPath : undefined,
         quantity: v["Quantity"] === "" || v["Quantity"] === undefined ? undefined : Number(v["Quantity"]),
         amountCents,
@@ -319,7 +320,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
   const known = new Map<string, CategoryInfo>();
   for (const c of input.categories ?? []) {
     const path = parseCategoryLevels(c.path);
-    known.set(`legacy-cat-${slug(path.join(" "))}`, { id: `legacy-cat-${slug(path.join(" "))}`, path, requiresServiceDate: requiresServiceDate.has(`legacy-cat-${slug(path.join(" "))}`), eligibleScholarships: c.eligible, isActive: true });
+    known.set(categoryIdForPath(path), { id: categoryIdForPath(path), path, requiresServiceDate: requiresServiceDate.has(categoryIdForPath(path)), eligibleScholarships: c.eligible, isActive: true });
   }
   const state = materialize(foldEvents(events));
   const rules: RulesContext = {

@@ -16,7 +16,9 @@
     "test": "vitest run",
     "import-legacy": "tsx packages/cli/src/importLegacy.ts",
     "year": "tsx packages/cli/src/year.ts",
-    "ingest": "tsx packages/cli/src/ingest.ts"
+    "ingest": "tsx packages/cli/src/ingest.ts",
+    "reference:build": "tsx packages/cli/src/referenceBuild.ts",
+    "reference:validate": "tsx packages/cli/src/referenceBuild.ts validate"
   },
   "license": "ISC",
   "devDependencies": {

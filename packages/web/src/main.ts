@@ -31,6 +31,7 @@ import {
   suggestNextItem,
   toCents,
   type EventStore,
+  type ResolvedReference,
   type MapTarget,
   type RulesContext,
 } from "@step-up/shared/web";
@@ -38,6 +39,7 @@ import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, readCache, writeCache } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { loadReference } from "./reference.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
 
@@ -65,11 +67,16 @@ let picker: { path: FolderEntry[]; mine?: FolderEntry; shared: FolderEntry[]; li
 let pendingYear: Pointer | undefined;
 let sharing = false;
 
-// Category rules are shared reference data (plan §3.8) and are not loaded yet: every category counts as known.
+/** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
+let reference: ResolvedReference | undefined;
+const anyCategory = (id: string) => ({ id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true });
 const ctx = (): RulesContext => ({
   today: new Date().toISOString().slice(0, 10),
-  category: (id) => ({ id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true }),
+  // Ids from older imports ("legacy-cat-…") that the tree does not know stay accepted, as the importer always allowed them.
+  category: (id) => (reference ? reference.category(id) ?? (id.startsWith("legacy-cat-") ? anyCategory(id) : undefined) : anyCategory(id)),
 });
+const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
+  (i.categoryId && reference?.category(i.categoryId)?.path.join(" - ")) || i.categoryPath?.join(" - ") || i.categoryId || "";
 
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
@@ -340,7 +347,7 @@ function purchaseView(id: string, draft = false): string {
   const rows = items.map((i) => {
     const ev = evaluateItem(state, i.id, ctx());
     return `<tr><td>${esc(state.children[i.childId ?? ""]?.name ?? "?")}</td><td>${esc(i.description)}</td><td class="num">${formatCents(i.amountCents)}</td>
-      <td class="num">${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " <small>est.</small>" : ""}</td><td>${esc(i.categoryId ?? "")}</td>
+      <td class="num">${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " <small>est.</small>" : ""}</td><td>${esc(categoryLabel(i))}</td>
       <td>${ev.readiness === "ready" ? `<span class="ok">Ready</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`}</td>
       <td><button data-dup="${esc(i.id)}">Duplicate</button></td></tr>`;
   });
@@ -356,7 +363,9 @@ function purchaseView(id: string, draft = false): string {
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
     <button>Save receipt details</button></form>`;
   }
-  const categories = [...new Set(Object.values(state.items).map((i) => i.categoryId).filter(Boolean))];
+  const categories = reference
+    ? reference.choices.map((c) => c.label)
+    : [...new Set(Object.values(state.items).map((i) => categoryLabel(i)).filter(Boolean))];
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
   ${doc?.driveItemId && workspace ? `<p><button data-preview="${esc(doc.id)}">Preview receipt</button></p>` : ""}
@@ -377,11 +386,18 @@ function purchaseView(id: string, draft = false): string {
     <label>Child<select name="childId" required>${children.map((c) => `<option value="${esc(c.id)}"${c.id === next.childId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
     <label>Description<input name="description" required></label>
     <label>Amount<input name="amount" inputmode="decimal" required value="${money(next.amountCents)}"></label>
-    <label>Category<input name="categoryId" list="cats" required></label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <label>Category<input name="categoryId" list="cats" required${reference ? ` placeholder="Start typing to search"` : ""}></label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
     <label>Benefit message<input name="benefitMessage" required></label>
     <label>Service date<input name="serviceDate" type="date"></label>
     <label>Service provider<input name="serviceProvider" value="${esc(next.serviceProvider)}"></label>
     <button>Save and add another</button></form>`;
+}
+
+/** A picked/typed label becomes the StepUp category id (and its path); anything else is kept as typed and flagged as unknown. */
+function categoryFields(text: string): { categoryId: string; categoryPath?: string[] } {
+  const id = reference?.idForLabel(text);
+  const info = id ? reference?.category(id) : undefined;
+  return id && info ? { categoryId: id, categoryPath: info.path } : { categoryId: text };
 }
 
 function onboardingView(): string {
@@ -578,7 +594,7 @@ root.addEventListener("submit", async (ev) => {
       childId: val(form, "childId"),
       description: val(form, "description"),
       amountCents: toCents(val(form, "amount")),
-      categoryId: val(form, "categoryId"),
+      ...categoryFields(val(form, "categoryId")),
       benefitMessage: val(form, "benefitMessage"),
       serviceDate: val(form, "serviceDate") || undefined,
       serviceProvider: val(form, "serviceProvider") || undefined,
@@ -642,3 +658,7 @@ await guarded(async () => {
   } else if (account) await pickerTop();
 }, "Connecting to OneDrive…");
 if (workspace?.fromCache) void refreshInBackground(workspace);
+void loadReference().then((r) => {
+  reference = r;
+  if (r && !typing()) render();
+});
