@@ -27,3 +27,4 @@ export * from "./entry/queue.js";
 export * from "./workspace/ingest.js";
 export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
+export * from "./graph/browse.js";

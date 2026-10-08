@@ -12,3 +12,5 @@ Events are stored in this browser's localStorage; Import/Export events moves a l
 
 **Not yet:** MSAL sign-in and the OneDrive event store, receipt preview/upload/capture, shared category reference
 data (every category is currently accepted), offline queue / PWA, join and new-year screens.
+
+**Onboarding:** sign in with Microsoft, pick a folder in the built-in navigator (your OneDrive or folders shared with you; you can create a new one), and if it has no school year yet, create one. The choice is remembered in this browser.

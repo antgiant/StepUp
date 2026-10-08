@@ -3,10 +3,12 @@ import {
   Ledger,
   OneDriveEventStore,
   YEAR_FOLDER_RE,
+  ensureFolder,
+  ensureLedgerFolders,
+  type FolderEntry,
   listYears,
   openLedgerFolders,
   parentOf,
-  resolveShareLink,
   type YearInfo,
 } from "@step-up/shared/web";
 
@@ -35,12 +37,25 @@ export function savePointer(p: Pointer | undefined): void {
   }
 }
 
-/** Turns a OneDrive sharing link to the workspace folder (or to one of its year folders) into a pointer. */
-export async function pointerFromLink(link: string): Promise<Pointer> {
-  const ref = await resolveShareLink(link.trim());
-  if (!ref.isFolder) throw new Error("That link is to a file; share the StepUp folder (or a year folder) instead.");
-  if (YEAR_FOLDER_RE.test(ref.name)) return { driveId: ref.driveId, rootId: await parentOf(ref.driveId, ref.itemId), year: ref.name };
-  return { driveId: ref.driveId, rootId: ref.itemId };
+/** A picked folder is either the workspace root (holding year folders) or one of its year folders. */
+export async function pointerFromFolder(folder: FolderEntry): Promise<Pointer> {
+  if (YEAR_FOLDER_RE.test(folder.name)) return { driveId: folder.driveId, rootId: await parentOf(folder.driveId, folder.itemId), year: folder.name };
+  return { driveId: folder.driveId, rootId: folder.itemId };
+}
+
+/** The chosen folder has no ledger year yet; the person can start one. */
+export class NoLedgerYearError extends Error {
+  constructor(readonly pointer: Pointer) {
+    super("This folder has no school year set up yet.");
+  }
+}
+
+/** Creates `<root>/<label>/` (if needed) with its ledger folders. */
+export async function startYear(pointer: Pointer, label: string): Promise<Pointer> {
+  if (!YEAR_FOLDER_RE.test(label)) throw new Error("Use the form 2026-2027.");
+  const yearId = await ensureFolder(pointer.driveId, pointer.rootId, label);
+  await ensureLedgerFolders(pointer.driveId, yearId);
+  return { ...pointer, year: label };
 }
 
 export interface OpenWorkspace {
@@ -57,7 +72,7 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const ledgerYears = years.filter((y) => y.kind === "ledger");
   const want = yearLabel ?? pointer.year;
   const year = ledgerYears.find((y) => y.label === want) ?? ledgerYears[ledgerYears.length - 1];
-  if (!year) throw new Error("No year in that folder is set up for the ledger yet (run `npm run year -- init <year> --apply` from the CLI).");
+  if (!year) throw new NoLedgerYearError(pointer);
   const folders = (await openLedgerFolders(pointer.driveId, year.folderId))!;
   const ledger = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
   await ledger.refresh();

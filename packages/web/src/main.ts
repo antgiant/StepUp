@@ -1,7 +1,12 @@
 import {
   HlcClock,
   Ledger,
+  createSubfolder,
   listLooseFiles,
+  myDriveRoot,
+  sharedFolders,
+  subfolders,
+  type FolderEntry,
   planIngest,
   registerLooseFiles,
   addItem,
@@ -26,7 +31,7 @@ import {
 } from "@step-up/shared/web";
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
-import { loadPointer, openWorkspace, pointerFromLink, savePointer, type OpenWorkspace } from "./workspace.js";
+import { loadPointer, openWorkspace, NoLedgerYearError, pointerFromFolder, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import "./style.css";
 
 const CLIENT_KEY = "stepup.clientId";
@@ -48,6 +53,9 @@ let account: Awaited<ReturnType<typeof initAuth>> = null;
 let workspace: OpenWorkspace | undefined;
 let activeStore: EventStore = store;
 let status = "";
+/** Folder picker (onboarding): `path` empty means the top level (own OneDrive + folders shared with the person). */
+let picker: { path: FolderEntry[]; mine?: FolderEntry; shared: FolderEntry[]; list: FolderEntry[] } = { path: [], shared: [], list: [] };
+let pendingYear: Pointer | undefined;
 
 // Category rules are shared reference data (plan §3.8) and are not loaded yet: every category counts as known.
 const ctx = (): RulesContext => ({
@@ -77,7 +85,7 @@ async function save(): Promise<void> {
   await guarded(() => ledger.flush());
 }
 
-async function attach(next: OpenWorkspace | undefined): Promise<void> {
+function attach(next: OpenWorkspace | undefined): void {
   workspace = next;
   if (next) {
     ledger = next.ledger;
@@ -89,10 +97,7 @@ async function attach(next: OpenWorkspace | undefined): Promise<void> {
 function connectionBar(): string {
   if (!account) return `<p class="note">Local mode: data stays in this browser. <button id="sign-in">Sign in with Microsoft</button></p>`;
   const who = esc(account.username);
-  if (!workspace) {
-    return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>
-      <form id="connect" class="row"><input name="link" placeholder="Paste the OneDrive sharing link to the StepUp folder" required><button>Connect</button></form>`;
-  }
+  if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
     <button id="check-files">Check for new files</button> <button id="disconnect">Disconnect</button> <button id="sign-out">Sign out</button></p>`;
@@ -173,8 +178,52 @@ function purchaseView(id: string): string {
     <button>Save and add another</button></form>`;
 }
 
+function onboardingView(): string {
+  if (pendingYear) {
+    const now = new Date();
+    const start = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+    return `<h2>Set up a school year</h2><p>This folder has no school year yet. Create one here:</p>
+      <form id="start-year" class="row"><input name="label" value="${start}-${start + 1}" pattern="\\d{4}-\\d{4}" required><button>Create year</button></form>
+      <p><button id="pick-again">Choose a different folder</button></p>`;
+  }
+  const open = (list: FolderEntry[]) => list.map((f, i) => `<li><button data-pick="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || "<li><small>No folders here.</small></li>";
+  if (picker.path.length === 0) {
+    return `<h2>Choose the folder to use</h2><p class="note">Pick the folder that holds (or will hold) your school-year folders. Folders shared with you are listed too.</p>
+      <h3>Your OneDrive</h3><ul class="queue"><li><button data-pick-mine="1">&#128193; My OneDrive</button></li></ul>
+      <h3>Shared with you</h3><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || "<li><small>Nothing shared with you.</small></li>"}</ul>`;
+  }
+  const here = picker.path[picker.path.length - 1]!;
+  return `<h2>Choose the folder to use</h2>
+    <p>${picker.path.map((f) => esc(f.name)).join(" / ")}</p>
+    <p class="row"><button id="pick-up">&larr; Up</button><button id="pick-use"><strong>Use this folder</strong></button></p>
+    <ul class="queue">${open(picker.list)}</ul>
+    <form id="new-folder" class="row"><input name="name" placeholder="New folder name" required><button>Create folder in ${esc(here.name)}</button></form>`;
+}
+
+async function pickerTop(): Promise<void> {
+  pendingYear = undefined;
+  const [mine, shared] = await Promise.all([myDriveRoot(), sharedFolders().catch(() => [])]);
+  picker = { path: [], mine, shared, list: [] };
+}
+
+async function pickerOpen(path: FolderEntry[]): Promise<void> {
+  picker = { ...picker, path, list: path.length ? await subfolders(path[path.length - 1]!) : [] };
+}
+
+async function useFolder(folder: FolderEntry): Promise<void> {
+  const pointer = await pointerFromFolder(folder);
+  try {
+    attach(await openWorkspace(pointer, store.clientId));
+    pendingYear = undefined;
+  } catch (err) {
+    if (err instanceof NoLedgerYearError) pendingYear = pointer;
+    else throw err;
+  }
+}
+
 function render(): void {
-  root.innerHTML = header() + (view.name === "queue" ? queueView() : purchaseView(view.id));
+  const body = account && !workspace ? onboardingView() : view.name === "queue" ? queueView() : purchaseView(view.id);
+  root.innerHTML = header() + body;
 }
 
 function go(next: View): void {
@@ -187,9 +236,16 @@ root.addEventListener("click", async (ev) => {
   if (!t) return;
   const d = t.dataset;
   if (d["go"]) { ev.preventDefault(); go({ name: "queue" }); }
+  else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
+    const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
+    if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]));
+  }
+  else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))));
+  else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!));
+  else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") await signIn();
   else if (t.id === "sign-out") { savePointer(undefined); await signOut(); }
-  else if (t.id === "disconnect") { savePointer(undefined); workspace = undefined; activeStore = store; ledger = new Ledger(store, new HlcClock(store.clientId), "web"); await ledger.refresh(); render(); }
+  else if (t.id === "disconnect") { savePointer(undefined); workspace = undefined; activeStore = store; ledger = new Ledger(store, new HlcClock(store.clientId), "web"); await ledger.refresh(); await guarded(pickerTop); }
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
       const plan = planIngest(ledger.state, await listLooseFiles(workspace!.driveId, workspace!.year.folderId));
@@ -232,8 +288,20 @@ root.addEventListener("click", async (ev) => {
 root.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const form = ev.target as HTMLFormElement;
-  if (form.id === "connect") {
-    await guarded(async () => attach(await openWorkspace(await pointerFromLink(val(form, "link")), store.clientId)));
+  if (form.id === "new-folder") {
+    await guarded(async () => {
+      const made = await createSubfolder(picker.path[picker.path.length - 1]!, val(form, "name"));
+      await pickerOpen(picker.path);
+      status = `Created "${made.name}".`;
+    });
+    return;
+  }
+  if (form.id === "start-year") {
+    await guarded(async () => {
+      const pointer = await startYear(pendingYear!, val(form, "label"));
+      attach(await openWorkspace(pointer, store.clientId));
+      pendingYear = undefined;
+    });
     return;
   }
   if (form.id === "add-child") {
@@ -280,5 +348,16 @@ render();
 await guarded(async () => {
   account = await initAuth();
   const pointer = loadPointer();
-  if (account && pointer) await attach(await openWorkspace(pointer, store.clientId));
+  if (account && pointer) {
+    try {
+      attach(await openWorkspace(pointer, store.clientId));
+    } catch (err) {
+      if (err instanceof NoLedgerYearError) pendingYear = pointer;
+      else {
+        status = `Could not open the saved folder (${err instanceof Error ? err.message : err}). Choose it again.`;
+        savePointer(undefined);
+        await pickerTop();
+      }
+    }
+  } else if (account) await pickerTop();
 });
