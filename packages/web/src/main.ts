@@ -34,7 +34,8 @@ import {
 } from "@step-up/shared/web";
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
-import { loadPointer, openWorkspace, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { cacheKey, clearCache, deleteCache, readCache, writeCache } from "./cache.js";
+import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import "./style.css";
 
 const CLIENT_KEY = "stepup.clientId";
@@ -117,6 +118,52 @@ function hideBusy(): void {
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const val = (form: HTMLFormElement, name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value.trim() ?? "";
 
+/** The folder was deleted or access was removed while open: same as having no folder. */
+async function dropWorkspace(): Promise<void> {
+  forgetCache();
+  await savePointer(undefined);
+  workspace = undefined;
+  activeStore = store;
+  ledger = new Ledger(store, new HlcClock(store.clientId), "web");
+  await ledger.refresh();
+  await pickerTop().catch(() => undefined);
+  status = "That folder is no longer available. Choose a folder to continue.";
+}
+
+/** Browser cache of the open workspace (see cache.ts). Best effort: failures just mean a slower next visit. */
+const keyOf = (p: Pointer) => cacheKey(account?.homeAccountId ?? "", p.driveId, p.rootId, p.year ?? "");
+function persist(): void {
+  if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace));
+}
+function forgetCache(): void {
+  if (account && workspace) void deleteCache(keyOf(workspace.pointer));
+}
+let lastRefresh = Date.now();
+const typing = () => document.activeElement instanceof HTMLElement && root.contains(document.activeElement) && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+
+/** Stale-while-revalidate: the cached view is already on screen; ask OneDrive what changed and update only if something did. */
+async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
+  showBusy("Refreshing from OneDrive…");
+  try {
+    const changed = await revalidate(ws);
+    lastRefresh = Date.now();
+    if (workspace !== ws) return;
+    persist();
+    if (changed && !typing()) render(); // never replace a form someone is typing in; the next action shows the update
+  } catch (err) {
+    if (workspace !== ws) return;
+    if (isDeadPointer(err)) await dropWorkspace();
+    else status = `Showing saved data; could not refresh from OneDrive (${err instanceof Error ? err.message : err}).`;
+    render();
+  } finally {
+    hideBusy();
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && workspace && !workspace.fromCache && pending === 0 && Date.now() - lastRefresh > 2 * 60_000) void refreshInBackground(workspace);
+});
+
 /** Runs an action that may hit the network; shows the error instead of leaving the page half-updated. */
 async function guarded(action: () => Promise<void>, label = "Waiting for OneDrive…"): Promise<void> {
   status = "";
@@ -125,14 +172,7 @@ async function guarded(action: () => Promise<void>, label = "Waiting for OneDriv
     await action();
   } catch (err) {
     if (workspace && isDeadPointer(err)) {
-      // The folder was deleted or access was removed while open: same as having no folder.
-      await savePointer(undefined);
-      workspace = undefined;
-      activeStore = store;
-      ledger = new Ledger(store, new HlcClock(store.clientId), "web");
-      await ledger.refresh();
-      await pickerTop().catch(() => undefined);
-      status = "That folder is no longer available. Choose a folder to continue.";
+      await dropWorkspace();
     } else {
       status = err instanceof Error ? err.message : String(err);
     }
@@ -144,6 +184,7 @@ async function guarded(action: () => Promise<void>, label = "Waiting for OneDriv
 
 async function save(): Promise<void> {
   await guarded(() => ledger.flush(), "Saving to OneDrive…");
+  persist();
 }
 
 function attach(next: OpenWorkspace | undefined): void {
@@ -152,9 +193,10 @@ function attach(next: OpenWorkspace | undefined): void {
     ledger = next.ledger;
     activeStore = ledger.store;
     void savePointer(next.pointer);
+    if (!next.fromCache) persist();
     if (next.carriedChildren) {
       status = `Added ${next.carriedChildren} student(s) from last year.`;
-      void ledger.flush().catch((err) => { status = err instanceof Error ? err.message : String(err); render(); });
+      void ledger.flush().then(persist).catch((err) => { status = err instanceof Error ? err.message : String(err); render(); });
     }
   }
 }
@@ -347,9 +389,10 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
   else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
-  else if (t.id === "sign-out") { forgetLocalPointer(); showBusy("Signing out of Microsoft…"); await signOut(); }
+  else if (t.id === "sign-out") { forgetLocalPointer(); await clearCache(); showBusy("Signing out of Microsoft…"); await signOut(); }
   else if (t.id === "disconnect") {
     await guarded(async () => {
+      forgetCache();
       await savePointer(undefined);
       workspace = undefined;
       activeStore = store;
@@ -496,7 +539,16 @@ await guarded(async () => {
   const pointer = account ? await loadPointer() : undefined;
   if (account && pointer) {
     try {
-      attach(await openWorkspace(pointer, store.clientId));
+      // Cache first: show the last-known ledger at once, then refresh in the background.
+      const cached = pointer.year ? await readCache(keyOf(pointer)) : undefined;
+      const quick = cached ? openFromCache(pointer, store.clientId, cached) : undefined;
+      if (quick) {
+        note("Opening your saved ledger…");
+        attach(quick);
+      } else {
+        note("Opening your workspace…");
+        attach(await openWorkspace(pointer, store.clientId));
+      }
     } catch (err) {
       if (err instanceof NoLedgerYearError) pendingYear = pointer;
       else if (isDeadPointer(err)) {
@@ -511,3 +563,4 @@ await guarded(async () => {
     }
   } else if (account) await pickerTop();
 }, "Connecting to OneDrive…");
+if (workspace?.fromCache) void refreshInBackground(workspace);

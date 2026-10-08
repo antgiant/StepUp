@@ -33,9 +33,13 @@ export class Ledger {
   }
 
   async refresh(): Promise<void> {
-    const all = await this.store.readAll();
-    for (const e of all) this.clock.observe(e.hlc);
-    this.raw = foldEvents([...all, ...this.pending]);
+    this.loadKnown(await this.store.readAll());
+  }
+
+  /** Replaces the folded view with `events` (from the network or a local cache) plus unflushed local edits. No I/O. */
+  loadKnown(events: LedgerEvent[]): void {
+    for (const e of events) this.clock.observe(e.hlc);
+    this.raw = foldEvents([...events, ...this.pending]);
     this.cached = undefined;
   }
 

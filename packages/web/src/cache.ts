@@ -1,0 +1,65 @@
+import type { CachedLog, YearInfo } from "@step-up/shared/web";
+
+/**
+ * What the browser remembers about a workspace between visits so the app can paint instantly and then ask OneDrive
+ * only what changed. It holds the same private data as the ledger, so it is cleared on sign-out and disconnect.
+ */
+export interface WorkspaceCache {
+  v: 1;
+  years: YearInfo[];
+  yearLabel: string;
+  eventsId: string;
+  logs: CachedLog[];
+  savedAt: number;
+}
+
+const DB = "stepup-cache";
+const STORE = "workspaces";
+
+function open(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T | undefined> {
+  try {
+    const db = await open();
+    return await new Promise<T>((resolve, reject) => {
+      const tx = db.transaction(STORE, mode);
+      const req = fn(tx.objectStore(STORE));
+      tx.oncomplete = () => {
+        db.close();
+        resolve(req.result);
+      };
+      tx.onerror = tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  } catch {
+    return undefined; // private window / blocked storage: the app just works without a cache
+  }
+}
+
+export const cacheKey = (accountId: string, driveId: string, rootId: string, year: string) => `${accountId}|${driveId}|${rootId}|${year}`;
+
+export async function readCache(key: string): Promise<WorkspaceCache | undefined> {
+  const rec = (await run("readonly", (s) => s.get(key))) as WorkspaceCache | undefined;
+  return rec?.v === 1 ? rec : undefined;
+}
+
+export async function writeCache(key: string, rec: WorkspaceCache): Promise<void> {
+  await run("readwrite", (s) => s.put(rec, key));
+}
+
+export async function deleteCache(key: string): Promise<void> {
+  await run("readwrite", (s) => s.delete(key));
+}
+
+export async function clearCache(): Promise<void> {
+  await run("readwrite", (s) => s.clear());
+}

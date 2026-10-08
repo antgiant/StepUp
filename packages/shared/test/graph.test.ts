@@ -154,3 +154,46 @@ describe("OneDriveEventStore", () => {
     expect(la.state).toEqual((await (async () => (await lb.refresh(), lb.state))()));
   });
 });
+
+describe("OneDriveEventStore cache", () => {
+  const contentGets = () => g.requests.filter((r) => r.method === "GET" && r.url.includes("/content")).length;
+
+  it("downloads only logs whose ETag changed, and never re-downloads its own log", async () => {
+    const folder = await ensureFolder("d", g.rootId, "events");
+    const a = new OneDriveEventStore("d", folder, "dev-a");
+    const b = new OneDriveEventStore("d", folder, "dev-b");
+    await a.appendOwn([event("dev-a", 1, "i1", { description: "x" })]);
+    await b.appendOwn([event("dev-b", 2, "i2", { description: "y" })]);
+
+    // A later visit, seeded from what was persisted.
+    const saved = JSON.parse(JSON.stringify(a.exportCache()));
+    const later = new OneDriveEventStore("d", folder, "dev-a");
+    later.seedCache(saved);
+    expect(later.cachedEvents().map((e) => e.entityId)).toEqual(["i1"]);
+
+    g.requests.length = 0;
+    expect((await later.readAll()).map((e) => e.entityId).sort()).toEqual(["i1", "i2"]);
+    expect(contentGets()).toBe(1); // only dev-b's log; dev-a's own was cached
+
+    g.requests.length = 0;
+    await later.readAll();
+    expect(contentGets()).toBe(0); // nothing changed
+
+    await later.appendOwn([event("dev-a", 3, "i3", { description: "z" })]);
+    g.requests.length = 0;
+    await later.readAll();
+    expect(contentGets()).toBe(0); // our own write is already known
+  });
+
+  it("appends without re-reading its log when the cache matches the folder", async () => {
+    const folder = await ensureFolder("d", g.rootId, "events");
+    const first = new OneDriveEventStore("d", folder, "dev-a");
+    await first.appendOwn([event("dev-a", 1, "i1", { description: "x" })]);
+    const again = new OneDriveEventStore("d", folder, "dev-a");
+    again.seedCache(first.exportCache());
+    g.requests.length = 0;
+    await again.appendOwn([event("dev-a", 2, "i2", { description: "y" })]);
+    expect(contentGets()).toBe(0);
+    expect(g.text(g.child(folder, "dev-a.jsonl")!.id).trim().split("\n")).toHaveLength(2);
+  });
+});

@@ -21,6 +21,13 @@ interface OwnSegment {
   bytes: number;
 }
 
+/** One log file as last read: its ETag and parsed events. Persist these between visits so only changed files are downloaded. */
+export interface CachedLog {
+  id: string;
+  eTag?: string;
+  events: LedgerEvent[];
+}
+
 export interface OneDriveEventStoreOptions {
   segmentBytes?: number;
 }
@@ -44,22 +51,35 @@ export class OneDriveEventStore implements EventStore {
     this.segmentBytes = options.segmentBytes ?? DEFAULT_SEGMENT_BYTES;
   }
 
+  /** Loads logs remembered from an earlier visit. They are trusted only until `readAll` compares ETags with the folder listing. */
+  seedCache(logs: CachedLog[]): void {
+    for (const l of logs) this.cache.set(l.id, { eTag: l.eTag, events: l.events });
+  }
+
+  /** What is known right now, ready to persist. */
+  exportCache(): CachedLog[] {
+    return [...this.cache.entries()].map(([id, c]) => ({ id, eTag: c.eTag, events: c.events }));
+  }
+
+  /** Every event in the cache, with no network (instant first paint; `readAll` brings it up to date). */
+  cachedEvents(): LedgerEvent[] {
+    return [...this.cache.values()].flatMap((c) => c.events);
+  }
+
+  /** Lists the folder once, then downloads (in parallel) only the logs whose ETag differs from the cache. */
   async readAll(): Promise<LedgerEvent[]> {
     const files = await this.listLogs();
-    const seen = new Set<string>();
-    const out: LedgerEvent[] = [];
-    for (const file of files) {
-      seen.add(file.id);
-      let entry = this.cache.get(file.id);
-      if (!entry || entry.eTag !== file.eTag) {
-        const { text, eTag } = await readTextFile(this.driveId, file.id);
-        entry = { eTag: eTag ?? file.eTag, events: parseLines(text) };
-        this.cache.set(file.id, entry);
-      }
-      out.push(...entry.events);
-    }
+    await Promise.all(
+      files
+        .filter((f) => this.cache.get(f.id)?.eTag !== f.eTag || !this.cache.has(f.id))
+        .map(async (f) => {
+          const { text, eTag } = await readTextFile(this.driveId, f.id);
+          this.cache.set(f.id, { eTag: eTag ?? f.eTag, events: parseLines(text) });
+        })
+    );
+    const seen = new Set(files.map((f) => f.id));
     for (const id of [...this.cache.keys()]) if (!seen.has(id)) this.cache.delete(id);
-    return out;
+    return files.flatMap((f) => this.cache.get(f.id)?.events ?? []);
   }
 
   async appendOwn(events: LedgerEvent[]): Promise<void> {
@@ -81,6 +101,8 @@ export class OneDriveEventStore implements EventStore {
       });
       target.id = stored.id;
       target.eTag = stored.eTag;
+      // We just wrote this file, so we know its contents: never download our own log again.
+      this.cache.set(stored.id, { eTag: stored.eTag, events: parseLines(body) });
     } catch (err) {
       if (err instanceof GraphError && (err.status === 412 || err.status === 409)) {
         this.own = undefined;
@@ -113,6 +135,19 @@ export class OneDriveEventStore implements EventStore {
     }
     if (!best) {
       this.own = { index: 0, lines: [], ids: new Set(), bytes: 0 };
+      return this.own;
+    }
+    const known = this.cache.get(best.id);
+    if (known && known.eTag === best.eTag) {
+      const text = known.events.map((e) => JSON.stringify(e)).join("\n") + (known.events.length ? "\n" : "");
+      this.own = {
+        index: best.index,
+        id: best.id,
+        eTag: best.eTag,
+        lines: known.events.map((e) => JSON.stringify(e)),
+        ids: new Set(known.events.map((e) => e.id)),
+        bytes: new TextEncoder().encode(text).byteLength,
+      };
       return this.own;
     }
     const { text, eTag } = await readTextFile(this.driveId, best.id);
