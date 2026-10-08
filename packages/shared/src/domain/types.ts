@@ -96,6 +96,8 @@ export interface DocumentRec {
   derivedFrom?: string;
   /** Where it came from: dropped in the year folder the old way, uploaded through the app, or imported from a legacy workbook. */
   source?: "loose" | "upload" | "legacy";
+  /** For statements: what was read from the file (see statements/parse.ts). Private; never exported or shared. */
+  statement?: StatementData;
   /** Receipt shows payment was made (e.g. "$0.00 owed"); confidence 0..1. */
   paymentEvidenceConfidence?: number;
 }
@@ -109,7 +111,10 @@ export interface AdditionalDoc {
   ownerId?: string;
   documentId?: string;
   kind?: AdditionalDocKind;
+  /** For payment proof: which transaction on the statement shows this purchase's charge. */
   transactionId?: string;
+  /** 0..1 for an automatic match; a person's own link has none. */
+  confidence?: number;
   source?: "auto" | "manual";
 }
 
@@ -156,4 +161,24 @@ export interface LedgerState {
   submissions: Record<string, Submission>;
   settings: Record<string, YearSettings>;
   categories: Record<string, CategoryEdit>;
+}
+
+/** A line on a card statement. `amountCents` is positive for a charge and negative for a refund or payment. */
+export interface StatementTransaction {
+  id: string;
+  date: string;
+  postDate?: string;
+  descriptor: string;
+  amountCents: number;
+  kind: "purchase" | "credit" | "payment" | "fee";
+  /** How sure we are the line was read correctly (0..1); low ones are flagged for a person to check. */
+  confidence: number;
+}
+
+export interface StatementData {
+  issuer?: string;
+  last4?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  transactions: StatementTransaction[];
 }
