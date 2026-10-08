@@ -9,8 +9,14 @@ const responses: Record<string, unknown> = {
       { id: "z", name: "Alpha", remoteItem: { id: "r3", name: "Alpha", folder: {}, parentReference: { driveId: "other2" } } },
     ],
   },
-  "/drives/d/items/f/children?$select=id,name,folder&$top=200": {
-    value: [{ id: "b", name: "B", folder: {} }, { id: "file", name: "a.txt" }, { id: "a", name: "A", folder: {} }],
+  "/drives/d/items/f/children?$select=id,name,folder,remoteItem&$top=200": {
+    value: [
+      { id: "b", name: "B", folder: {} },
+      { id: "file", name: "a.txt" },
+      { id: "a", name: "A", folder: {} },
+      { id: "stub", name: "Shortcut", remoteItem: { id: "real", name: "Orig", folder: {}, parentReference: { driveId: "theirs" } } },
+      { id: "stub2", name: "File shortcut", remoteItem: { id: "r2", name: "x.pdf", parentReference: { driveId: "theirs" } } },
+    ],
   },
 };
 
@@ -34,8 +40,8 @@ describe("folder browsing", () => {
     ]);
   });
 
-  it("lists only subfolders, sorted by name", async () => {
-    expect((await subfolders({ driveId: "d", itemId: "f", name: "F" })).map((f) => f.name)).toEqual(["A", "B"]);
+  it("lists only subfolders, resolving shortcuts to the real folder, sorted by name", async () => {
+    expect((await subfolders({ driveId: "d", itemId: "f", name: "F" })).map((f) => [f.name, f.driveId, f.itemId])).toEqual([["A", "d", "a"], ["B", "d", "b"], ["Shortcut", "theirs", "real"]]);
   });
 
   it("rejects folder names OneDrive cannot store", async () => {

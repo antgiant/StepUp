@@ -1,5 +1,6 @@
 import { graphJson } from "./client.js";
 import { ensureFolder } from "./files.js";
+import { resolveShareLink } from "./onedrive.js";
 
 /** A folder a person can pick: enough to address it on any drive (including one shared with them). */
 export interface FolderEntry {
@@ -54,8 +55,15 @@ export async function sharedFolders(): Promise<FolderEntry[]> {
 
 /** Subfolders only (files are not shown in the picker). */
 export async function subfolders(folder: FolderEntry): Promise<FolderEntry[]> {
-  const items = await all(`/drives/${folder.driveId}/items/${folder.itemId}/children?$select=id,name,folder&$top=200`);
-  return items.filter((i) => i.folder).map((i) => ({ driveId: folder.driveId, itemId: i.id, name: i.name })).sort(byName);
+  const items = await all(`/drives/${folder.driveId}/items/${folder.itemId}/children?$select=id,name,folder,remoteItem&$top=200`);
+  const out: FolderEntry[] = [];
+  for (const i of items) {
+    // A shortcut ("Add shortcut to My files") is a local stub; the real folder lives on the other person's drive.
+    const remote = i.remoteItem;
+    if (remote?.folder && remote.parentReference?.driveId) out.push({ driveId: remote.parentReference.driveId, itemId: remote.id, name: i.name });
+    else if (i.folder) out.push({ driveId: folder.driveId, itemId: i.id, name: i.name });
+  }
+  return out.sort(byName);
 }
 
 /** Creates (or returns the existing) subfolder. */
@@ -76,4 +84,11 @@ export async function inviteToFolder(folder: FolderEntry, email: string, message
     method: "POST",
     body: JSON.stringify({ recipients: [{ email: address }], requireSignIn: true, sendInvitation: true, roles: ["write"], ...(message ? { message } : {}) }),
   });
+}
+
+/** Resolves a OneDrive sharing link to a folder (works for folders shared with you that Graph's shared list does not show). */
+export async function folderFromLink(link: string): Promise<FolderEntry> {
+  const ref = await resolveShareLink(link.trim());
+  if (!ref.isFolder) throw new Error("That link is to a file. Share a folder link instead.");
+  return { driveId: ref.driveId, itemId: ref.itemId, name: ref.name };
 }
