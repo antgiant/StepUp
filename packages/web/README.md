@@ -31,3 +31,5 @@ Events are stored in this browser's localStorage; Import/Export events moves a l
 **New year / joining:** the **New year** button creates the next school-year folder (suggesting the year after your newest) and brings over students, payment methods and the tax rate from the latest year; receipts and purchases start fresh. The first screen after sign-in offers *Set up a new workspace* or *Join a shared workspace* (shortcut steps, pasted sharing link, or a folder shared with you).
 
 **Summary tab:** per-student award, paid / approved / pending / remaining (with a usage bar), items by status, and the submission deadline with days left. Awards and the deadline are set right on the page (stored in the year's ledger).
+
+**Spreadsheet copy:** about a minute after you save, a values-only `<year> FES UA Tracking (mirror).xlsx` is rebuilt in the year's `_ledger/reports` folder (skipped when nothing changed; a copy open in Excel is retried later). *Advanced -> Update spreadsheet now* does it immediately and *Automatic spreadsheet* turns it off for the year. The Excel library loads only when this runs.

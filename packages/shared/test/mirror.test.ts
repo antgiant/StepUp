@@ -165,3 +165,13 @@ describe("publishMirror", () => {
     expect((await publishMirror("d", reports, "mirror.xlsx", buildMirror(state(), ctx, opts))).status).toBe("locked");
   });
 });
+
+describe("archived records", () => {
+  it("are left out of the mirror", () => {
+    const st = JSON.parse(JSON.stringify(state())) as LedgerState;
+    const [firstId] = Object.keys(st.items);
+    st.items[firstId!]!.archived = true;
+    const sheet = buildMirror(st, ctx, opts).sheets[0]!;
+    expect(sheet.rows.length).toBe(Object.keys(st.items).length - 1);
+  });
+});

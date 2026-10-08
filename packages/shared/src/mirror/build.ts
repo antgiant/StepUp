@@ -44,7 +44,14 @@ function additionalFor(state: LedgerState, item: LineItem): AdditionalDoc[] {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-export function buildMirror(state: LedgerState, ctx: RulesContext, opts: MirrorOptions): MirrorWorkbook {
+/** Archived purchases and their items are hidden everywhere else, so they are left out of the spreadsheet too. */
+function withoutArchived(state: LedgerState): LedgerState {
+  const keep = <T extends { archived?: boolean }>(rec: Record<string, T>) => Object.fromEntries(Object.entries(rec).filter(([, v]) => !v.archived));
+  return { ...state, purchases: keep(state.purchases), items: keep(state.items) };
+}
+
+export function buildMirror(fullState: LedgerState, ctx: RulesContext, opts: MirrorOptions): MirrorWorkbook {
+  const state = withoutArchived(fullState);
   const deadline = state.settings["year"]?.submissionDeadline;
   const items = Object.values(state.items).sort((a, b) => {
     const da = effectiveDate(a, state.purchases[a.purchaseId ?? ""]) ?? "";

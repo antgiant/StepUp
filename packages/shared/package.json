@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./graph/onedrive": "./src/graph/onedrive.ts",
-    "./web": "./src/web.ts"
+    "./web": "./src/web.ts",
+    "./mirror": "./src/mirror/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

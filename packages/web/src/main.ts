@@ -24,6 +24,7 @@ import {
   reallocateTax,
   observeActivity,
   yearSummary,
+  openLedgerFolders,
   fetchItemContent,
   uploadReceipt,
   setPurchaseArchived,
@@ -289,6 +290,45 @@ async function guarded(action: () => Promise<void>, label = "Waiting for OneDriv
 async function save(): Promise<void> {
   await guarded(() => ledger.flush(), "Saving to OneDrive…");
   persist();
+  scheduleMirror();
+}
+
+/**
+ * The mirror spreadsheet (plan §3.5): a values-only .xlsx copy of the ledger in the year's reports folder, for checking
+ * the new system against the old way of working. Rebuilt about a minute after the last save, and on demand.
+ * ExcelJS is large, so it is only loaded when this runs.
+ */
+let mirrorTimer: ReturnType<typeof setTimeout> | undefined;
+let reportsFolder: { yearFolderId: string; id: string } | undefined;
+const mirrorOn = () => ledger.state.settings["year"]?.mirror !== false;
+function scheduleMirror(): void {
+  clearTimeout(mirrorTimer);
+  if (!workspace || !mirrorOn()) return;
+  mirrorTimer = setTimeout(() => void guardedQuiet(() => publishMirrorNow()), 60_000);
+}
+async function publishMirrorNow(): Promise<"written" | "unchanged" | "locked"> {
+  const ws = workspace;
+  if (!ws) return "unchanged";
+  const lib = await import("@step-up/shared/mirror");
+  if (reportsFolder?.yearFolderId !== ws.year.folderId) {
+    const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
+    if (!folders) throw new Error("This year has no ledger folders yet.");
+    reportsFolder = { yearFolderId: ws.year.folderId, id: folders.reportsId };
+  }
+  const model = lib.buildMirror(ledger.state, ctx(), { generatedAt: new Date().toISOString(), appVersion: "web" });
+  return (await lib.publishMirror(ws.driveId, reportsFolder.id, `${ws.year.label} FES UA Tracking (mirror).xlsx`, model)).status;
+}
+/** Background work: spinner while it runs, and a short note (not an error page) if it fails. */
+async function guardedQuiet(work: () => Promise<unknown>): Promise<void> {
+  showBusy("Updating the spreadsheet copy…");
+  try {
+    await work();
+  } catch (err) {
+    status = `Could not update the spreadsheet copy (${err instanceof Error ? err.message : err}).`;
+    if (!typing()) render();
+  } finally {
+    hideBusy();
+  }
 }
 
 function attach(next: OpenWorkspace | undefined): void {
@@ -354,6 +394,7 @@ function header(): string {
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
+        ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
       </div></details></nav></header>
@@ -603,6 +644,14 @@ root.addEventListener("click", async (ev) => {
       a.click();
       URL.revokeObjectURL(url);
     }, "Preparing export…");
+  } else if (t.id === "update-mirror") {
+    await guarded(async () => {
+      const result = await publishMirrorNow();
+      status = result === "written" ? "Spreadsheet updated." : result === "unchanged" ? "Spreadsheet is already up to date." : "The spreadsheet is open in Excel; close it and try again.";
+    }, "Building the spreadsheet…");
+  } else if (t.id === "toggle-mirror") {
+    ledger.set("setting", "year", { mirror: !mirrorOn() }, { label: "setting.mirrorToggled" });
+    await save();
   } else if (t.id === "export-categories") {
     const url = URL.createObjectURL(new Blob([JSON.stringify(exportCategoryEdits(ledger.state.categories), null, 1)], { type: "application/json" }));
     Object.assign(document.createElement("a"), { href: url, download: "category-edits.json" }).click();
