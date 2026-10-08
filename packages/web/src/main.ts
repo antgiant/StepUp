@@ -120,7 +120,13 @@ function connectionBar(): string {
 function shareForm(): string {
   return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Microsoft account email" required>
     <button>Invite to edit</button></form>
-    <p class="note">They get an email from OneDrive and must sign in with that account. After accepting, they open ${esc(location.origin)}, sign in, and pick this folder from "Shared with you".</p>`;
+    <p class="note">OneDrive emails them an invitation. Once they have it, they should:</p>
+    <ol class="note">
+      <li>Open the invitation and choose to open the folder in OneDrive (sign in with the account you invited).</li>
+      <li>In OneDrive, find the folder under <strong>Shared</strong> and choose <strong>Add shortcut to My files</strong> (the toolbar button, or right-click the folder).</li>
+      <li>Open ${esc(location.origin)}, sign in with the same account, choose <strong>My OneDrive</strong>, and select the folder. Or paste the folder's sharing link instead.</li>
+    </ol>
+    <p class="note">If no email arrives, share the folder with them in OneDrive yourself; the steps above are the same.</p>`;
 }
 
 function header(): string {
@@ -328,7 +334,7 @@ root.addEventListener("submit", async (ev) => {
     await guarded(async () => {
       const email = val(form, "email");
       const folder = await workspaceFolder(workspace!.pointer);
-      await inviteToFolder(folder, email, `Sharing our Step Up Helper folder. Sign in at ${location.origin}/ and choose it under "Shared with you".`);
+      await inviteToFolder(folder, email, `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
       status = `Invited ${email}. If they do not get an email, share the folder with them in OneDrive instead.`;
       sharing = false;
     });
