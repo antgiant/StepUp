@@ -29,7 +29,7 @@ export function buildQueue(state: LedgerState, ctx: RulesContext): QueueEntry[] 
   for (const a of Object.values(state.additionalDocs)) if (a.documentId) used.add(a.documentId);
 
   const entries: QueueEntry[] = [];
-  const docs = Object.values(state.documents).filter((d) => !used.has(d.id)).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const docs = Object.values(state.documents).filter((d) => !used.has(d.id) && !d.derivedFrom).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
   for (const d of docs) {
     entries.push({
       kind: "unattached-document",

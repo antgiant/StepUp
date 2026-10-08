@@ -33,6 +33,9 @@ import {
   relinkAllStatements,
   learnAlias,
   purchaseTotalCents,
+  planRedaction,
+  redactedCopyOf,
+  type RedactionPlan,
   type StatementData,
   type TransactionMatch,
   openLedgerFolders,
@@ -57,7 +60,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, readCache, readOutbox, writeCache, writeOutbox } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
-import { pdfToText } from "./pdfText.js";
+import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
 
@@ -130,12 +133,67 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
   return got;
 }
 
+/** A redacted copy that has been made but not saved: the person checks every page before it can be used. */
+let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan } | undefined;
+const MAX_PROOF_BYTES = 5 * 1024 * 1024;
+
+function discardRedaction(): void {
+  if (redactionDraft) URL.revokeObjectURL(redactionDraft.url);
+  redactionDraft = undefined;
+}
+
+/**
+ * Builds the redacted copy of a statement on this device: everything is blacked out except the issuer, the period, the
+ * column headings and the charges already linked to purchases (plan §3.10a). Shown for review; nothing is saved yet.
+ */
+async function makeRedaction(docId: string): Promise<void> {
+  const got = await loadDocument(docId);
+  if (got.kind !== "pdf") throw new Error("Only PDF statements can be redacted here.");
+  const keep = new Set(Object.values(ledger.state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId!));
+  if (keep.size === 0) throw new Error("Link at least one charge to a purchase first; only linked charges stay visible.");
+  note("Finding what to keep…");
+  const plan = planRedaction(await pdfLines(got.blob), { keepTransactionIds: keep });
+  if (plan.keptTransactions === 0) throw new Error(plan.warnings.join(" ") || "Nothing on this statement could be kept.");
+  note("Blacking out the rest…");
+  const bytes = await renderRedactedPdf(got.blob, plan);
+  if (bytes.byteLength > MAX_PROOF_BYTES) throw new Error("The redacted copy is over StepUp's 5 MB limit.");
+  discardRedaction();
+  redactionDraft = { docId, bytes, url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" })), plan };
+}
+
+async function saveRedaction(): Promise<void> {
+  const draft = redactionDraft;
+  const ws = workspace;
+  const original = draft ? ledger.state.documents[draft.docId] : undefined;
+  if (!draft || !ws || !original) return;
+  const body = new Blob([draft.bytes as BlobPart], { type: "application/pdf" });
+  const name = `${(original.filename ?? "Statement").replace(/\.pdf$/i, "")} (redacted).pdf`;
+  for (const old of Object.values(ledger.state.documents)) if (old.redacted && old.derivedFrom === draft.docId) ledger.set("document", old.id, { redacted: false }, { label: "document.redactionSuperseded" });
+  const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
+  ledger.set("document", result.documentId, { derivedFrom: draft.docId, redacted: true, contentKind: "statement" }, { label: "document.redacted" });
+  await ledger.flush();
+  discardRedaction();
+  status = "Saved the redacted copy. It will be sent to StepUp instead of the original statement.";
+}
+
 async function openPreview(docId: string): Promise<void> {
   const doc = ledger.state.documents[docId];
   if (!doc?.driveItemId || !workspace) return;
   const filename = doc.filename ?? "receipt";
   const got = await loadDocument(docId);
   preview = { docId, filename, url: got.url, kind: got.kind, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
+}
+
+function redactionPanel(): string {
+  const d = redactionDraft;
+  if (!d) return "";
+  const name = esc(ledger.state.documents[d.docId]?.filename ?? "statement");
+  const missing = d.plan.missing.length ? `<p class="warn">${d.plan.missing.length} linked charge(s) could not be found in the PDF and will be blacked out.</p>` : "";
+  const warnings = d.plan.warnings.map((w) => `<p class="warn">${esc(w)}</p>`).join("");
+  return `<section class="preview"><div class="preview-bar"><strong>Redacted copy of ${name}</strong>
+      <span><button id="save-redaction"><strong>Looks right: save it</strong></button><button id="discard-redaction">Discard</button></span></div>
+    <p class="note" style="padding:8px 14px;margin:0">Check every page. Only the issuer, the period, the column headings and ${d.plan.keptTransactions} linked charge(s) should be readable; everything else must be black.</p>
+    ${missing}${warnings}<iframe src="${esc(d.url)}" title="Redacted copy"></iframe></section>`;
 }
 
 function previewPanel(): string {
@@ -232,6 +290,7 @@ async function dropWorkspace(): Promise<void> {
 
 function clearPreviews(): void {
   preview = undefined;
+  discardRedaction();
   for (const d of downloaded.values()) URL.revokeObjectURL(d.url);
   downloaded.clear();
 }
@@ -495,7 +554,7 @@ const purchaseLabel = (id: string) => {
 
 function statementsView(): string {
   const state = ledger.state;
-  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement").sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
   const linkedBy = (docId: string) => new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId));
   const rows = docs.map((d) => {
     const charges = d.statement?.transactions.filter((t) => t.kind === "purchase") ?? [];
@@ -515,7 +574,9 @@ function statementReview(id: string): string {
   if (!doc) return `<p>That statement no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
   const head = `<p><a href="#" data-go="statements">&larr; All statements</a></p><h2>${esc(doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read statement"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read statement"}</button>${data ? `<button data-relink="1">Match again</button><button data-redact="${esc(id)}">Make redacted copy</button>` : ""}</p>`;
+  const redacted = redactedCopyOf(state, doc);
+  const redactedNote = redacted ? `<p class="note"><span class="ok">Redacted copy saved</span>: ${esc(redacted.filename)} <button data-preview="${esc(redacted.id)}">Preview</button> It is sent to StepUp instead of this statement.</p>` : data ? `<p class="note">No redacted copy yet: this statement would be sent as it is. Make one once its charges are linked.</p>` : "";
   if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>`;
 
   const cardKnown = data.last4 ? Object.values(state.paymentMethods).find((p) => p.last4?.includes(data.last4!)) : undefined;
@@ -542,7 +603,7 @@ function statementReview(id: string): string {
     return `<tr>${base}<td>${buttons || `<small>No matching purchase yet</small>`}</td></tr>`;
   });
   const charges = data.transactions.filter((t) => t.kind === "purchase");
-  return `${head}<p class="note">${esc(data.issuer ?? "Card statement")}${data.last4 ? ` ending ${esc(data.last4)}` : ""} &middot; ${esc(period)} &middot; ${charges.filter((t) => links.has(t.id)).length} of ${charges.length} charges linked</p>${card}
+  return `${head}${redactedNote}<p class="note">${esc(data.issuer ?? "Card statement")}${data.last4 ? ` ending ${esc(data.last4)}` : ""} &middot; ${esc(period)} &middot; ${charges.filter((t) => links.has(t.id)).length} of ${charges.length} charges linked</p>${card}
     <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
@@ -689,7 +750,7 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 function render(): void {
   const onboarding = account && !workspace;
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
-  root.innerHTML = header() + (onboarding ? "" : tabs()) + previewPanel() + body;
+  root.innerHTML = header() + (onboarding ? "" : tabs()) + redactionPanel() + previewPanel() + body;
 }
 
 function go(next: View): void {
@@ -781,6 +842,15 @@ root.addEventListener("click", async (ev) => {
   } else if (d["readStatement"]) {
     await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
     persist();
+  } else if (d["redact"]) {
+    await guarded(() => makeRedaction(d["redact"]!), "Making the redacted copy…");
+    window.scrollTo({ top: 0 });
+  } else if (t.id === "save-redaction") {
+    await guarded(saveRedaction, "Saving the redacted copy…");
+    persist();
+  } else if (t.id === "discard-redaction") {
+    discardRedaction();
+    render();
   } else if (d["relink"]) {
     const n = relinkAllStatements(ledger);
     status = n ? `Linked ${n} more charge(s).` : "No new confident matches.";

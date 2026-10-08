@@ -9,6 +9,8 @@ export interface SubmissionGroup {
   receipt: DocumentRec;
   /** Every non-receipt document across the group's items and its purchase, deduplicated. */
   additionalDocs: DocumentRec[];
+  /** Statements sent as they are because no redacted copy exists yet (file names): a person should look before filing. */
+  unredactedStatements: string[];
   items: LineItem[];
 }
 
@@ -60,13 +62,17 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
     const key = `${purchase.id}|${child.id}`;
     let group = groups.get(key);
     if (!group) {
-      group = { purchaseId: purchase.id, childId: child.id, childName: child.name ?? child.id, receipt, additionalDocs: [], items: [] };
+      group = { purchaseId: purchase.id, childId: child.id, childName: child.name ?? child.id, receipt, additionalDocs: [], unredactedStatements: [], items: [] };
       groups.set(key, group);
     }
     group.items.push(item);
     for (const a of additionalDocsFor(state, item, purchase)) {
-      const doc = a.documentId ? state.documents[a.documentId] : undefined;
-      if (doc && doc.id !== receipt.id && !group.additionalDocs.some((d) => d.id === doc.id)) group.additionalDocs.push(doc);
+      const original = a.documentId ? state.documents[a.documentId] : undefined;
+      const doc = original ? redactedCopyOf(state, original) ?? original : undefined;
+      if (original && doc && doc.id !== receipt.id && !group.additionalDocs.some((d) => d.id === doc.id)) {
+        group.additionalDocs.push(doc);
+        if (original.contentKind === "statement" && !doc.redacted && !group.unredactedStatements.includes(original.filename ?? original.id)) group.unredactedStatements.push(original.filename ?? original.id);
+      }
     }
   }
 
@@ -75,4 +81,9 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
     blocked,
     skipped,
   };
+}
+
+/** The redacted copy made from a statement, if there is one. That copy, never the original, is what StepUp should receive. */
+export function redactedCopyOf(state: LedgerState, doc: DocumentRec): DocumentRec | undefined {
+  return Object.values(state.documents).find((d) => d.redacted && d.derivedFrom === doc.id);
 }

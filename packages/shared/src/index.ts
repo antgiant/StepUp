@@ -29,6 +29,8 @@ export * from "./workspace/upload.js";
 export * from "./reference/categories.js";
 export * from "./statements/parse.js";
 export * from "./statements/lines.js";
+export * from "./statements/redact.js";
+export * from "./pdf/imagePdf.js";
 export * from "./statements/match.js";
 export * from "./entry/mapping.js";
 export * from "./submit/plan.js";

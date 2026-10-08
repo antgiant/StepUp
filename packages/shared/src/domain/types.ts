@@ -94,6 +94,8 @@ export interface DocumentRec {
   sizeBytes?: number;
   pages?: number;
   derivedFrom?: string;
+  /** True for a copy with everything not needed as proof blacked out; it is what gets sent to StepUp instead of its original. */
+  redacted?: boolean;
   /** Where it came from: dropped in the year folder the old way, uploaded through the app, or imported from a legacy workbook. */
   source?: "loose" | "upload" | "legacy";
   /** For statements: what was read from the file (see statements/parse.ts). Private; never exported or shared. */
