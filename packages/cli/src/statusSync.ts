@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+import { stepUpShapeOk } from "./drift.js";
 import { getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef } from "./graph/onedrive.js";
 
 const TABLE1 = "Table1";
@@ -175,6 +176,7 @@ export function attachStatusSyncListenerWith(page: Page, apply: (body: ApiRespon
     try {
       const body = (await response.json()) as ApiResponse;
       if (!body.Results || body.Results.length === 0) return;
+      if (!stepUpShapeOk("reimbursements-search", body)) return;
       const updated = await apply(body);
       await setLastSyncAt(Date.now());
       console.log(`\n[status sync] Updated ${updated} row(s) from the reimbursements list.`);

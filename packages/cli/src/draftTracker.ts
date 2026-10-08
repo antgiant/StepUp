@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+import { stepUpShapeOk } from "./drift.js";
 
 // Confirmed live: StepUp creates the draft (POST /api/reimbursements/v2) the moment the student is
 // confirmed, identified by a GUID that sits in the wizard URL from the upload step on. GET
@@ -65,7 +66,7 @@ export function attachDraftTracker(page: Page): void {
     const match = DRAFT_GET_PATTERN.exec(response.url());
     if (!match || response.request().method() !== "GET") return;
     const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    if (body) snapshots.set(match[1].toLowerCase(), toSnapshot(match[1].toLowerCase(), body));
+    if (body && stepUpShapeOk("draft", body)) snapshots.set(match[1].toLowerCase(), toSnapshot(match[1].toLowerCase(), body));
   });
 }
 
@@ -97,7 +98,9 @@ export async function fetchDraftSnapshot(page: Page, guid: string): Promise<Draf
   try {
     const res = await page.request.get(`${API_ORIGIN}/api/reimbursements/v2/${guid}`, { headers: { authorization: auth } });
     if (!res.ok()) return null;
-    const snapshot = toSnapshot(guid.toLowerCase(), (await res.json()) as Record<string, unknown>);
+    const draftBody = (await res.json()) as Record<string, unknown>;
+    if (!stepUpShapeOk("draft", draftBody)) return null;
+    const snapshot = toSnapshot(guid.toLowerCase(), draftBody);
     snapshots.set(snapshot.guid, snapshot);
     return snapshot;
   } catch {

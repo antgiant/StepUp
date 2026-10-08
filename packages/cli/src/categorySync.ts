@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+import { stepUpShapeOk } from "./drift.js";
 import {
   appendTableRows,
   getTableHeaderRow,
@@ -293,7 +294,9 @@ export function attachCategoryTreeListener(page: Page, excelRef: CategorySink): 
     if (!SEARCH_PATTERN.test(response.url())) return;
     try {
       const cache = await loadCache();
-      const body = (await response.json()) as {
+      const raw: unknown = await response.json();
+      if (!stepUpShapeOk("categories-search", raw)) return;
+      const body = raw as {
         Results: Array<{
           Id: string;
           Name: string;

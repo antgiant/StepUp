@@ -140,3 +140,17 @@ StepUp misbehaves when two people (or two sessions) use the same account, so `np
 
 - **Claims.** Before filing a group, the run claims its items ("alice is filing this"): the claim is uploaded, every log is re-read, and the run goes ahead only if its claim is still the earliest for every item, so two people starting together cannot both file the same thing. The other person's run skips those items and says who has them. A claim is given back when the group ends (submitted, skipped or failed), renewed at every step of a run, and expires by itself 45 minutes after the last step, so a crash never locks items for long. Your own leftover claim from a crashed run is simply resumed.
 - **Resume state.** What a run knows about a StepUp draft (its id and number, the last step reached, the scan outcome, which documents were attached, whether you skipped it) is saved in the ledger instead of `.cache/drafts.json`, so either person, on any machine, is offered to resume it. The spreadsheet mode still uses `.cache/drafts.json`.
+
+## What this tool logs (and doesn't)
+
+- The console shows what a person needs to confirm a step: item descriptions, amounts and the file names being uploaded. That is on your own screen only; nothing is sent anywhere.
+- Statement contents, card numbers and account details are never printed. Statement text is read in memory; only the parsed charges (date, description, amount) are stored, in the year's ledger in your OneDrive, never in the repository.
+- Debug dumps (`npm run inspect`) print field names and selectors, never field values.
+- `data/` (downloaded receipts), `.cache/` (sign-in tokens and local caches) and `.env` are git-ignored, and a secret scan (gitleaks) runs on every push. Do not paste real statement text or receipts into issues; the "share category fixes" export contains only category names and ids.
+- The browser app keeps a copy of your ledger in this browser (IndexedDB) and clears it on Sign out and Disconnect. The service worker caches only the app's own files.
+
+## Checks you can run
+
+- `npm run verify -- 2026-2027` checks the ledger is consistent (nothing points at something missing, no clashing events, no duplicate files, clocks sane). Add `--files` to confirm every file is still in OneDrive at the recorded size, `--hash` to also compare each file's SHA-256.
+- `npm run backup -- 2026-2027 --to ~/Backups/stepup [--documents]` copies the event logs, the category list and the spreadsheet (and, with `--documents`, every file) outside OneDrive, with a manifest of SHA-256s.
+- StepUp's own responses are checked against the shape this tool expects; if the site changes, the run says so and ignores the response instead of writing wrong data.
