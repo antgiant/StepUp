@@ -9,6 +9,7 @@ import {
   type DriveItemRef,
   type FolderChild,
 } from "../graph/onedrive.js";
+import { deleteDraftRecord, loadDraftRecord, saveDraftRecord } from "../draftTracker.js";
 import { attachPreauthSyncListener } from "../preauthSync.js";
 import {
   buildGroups,
@@ -33,6 +34,16 @@ export class ExcelStore implements FilingStore {
   readonly kind = "excel" as const;
   readonly describe = "the Excel workbook";
   private headers?: string[];
+
+  /** The spreadsheet flow keeps resume state in .cache/drafts.json, as it always has. */
+  readonly drafts = { load: loadDraftRecord, save: saveDraftRecord, delete: deleteDraftRecord };
+
+  /** One person at a time is already enforced by the session lock; the spreadsheet has nowhere to record claims. */
+  async claim(): Promise<{ ok: true }> {
+    return { ok: true };
+  }
+
+  async release(): Promise<void> {}
 
   constructor(private readonly excelRef: DriveItemRef, private readonly folderRef: DriveItemRef) {}
 

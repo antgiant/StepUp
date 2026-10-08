@@ -30,6 +30,8 @@ function state(): LedgerState {
     submissions: {},
     settings: { year: { id: "year", submissionDeadline: "2027-06-30" } },
     categories: {},
+    claims: {},
+    drafts: {},
   };
 }
 

@@ -17,6 +17,8 @@ export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
 export * from "./submit/filing.js";
 export * from "./submit/record.js";
+export * from "./submit/claims.js";
+export * from "./submit/drafts.js";
 export * from "./workspace/ingest.js";
 export * from "./workspace/upload.js";
 export * from "./workspace/lock.js";

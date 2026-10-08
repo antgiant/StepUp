@@ -9,7 +9,9 @@ export type EntityKind =
   | "additionalDoc"
   | "submission"
   | "setting"
-  | "category";
+  | "category"
+  | "claim"
+  | "draft";
 
 export interface Child {
   id: string;
@@ -157,6 +159,37 @@ export interface CategoryEdit {
   requiresServiceDate?: boolean;
 }
 
+/**
+ * "I am filing these items now" (plan §3.11). One record per item and install; the earliest active claim wins, and a
+ * claim that is released or past its time-out counts for nothing.
+ */
+export interface Claim {
+  id: string;
+  itemId?: string;
+  actor?: string;
+  clientId?: string;
+  claimedAt?: string;
+  ttlMs?: number;
+  released?: boolean;
+}
+
+/** A StepUp draft started for a group of items, with enough to pick the run up again on any machine. */
+export interface DraftEntry {
+  id: string;
+  guid?: string;
+  itemIds?: string[];
+  /** Item ids in the order they became line items 1..n. */
+  rowOrder?: string[];
+  sequenceNumber?: string;
+  lastStep?: string;
+  scanOutcome?: string;
+  attachedFiles?: string[];
+  missingFiles?: string[];
+  skipped?: boolean;
+  actor?: string;
+  updatedAt?: string;
+}
+
 export interface LedgerState {
   children: Record<string, Child>;
   paymentMethods: Record<string, PaymentMethod>;
@@ -167,6 +200,8 @@ export interface LedgerState {
   submissions: Record<string, Submission>;
   settings: Record<string, YearSettings>;
   categories: Record<string, CategoryEdit>;
+  claims: Record<string, Claim>;
+  drafts: Record<string, DraftEntry>;
 }
 
 /** A line on a card statement. `amountCents` is positive for a charge and negative for a refund or payment. */

@@ -44,15 +44,14 @@ import { LedgerStore } from "./filing/ledgerStore.js";
 import type { FilingStore } from "./filing/store.js";
 import { openYearLedger } from "./ledgerYear.js";
 import { acquireStepUpLock, type HeldLock } from "./stepupLock.js";
+import { getClientId } from "./clientId.js";
+import { getSignedInName } from "./graph/auth.js";
 import {
   attachDraftTracker,
-  deleteDraftRecord,
   fetchDraftSnapshot,
   guidFromUrl,
   isSubmitted,
   latestSnapshot,
-  loadDraftRecord,
-  saveDraftRecord,
   type DraftRecord,
   type DraftSnapshot,
 } from "./draftTracker.js";
@@ -184,7 +183,8 @@ async function chooseStore(): Promise<FilingStore> {
   if (arg) {
     const year = arg.slice("--ledger=".length);
     console.log(`Opening the ${year} ledger...`);
-    return new LedgerStore(await openYearLedger(year));
+    const me = { actor: await getSignedInName(), clientId: await getClientId() };
+    return new LedgerStore(await openYearLedger(year), me);
   }
   console.log("Resolving OneDrive links...");
   return new ExcelStore(await resolveShareLink(requireEnv("ONEDRIVE_EXCEL_URL")), await resolveShareLink(requireEnv("ONEDRIVE_FILES_FOLDER_URL")));
@@ -355,6 +355,13 @@ async function main() {
       break;
     }
 
+    // Say we are filing these items (so the other person's run leaves them alone); given back when the group ends, however it ends.
+    const claim = await store.claim(group.rows);
+    if (!claim.ok) {
+      console.log(`\nSkipped group ${i + 1}: ${claim.reason}`);
+      skipNotices.push(`Group ${i + 1} (${group.child}, ID ${group.rows.map((r) => r.data["ID"]).join(", ")}) was skipped: ${claim.reason}`);
+      continue;
+    }
     try {
       await runGroup(page, group, store, folderChildren, dataDir, scholarshipByChild, rows, existing);
     } catch (err) {
@@ -385,6 +392,8 @@ async function main() {
       ).catch(() => {
         console.error("(Also failed to show the failure banner in the browser — the page itself may be broken.)");
       });
+    } finally {
+      await store.release(group.rows).catch((err) => console.warn(`(Could not release the claim: ${(err as Error).message}. It expires by itself.)`));
     }
   }
 
@@ -437,7 +446,7 @@ async function resolveExistingDraft(
   groupHeader: string
 ): Promise<{ action: "fresh" } | { action: "done" } | { action: "resume"; guid: string; snapshot: DraftSnapshot; record: DraftRecord }> {
   const rowIds = group.rows.map((r) => r.data["ID"]);
-  const record = await loadDraftRecord(rowIds);
+  const record = await store.drafts.load(rowIds);
   if (!record) return { action: "fresh" };
 
   const snapshot = await fetchDraftSnapshot(page, record.guid);
@@ -452,7 +461,7 @@ async function resolveExistingDraft(
       ]
     );
     if (choice === "skip") return { action: "done" };
-    await deleteDraftRecord(rowIds);
+    await store.drafts.delete(rowIds);
     return { action: "fresh" };
   }
 
@@ -468,7 +477,7 @@ async function resolveExistingDraft(
     }
     const submittedDate = (snapshot.submitDate ?? new Date().toISOString()).slice(0, 10);
     await store.markSubmitted(ordered, snapshot.sequenceNumber, submittedDate);
-    await deleteDraftRecord(rowIds);
+    await store.drafts.delete(rowIds);
     console.log(`\nThese row(s) were already submitted as Reimbursement #${snapshot.sequenceNumber} — marked ${ordered.length} row(s) Submitted and skipping the group.`);
     return { action: "done" };
   }
@@ -487,7 +496,7 @@ async function resolveExistingDraft(
   );
   if (choice === "skip") return { action: "done" };
   if (choice === "fresh") {
-    await deleteDraftRecord(rowIds);
+    await store.drafts.delete(rowIds);
     return { action: "fresh" };
   }
   return { action: "resume", guid: record.guid, snapshot, record };
@@ -574,7 +583,7 @@ async function runGroupSteps(
     if (!resumedAtStep || resumedAtStep === "studentSelection") {
       console.log("Couldn't re-open the draft — starting a new request instead.");
       resumedAtStep = undefined;
-      await deleteDraftRecord(groupRowIds);
+      await store.drafts.delete(groupRowIds);
     }
   }
   if (!resumedAtStep) {
@@ -890,7 +899,7 @@ async function runGroupSteps(
     record.scanOutcome = scanOutcome;
     record.attachedFiles = attachedAdditionalFiles;
     record.missingFiles = missingAdditionalFiles;
-    await saveDraftRecord(record);
+    await store.drafts.save(record);
   };
   const trackDraft = async (currentStep: ReimbursementStep) => {
     const guid = guidFromUrl(page.url());
@@ -1004,7 +1013,7 @@ async function runGroupSteps(
   }
 
   await store.markSubmitted(matchedRows, reimbursementId, new Date().toISOString().slice(0, 10));
-  await deleteDraftRecord(groupRowIds);
+  await store.drafts.delete(groupRowIds);
   console.log(`Recorded ${matchedRows.length} item(s) in ${store.describe}.`);
 
   // Deliberately not navigating away from the confirmation page here — it stays up so you can see

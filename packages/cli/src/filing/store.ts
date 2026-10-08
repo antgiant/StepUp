@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import type { DraftRecord } from "../draftTracker.js";
 import type { FolderChild } from "../graph/onedrive.js";
 import type { ReimbursementGroup, ResolveAmbiguousMainReceipt, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
 
@@ -32,6 +33,17 @@ export interface FilingStore {
   /** The live category list showed the rows' category under a different name. */
   fixCategory(rows: Table1Row[], newValue: string): Promise<void>;
   renameCategory(oldPath: string, newPath: string): Promise<void>;
+
+  /** Where the progress of a StepUp draft is remembered, so a crashed or interrupted run can pick up where it stopped. */
+  readonly drafts: {
+    load(rowIds: string[]): Promise<DraftRecord | undefined>;
+    save(record: DraftRecord): Promise<void>;
+    delete(rowIds: string[]): Promise<void>;
+  };
+  /** "I am filing these rows now." Not ok when someone else already is (the reason says who). */
+  claim(rows: Table1Row[]): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** Gives the claim back (finished, skipped or failed). */
+  release(rows: Table1Row[]): Promise<void>;
 
   /** Passive listeners on StepUp's own API responses (statuses, categories, pre-auths). */
   attachListeners(page: Page): void;

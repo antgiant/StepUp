@@ -135,3 +135,8 @@ npm start -- --ledger=2026-2027
 ### Only one person at a time
 
 StepUp misbehaves when two people (or two sessions) use the same account, so `npm start` (either mode) and `npm run inspect` take a lock first: a small `stepup-session.lock.json` in the shared workspace folder, refreshed every minute and removed on exit or Ctrl+C. If someone else holds it, you are told who, from which machine, and since when, and the run stops. A lock whose owner has stopped refreshing it (crash, sleeping laptop) is treated as abandoned after 5 minutes. `npm start -- --force-unlock` takes over a lock you are sure is a leftover; the other session is told at its next refresh.
+
+### Claims and resume state (ledger mode)
+
+- **Claims.** Before filing a group, the run claims its items ("alice is filing this"): the claim is uploaded, every log is re-read, and the run goes ahead only if its claim is still the earliest for every item, so two people starting together cannot both file the same thing. The other person's run skips those items and says who has them. A claim is given back when the group ends (submitted, skipped or failed), renewed at every step of a run, and expires by itself 45 minutes after the last step, so a crash never locks items for long. Your own leftover claim from a crashed run is simply resumed.
+- **Resume state.** What a run knows about a StepUp draft (its id and number, the last step reached, the scan outcome, which documents were attached, whether you skipped it) is saved in the ledger instead of `.cache/drafts.json`, so either person, on any machine, is offered to resume it. The spreadsheet mode still uses `.cache/drafts.json`.

@@ -40,5 +40,7 @@ export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
 export * from "./submit/filing.js";
 export * from "./submit/record.js";
+export * from "./submit/claims.js";
+export * from "./submit/drafts.js";
 export * from "./graph/browse.js";
 export * from "./workspace/pointer.js";

@@ -33,6 +33,8 @@ function baseState(): LedgerState {
     submissions: {},
     settings: { year: { id: "year", submissionDeadline: "2027-06-30" } },
     categories: {},
+    claims: {},
+    drafts: {},
   };
 }
 const codes = (s: LedgerState, id = "i1") => evaluateItem(s, id, ctx).reasons.map((r) => r.code);

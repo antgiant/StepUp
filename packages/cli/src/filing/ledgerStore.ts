@@ -4,7 +4,15 @@ import type { Page } from "playwright";
 import {
   applyObservedCategories,
   applyStepUpStatuses,
+  claimItems,
+  claimedByOthers,
+  deleteDraft,
   filingGroups,
+  findDraft,
+  releaseItems,
+  renewClaims,
+  saveDraft,
+  type ClaimOwner,
   publishYearMirror,
   recordCategoryFix,
   recordDraftNumber,
@@ -19,6 +27,7 @@ import {
   type RulesContext,
 } from "@step-up/shared";
 import { downloadItem, type FolderChild } from "../graph/onedrive.js";
+import type { DraftRecord } from "../draftTracker.js";
 import type { OpenedYear } from "../ledgerYear.js";
 import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
 import { attachCategoryTreeListener, type Cache } from "../categorySync.js";
@@ -46,9 +55,37 @@ export class LedgerStore implements FilingStore {
   private docs = new Map<string, DocumentRec>();
   private groups: FilingGroup[] = [];
 
-  constructor(private readonly opened: OpenedYear) {
+  constructor(private readonly opened: OpenedYear, private readonly me: ClaimOwner = { actor: "cli", clientId: "cli" }) {
     this.describe = `the ${opened.year.label} ledger`;
     this.drive = opened.driveId;
+  }
+
+  /** Resume state lives in the ledger, so any machine (and the other person) can pick a draft up. Saving also renews our claim. */
+  readonly drafts = {
+    load: async (rowIds: string[]) => {
+      await this.ledger.refresh();
+      return findDraft(this.ledger.state, rowIds);
+    },
+    save: async (record: DraftRecord) => {
+      saveDraft(this.ledger, record, this.me.actor);
+      renewClaims(this.ledger, record.rowIds, this.me);
+      await this.save();
+    },
+    delete: async (rowIds: string[]) => {
+      deleteDraft(this.ledger, rowIds);
+      await this.save();
+    },
+  };
+
+  async claim(rows: Table1Row[]): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const result = await claimItems(this.ledger, this.itemIds(rows), this.me);
+    if (result.ok) return result;
+    const who = [...new Set(result.conflicts.map((c) => c.actor))].join(", ");
+    return { ok: false, reason: `${who} is already filing ${result.conflicts.length === 1 ? "one of these items" : `${result.conflicts.length} of these items`}.` };
+  }
+
+  async release(rows: Table1Row[]): Promise<void> {
+    await releaseItems(this.ledger, this.itemIds(rows), this.me);
   }
 
   private get ledger() {
@@ -74,7 +111,14 @@ export class LedgerStore implements FilingStore {
 
   async loadRows(): Promise<Table1Row[]> {
     await this.ledger.refresh();
-    const { groups, blocked } = filingGroups(this.ledger.state, this.rules());
+    const planned = filingGroups(this.ledger.state, this.rules());
+    const { blocked } = planned;
+    // Items someone else is filing right now are theirs; leave them out (a stale claim, past its time-out, no longer counts).
+    const groups = planned.groups.filter((g) => {
+      const others = claimedByOthers(this.ledger.state, g.rows.map((r) => r.itemId), this.me, Date.now());
+      if (others.length > 0) console.log(`\nSkipping ${g.child}'s "${g.receipt.filename ?? g.receipt.id}": ${[...new Set(others.map((o) => o.actor))].join(", ")} is filing it.`);
+      return others.length === 0;
+    });
     this.groups = groups;
     this.docs.clear();
     const rows: Table1Row[] = [];

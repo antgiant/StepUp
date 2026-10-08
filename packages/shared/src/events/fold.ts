@@ -80,6 +80,8 @@ const KIND_TO_KEY = {
   submission: "submissions",
   setting: "settings",
   category: "categories",
+  claim: "claims",
+  draft: "drafts",
 } as const;
 
 export function materialize(raw: RawState): LedgerState {
@@ -93,6 +95,8 @@ export function materialize(raw: RawState): LedgerState {
     submissions: {},
     settings: {},
     categories: {},
+    claims: {},
+    drafts: {},
   };
   for (const [kind, key] of Object.entries(KIND_TO_KEY)) {
     const recs = raw.entities[kind] ?? {};

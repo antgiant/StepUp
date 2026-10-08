@@ -47,6 +47,8 @@ function state(): LedgerState {
     submissions: { s1: { id: "s1", reimbursementId: "R-100", purchaseId: "p1", childId: "c1", submittedAt: "2026-09-10" } },
     settings: { year: { id: "year", year: "2026-2027", submissionDeadline: "2027-06-30" } },
     categories: {},
+    claims: {},
+    drafts: {},
   };
 }
 
