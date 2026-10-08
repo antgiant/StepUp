@@ -38,6 +38,9 @@ import {
   linkRefund,
   unlinkRefund,
   checkRedactionOutput,
+  summarizeChanges,
+  readableFileName,
+  renameItem,
   clockLooksWrong,
   serverClockSkewMs,
   diffReference,
@@ -75,11 +78,12 @@ import {
 } from "@step-up/shared/web";
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
-import { cacheKey, clearCache, deleteCache, readCache, readOutbox, writeCache, writeOutbox } from "./cache.js";
+import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
-import { onOcrProgress, ocrImage } from "./ocr.js";
+import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
+import { cacheDocument, clearCachedDocuments, getCachedDocument } from "./docCache.js";
 import { addScanPage, buildScanPdf, type ScanPage } from "./scan.js";
 import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
@@ -196,8 +200,14 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
   const filename = doc.filename ?? "file";
   let got = downloaded.get(docId);
   if (!got) {
-    const res = await fetchItemContent(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
-    const raw = await res.blob();
+    const wsKey = keyOf(workspace.pointer);
+    // Documents never change: use the copy kept on this device if there is one.
+    let raw = await getCachedDocument(wsKey, docId, doc.sizeBytes);
+    if (!raw) {
+      const res = await fetchItemContent(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
+      raw = await res.blob();
+      void cacheDocument(wsKey, docId, raw);
+    }
     const kind = previewKind(filename, raw.type);
     const blob = kind === "pdf" && raw.type !== "application/pdf" ? new Blob([raw], { type: "application/pdf" }) : raw;
     got = { url: URL.createObjectURL(blob), kind, blob };
@@ -311,23 +321,86 @@ function previewPanel(): string {
   return `<section class="preview"><div class="preview-bar"><strong>${esc(preview.filename)}</strong><span>${preview.kind === "other" || preview.kind === "email" ? "" : open}<button id="close-preview">Close</button></span></div>${body}</section>`;
 }
 
+/**
+ * Uploads a receipt file, or - if there is no connection - keeps it on this device and uploads it when there is one.
+ * Returns what happened so the caller can tell the person.
+ */
+async function uploadOrQueue(file: { name: string; blob: Blob; sha256?: string }): Promise<{ status: "uploaded" | "duplicate" | "queued"; name: string }> {
+  const ws = workspace!;
+  const queue = async () => {
+    await queueUpload(keyOf(ws.pointer), file);
+    queuedUploads = (await listQueuedUploads(keyOf(ws.pointer))).length;
+    return { status: "queued" as const, name: file.name };
+  };
+  if (!navigator.onLine) return queue();
+  try {
+    const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name: file.name, body: file.blob, sha256: file.sha256 });
+    await ledger.flush();
+    return result;
+  } catch (err) {
+    // A dropped connection mid-upload: keep the file rather than lose the effort. Anything else is a real error.
+    if (!navigator.onLine || err instanceof TypeError) return queue();
+    throw err;
+  }
+}
+
+let queuedUploads = 0;
+let flushingUploads = false;
+
+/** Uploads whatever was chosen while offline. Safe to call any time; one run at a time. */
+async function flushQueuedUploads(): Promise<void> {
+  const ws = workspace;
+  if (!ws || flushingUploads || !navigator.onLine) return;
+  flushingUploads = true;
+  try {
+    const key = keyOf(ws.pointer);
+    const waiting = await listQueuedUploads(key);
+    queuedUploads = waiting.length;
+    if (waiting.length === 0) return;
+    showBusy(`Uploading ${waiting.length} file(s) saved while offline…`);
+    let done = 0;
+    try {
+      for (const f of waiting) {
+        await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name: f.name, body: f.blob, sha256: f.sha256 });
+        await ledger.flush();
+        await removeQueuedUpload(f.id);
+        done++;
+      }
+    } catch (err) {
+      status = `Could not upload the waiting files yet (${err instanceof Error ? err.message : err}). They are kept and will be tried again.`;
+    } finally {
+      hideBusy();
+    }
+    queuedUploads = (await listQueuedUploads(key)).length;
+    if (done) status = `Uploaded ${done} file(s) that were saved while offline.${status ? " " + status : ""}`;
+    persist();
+    render();
+  } finally {
+    flushingUploads = false;
+  }
+}
+
 async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
   if (!workspace || files.length === 0) return;
-  const ws = workspace;
   await guarded(async () => {
     let added = 0;
+    let waiting = 0;
     const dupes: string[] = [];
     for (const [i, file] of files.entries()) {
       note(`Preparing ${file.name} (${i + 1} of ${files.length})…`);
       const prepared = await prepareUpload(file);
       const name = fromCamera ? photoName(file) : prepared.name;
-      const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body: prepared.body, sha256: (await sha256Hex(prepared.body)) || undefined });
+      const result = await uploadOrQueue({ name, blob: prepared.body, sha256: (await sha256Hex(prepared.body)) || undefined });
       if (result.status === "uploaded") added++;
+      else if (result.status === "queued") waiting++;
       else dupes.push(result.name);
-      await ledger.flush();
     }
     persist();
-    status = [added ? `Added ${added} file(s) to the list.` : "", dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : ""].filter(Boolean).join(" ");
+    status = [
+      added ? `Added ${added} file(s) to the list.` : "",
+      waiting ? `${waiting} file(s) saved on this device; they will upload when you are back online.` : "",
+      dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : "",
+    ].filter(Boolean).join(" ");
   }, "Uploading to OneDrive…");
 }
 
@@ -390,6 +463,7 @@ const val = (form: HTMLFormElement, name: string) => (form.elements.namedItem(na
 async function dropWorkspace(): Promise<void> {
   forgetCache();
   clearPreviews();
+  await clearCachedDocuments();
   await savePointer(undefined);
   workspace = undefined;
   activeStore = store;
@@ -433,6 +507,7 @@ async function useOutbox(ws: OpenWorkspace): Promise<void> {
 window.addEventListener("online", () => {
   if (workspace && ledger.unflushedCount > 0) void save();
   else render();
+  void flushQueuedUploads();
 });
 window.addEventListener("offline", render);
 let lastRefresh = Date.now();
@@ -446,7 +521,8 @@ async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
     lastRefresh = Date.now();
     if (workspace !== ws) return;
     persist();
-    if (changed && !typing()) render(); // never replace a form someone is typing in; the next action shows the update
+    checkSince(ws);
+    if ((changed || sinceLines.length) && !typing()) render(); // never replace a form someone is typing in; the next action shows the update
   } catch (err) {
     if (workspace !== ws) return;
     if (isDeadPointer(err)) await dropWorkspace();
@@ -540,7 +616,8 @@ function attach(next: OpenWorkspace | undefined): void {
     activeStore = ledger.store;
     void savePointer(next.pointer);
     if (!next.fromCache) persist();
-    void useOutbox(next);
+    void useOutbox(next).then(() => flushQueuedUploads());
+    checkSince(next);
     // Switching year (or workspace) means a different frozen category list.
     if (yearSnapshot && ledgerFolderId && ledgerFolderId.yearFolderId !== next.year.folderId) {
       yearSnapshot = undefined;
@@ -597,17 +674,55 @@ function shareForm(): string {
 function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue">Step Up Helper</a></h1>
-    <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}
+    <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}${queuedUploads ? `<span class="badge warn">${queuedUploads} file(s) waiting to upload</span>` : ""}
     <details class="menu"><summary class="btn">Advanced</summary>
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
+        ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
       </div></details></nav></header>
     ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
+}
+
+/** "Since you were last here": what other people and the command line did while this browser was away. */
+let sinceLines: string[] = [];
+let sinceChecked = false;
+const lastSeenKey = (ws: OpenWorkspace) => `stepup.lastSeen.${keyOf(ws.pointer)}`;
+
+function checkSince(ws: OpenWorkspace): void {
+  if (sinceChecked || ws.fromCache) return;
+  sinceChecked = true;
+  let last: number | undefined;
+  try {
+    last = Number(localStorage.getItem(lastSeenKey(ws))) || undefined;
+  } catch {
+    /* storage blocked: no summary */
+  }
+  if (last) sinceLines = summarizeChanges(ws.store.cachedEvents(), last, store.clientId).lines;
+  try {
+    localStorage.setItem(lastSeenKey(ws), String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden" || !workspace) return;
+  try {
+    localStorage.setItem(lastSeenKey(workspace), String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+});
+
+function sinceBanner(): string {
+  if (sinceLines.length === 0) return "";
+  return `<section class="filing-banner"><div class="filing-head"><strong>Since you were last here</strong><button id="dismiss-since">Dismiss</button></div>
+    <ul>${sinceLines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul></section>`;
 }
 
 /** Who is filing which items right now (from the CLI's claims). Empty unless someone is mid-run. */
@@ -660,7 +775,7 @@ function queueView(): string {
   const childForm = `<details><summary>Children (${children.length})</summary>
     <ul>${children.map((c) => `<li>${esc(c.name)} ${c.scholarship ? `<small>${esc(c.scholarship)}</small>` : ""}</li>`).join("")}</ul>
     <form id="add-child" class="row"><input name="name" placeholder="Name" required><input name="scholarship" placeholder="Scholarship (e.g. FES-UA)"><button>Add child</button></form></details>`;
-  const banner = filingBanner();
+  const banner = sinceBanner() + filingBanner();
   const uploads = workspace
     ? ` <label class="btn">Add receipt files<input type="file" id="upload" multiple accept="application/pdf,image/*" hidden></label>
         <label class="btn">Take a photo<input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
@@ -935,7 +1050,7 @@ function purchaseView(id: string, draft = false): string {
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
   <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
-  ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}
+  ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}
   ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
@@ -1049,13 +1164,14 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
   else if (t.id === "sign-out") {
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you sign out. Sign out anyway?`)) return;
-    forgetLocalPointer(); await clearCache(); showBusy("Signing out of Microsoft…"); await signOut();
+    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy("Signing out of Microsoft…"); await signOut();
   }
   else if (t.id === "disconnect") {
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you disconnect. Disconnect anyway?`)) return;
     await guarded(async () => {
       forgetCache();
       clearPreviews();
+      await clearCachedDocuments();
       await savePointer(undefined);
       workspace = undefined;
       activeStore = store;
@@ -1088,6 +1204,9 @@ root.addEventListener("click", async (ev) => {
       a.click();
       URL.revokeObjectURL(url);
     }, "Preparing export…");
+  } else if (t.id === "dismiss-since") {
+    sinceLines = [];
+    render();
   } else if (t.id === "update-reference") {
     await guarded(updateYearReference, "Updating the category list…");
     persist();
@@ -1175,6 +1294,19 @@ root.addEventListener("click", async (ev) => {
       await ledger.flush();
       status = found.length ? `Saved ${added} attachment(s) from the email as files${added < found.length ? ` (${found.length - added} were already there)` : ""}.` : "That email has no PDF or image attachments.";
     }, "Saving the email's attachments…");
+    persist();
+  } else if (d["renameFile"]) {
+    await guarded(async () => {
+      const p = ledger.state.purchases[d["renameFile"]!];
+      const doc = p?.receiptDocumentId ? ledger.state.documents[p.receiptDocumentId] : undefined;
+      if (!p || !doc?.driveItemId) return;
+      const name = readableFileName(doc, p);
+      await renameItem(workspace!.driveId, doc.driveItemId, name);
+      ledger.set("document", doc.id, { filename: name }, { label: "document.renamed" });
+      await ledger.flush();
+      downloaded.delete(doc.id);
+      status = `Renamed the file in OneDrive to "${name}".`;
+    }, "Renaming the file…");
     persist();
   } else if (d["shrink"]) {
     await guarded(() => shrinkReceipt(d["shrink"]!), "Making a smaller copy…");
@@ -1299,9 +1431,8 @@ root.addEventListener("submit", async (ev) => {
     await guarded(async () => {
       const bytes = await buildScanPdf(draft.pages, MAX_PROOF_BYTES);
       const body = new Blob([bytes as BlobPart], { type: "application/pdf" });
-      const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
-      await ledger.flush();
-      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s)) to the list.` : `That scan was already added as "${result.name}".`;
+      const result = await uploadOrQueue({ name, blob: body, sha256: (await sha256Hex(body)) || undefined });
+      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s)) to the list.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
       discardScan();
       persist();
     }, "Building the PDF…");
@@ -1359,6 +1490,11 @@ root.addEventListener("change", async (ev) => {
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
     await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);
+    return;
+  }
+  if (input.id === "ocr-lang") {
+    const v = (input as unknown as HTMLSelectElement).value;
+    setOcrLanguages(v === "all" ? ocrLanguages().available : [v]);
     return;
   }
   if (input.id === "scan-add" && input.files?.[0] && scan) {

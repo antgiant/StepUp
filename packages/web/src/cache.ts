@@ -19,12 +19,14 @@ const DB = "stepup-cache";
 const STORE = "workspaces";
 /** Edits made but not yet uploaded, so a reload, a crash or a lost connection never loses them. */
 const OUTBOX = "outbox";
+/** Receipt files chosen while offline, waiting to be uploaded. */
+const UPLOADS = "uploads";
 
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 2);
+    const req = indexedDB.open(DB, 3);
     req.onupgradeneeded = () => {
-      for (const name of [STORE, OUTBOX]) if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
+      for (const name of [STORE, OUTBOX, UPLOADS]) if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -69,6 +71,7 @@ export async function deleteCache(key: string): Promise<void> {
 export async function clearCache(): Promise<void> {
   await run("readwrite", (s) => s.clear());
   await run("readwrite", (s) => s.clear(), OUTBOX);
+  await run("readwrite", (s) => s.clear(), UPLOADS);
 }
 
 export async function readOutbox(key: string): Promise<LedgerEvent[]> {
@@ -79,4 +82,26 @@ export async function readOutbox(key: string): Promise<LedgerEvent[]> {
 export async function writeOutbox(key: string, events: readonly LedgerEvent[]): Promise<void> {
   if (events.length === 0) await run("readwrite", (s) => s.delete(key), OUTBOX);
   else await run("readwrite", (s) => s.put([...events], key), OUTBOX);
+}
+
+export interface QueuedUpload {
+  id: string;
+  name: string;
+  blob: Blob;
+  sha256?: string;
+  queuedAt: number;
+}
+
+/** Keeps a file on this device until it can be uploaded. */
+export async function queueUpload(key: string, file: { name: string; blob: Blob; sha256?: string }): Promise<void> {
+  const id = `${key}|${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await run("readwrite", (s) => s.put({ id, name: file.name, blob: file.blob, ...(file.sha256 ? { sha256: file.sha256 } : {}), queuedAt: Date.now() } satisfies QueuedUpload, id), UPLOADS);
+}
+
+export async function listQueuedUploads(key: string): Promise<QueuedUpload[]> {
+  return ((await run("readonly", (s) => s.getAll(IDBKeyRange.bound(`${key}|`, `${key}|\uffff`)), UPLOADS)) as QueuedUpload[] | undefined) ?? [];
+}
+
+export async function removeQueuedUpload(id: string): Promise<void> {
+  await run("readwrite", (s) => s.delete(id), UPLOADS);
 }

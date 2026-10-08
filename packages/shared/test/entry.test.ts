@@ -251,3 +251,13 @@ describe("pending persistence", () => {
     expect(copyYearSetup(fresh, last.state)).toEqual({ children: 0, paymentMethods: 0 });
   });
 });
+
+import { readableFileName } from "../src/index.js";
+
+describe("readable file names", () => {
+  it("builds a browsable name from the purchase, keeps the extension, and cleans unsafe characters", () => {
+    expect(readableFileName({ id: "doc-0123456789abcdef", filename: "IMG_4411.JPG" }, { id: "p", vendor: "Acme / Books: \"Sale\"", date: "2026-09-17", orderTotalCents: 5428 })).toBe("2026-09-17 Acme Books Sale 54.28 abcdef.jpg");
+    expect(readableFileName({ id: "d1", filename: "scan" }, undefined)).toBe("d1");
+    expect(readableFileName({ id: "doc-ff", filename: "a.pdf" }, { id: "p", vendor: "Solo" })).toBe("Solo docff.pdf");
+  });
+});

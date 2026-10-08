@@ -23,6 +23,33 @@ export function onOcrProgress(fn: ((p: OcrProgress) => void) | undefined): void 
 
 let worker: Promise<Worker> | undefined;
 
+const LANG_KEY = "stepup.ocrLang";
+const NAMES: Record<string, string> = { eng: "English", spa: "Spanish", fra: "French", deu: "German", por: "Portuguese", ita: "Italian", hat: "Haitian Creole" };
+export const ocrLanguageName = (code: string) => NAMES[code] ?? code;
+
+/** Languages built into this site, and which are in use (a saved choice, else all of them). More languages read slower. */
+export function ocrLanguages(): { available: string[]; current: string[] } {
+  const available: string[] = typeof __OCR_LANGS__ === "undefined" ? ["eng"] : __OCR_LANGS__;
+  let saved: string[] = [];
+  try {
+    saved = (localStorage.getItem(LANG_KEY) ?? "").split("+").filter((l) => available.includes(l));
+  } catch {
+    /* storage blocked */
+  }
+  return { available, current: saved.length ? saved : available };
+}
+
+export function setOcrLanguages(langs: string[]): void {
+  try {
+    localStorage.setItem(LANG_KEY, langs.join("+"));
+  } catch {
+    /* storage blocked: applies for this visit only */
+  }
+  const old = worker;
+  worker = undefined; // the next read starts an engine for the new languages
+  void old?.then((w) => w.terminate()).catch(() => undefined);
+}
+
 /**
  * The OCR engine runs entirely on this device. Its worker, WebAssembly core and English data are served from this site
  * (see ocrAssets.js), never from a CDN, and are loaded only the first time text has to be read from an image.
@@ -31,7 +58,7 @@ function engine(): Promise<Worker> {
   worker ??= (async () => {
     const { createWorker } = await import("tesseract.js");
     const abs = (p: string) => new URL(`${import.meta.env.BASE_URL}${p}`, document.baseURI).href;
-    return createWorker("eng", 1, {
+    return createWorker(ocrLanguages().current.join("+"), 1, {
       workerPath: abs("ocr/worker.min.js"),
       corePath: abs("ocr/core"),
       langPath: abs("ocr/lang"),

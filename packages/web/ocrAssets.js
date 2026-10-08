@@ -7,13 +7,15 @@ import path from "node:path";
 const require = createRequire(import.meta.url);
 const pkgDir = (name) => path.dirname(require.resolve(`${name}/package.json`));
 const CORES = ["tesseract-core-lstm", "tesseract-core-simd-lstm", "tesseract-core-relaxedsimd-lstm"];
+/** Languages to ship, from the build environment: OCR_LANGS=eng,spa (each needs `npm i -w @step-up/web @tesseract.js-data/<lang>`). Default: English only. */
+const LANGS = (process.env.OCR_LANGS ?? "eng").split(",").map((l) => l.trim()).filter(Boolean);
 
 /** @returns {Record<string, string>} public path -> file on disk */
 function sources() {
   const out = {
     "ocr/worker.min.js": path.join(pkgDir("tesseract.js"), "dist/worker.min.js"),
-    "ocr/lang/eng.traineddata.gz": path.join(pkgDir("@tesseract.js-data/eng"), "4.0.0_best_int/eng.traineddata.gz"),
   };
+  for (const lang of LANGS) out[`ocr/lang/${lang}.traineddata.gz`] = path.join(pkgDir(`@tesseract.js-data/${lang}`), `4.0.0_best_int/${lang}.traineddata.gz`);
   for (const core of CORES) out[`ocr/core/${core}.wasm.js`] = path.join(pkgDir("tesseract.js-core"), `${core}.wasm.js`);
   return out;
 }
@@ -21,6 +23,7 @@ function sources() {
 export function ocrAssets() {
   return {
     name: "ocr-assets",
+    config: () => ({ define: { __OCR_LANGS__: JSON.stringify(LANGS) } }),
     configureServer(server) {
       const files = sources();
       server.middlewares.use((req, res, next) => {

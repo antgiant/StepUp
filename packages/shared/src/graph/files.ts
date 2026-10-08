@@ -68,6 +68,11 @@ export async function ensureFolder(driveId: string, parentId: string, name: stri
   }
 }
 
+/** Renames a file or folder in place (it keeps its id, so nothing that points at it breaks). Fails with 409 if the name is taken. */
+export async function renameItem(driveId: string, itemId: string, name: string): Promise<void> {
+  await graphJson(`/drives/${driveId}/items/${itemId}`, { method: "PATCH", body: JSON.stringify({ name, "@microsoft.graph.conflictBehavior": "fail" }), label: `Renaming to ${name}…` });
+}
+
 /** Deletes an item (to the recycle bin). With `ifMatch`, only if its ETag still matches; a mismatch throws GraphError 412. */
 export async function deleteItem(driveId: string, itemId: string, ifMatch?: string): Promise<void> {
   await graphFetch(`/drives/${driveId}/items/${itemId}`, { method: "DELETE", ...(ifMatch ? { headers: { "If-Match": ifMatch } } : {}), rawBody: true });
