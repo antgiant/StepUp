@@ -1,5 +1,14 @@
 # @step-up/web
 
-Placeholder for the static data-entry portal (PWA) deployed to GitHub Pages. It will talk to the same
-OneDrive workbook as the CLI through `@step-up/shared`, with browser-side sign-in (MSAL.js, auth-code + PKCE).
-Nothing here yet.
+Static data-entry portal for GitHub Pages (Vite + TypeScript, no framework). Uses the browser-safe subset of
+`@step-up/shared` (`@step-up/shared/web`).
+
+`npm run dev -w @step-up/web` to run it, `npm run build -w @step-up/web` to build.
+
+**Current slice (local mode):** the "needs your attention" queue, start a purchase from a file or from scratch,
+attach a file as a receipt or as additional documentation, and the receipt workspace (receipt details entered once,
+items below with child/amount/category carry-over, estimated then real tax/shipping, per-item readiness reasons).
+Events are stored in this browser's localStorage; Import/Export events moves a ledger as `events.jsonl`.
+
+**Not yet:** MSAL sign-in and the OneDrive event store, receipt preview/upload/capture, shared category reference
+data (every category is currently accepted), offline queue / PWA, join and new-year screens.

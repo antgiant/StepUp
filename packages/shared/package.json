@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./graph/onedrive": "./src/graph/onedrive.ts"
+    "./graph/onedrive": "./src/graph/onedrive.ts",
+    "./web": "./src/web.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

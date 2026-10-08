@@ -3,7 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@step-up/shared": "*"
+  },
+  "devDependencies": {
+    "vite": "^8.3.3"
   }
 }
