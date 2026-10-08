@@ -171,3 +171,43 @@ describe("linking proof", () => {
     expect(Object.values(l.state.additionalDocs).some((a) => a.ownerId === amazon)).toBe(false);
   });
 });
+
+import { learnAlias, linesFromTextItems, linkTransaction } from "../src/index.js";
+
+describe("linesFromTextItems", () => {
+  it("rebuilds rows from positioned pieces, top to bottom and left to right", () => {
+    const text = linesFromTextItems([
+      [
+        { str: "54.28", x: 400, y: 700 },
+        { str: "09/18", x: 20, y: 700.4 },
+        { str: "AMZN Mktp", x: 90, y: 699.8 },
+        { str: "Description", x: 90, y: 720 },
+        { str: "Amount", x: 400, y: 720 },
+        { str: "   ", x: 1, y: 1 },
+      ],
+      [{ str: "next", x: 0, y: 10 }],
+    ]);
+    expect(text).toBe("Description Amount\n09/18 AMZN Mktp 54.28\n\nnext");
+    expect(parseStatementText("Statement Period 09/15/2026 - 10/14/2026\n" + text).transactions[0]).toMatchObject({ amountCents: 5428, descriptor: "AMZN Mktp" });
+  });
+});
+
+describe("learnAlias", () => {
+  it("remembers a descriptor word for a vendor once, and uses it next time", () => {
+    const l = newLedger();
+    l.set("document", "stmt", { contentKind: "statement" });
+    const p = createPurchase(l, { vendor: "Amazon", date: "2026-09-18", orderTotalCents: 999 });
+    const data = parseStatementText("Statement Period 09/15/2026 - 10/14/2026\n09/18 09/19 ZZQ*8812 9.99");
+    const m = matchStatement(l.state, "stmt", data)[0]!;
+    expect(m.auto).toBe(false);
+    linkTransaction(l, p, "stmt", m.transactionId, "manual");
+    expect(learnAlias(l, data.transactions[0]!.descriptor, "Amazon")).toBe(true);
+    expect(learnAlias(l, data.transactions[0]!.descriptor, "Amazon")).toBe(false); // nothing new
+    expect(l.state.settings["year"]?.vendorAliases).toEqual({ zzq: ["amazon"] });
+    expect(learnAlias(l, "AMAZON PRIME", "Amazon")).toBe(false); // already matches by name
+
+    const next = parseStatementText("Statement Period 10/15/2026 - 11/14/2026\n10/20 10/21 ZZQ*0001 9.99");
+    const q = createPurchase(l, { vendor: "Amazon", date: "2026-10-19", orderTotalCents: 999 });
+    expect(matchStatement(l.state, "stmt", next)[0]).toMatchObject({ best: { purchaseId: q }, auto: true });
+  });
+});

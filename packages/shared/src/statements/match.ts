@@ -106,7 +106,7 @@ export function matchStatement(state: LedgerState, statementDocId: string, data:
   const opts = {
     tolerance: options.tolerance ?? ((total: number) => Math.max(100, Math.round(total * 0.02))),
     maxLagDays: options.maxLagDays ?? 30,
-    aliases: options.aliases,
+    aliases: options.aliases ?? state.settings["year"]?.vendorAliases,
   };
   const threshold = options.autoThreshold ?? 0.85;
   const linked = new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === statementDocId && a.transactionId).map((a) => a.transactionId!));
@@ -179,4 +179,20 @@ export function relinkAllStatements(ledger: Ledger, options: MatchOptions = {}):
     n += linkConfidentMatches(ledger, doc.id, matchStatement(ledger.state, doc.id, doc.statement, options));
   }
   return n;
+}
+
+/**
+ * When a person links a charge to a purchase whose vendor does not look like the descriptor, remember the pairing so the
+ * next statement matches by itself. Stored with the year's settings.
+ */
+export function learnAlias(ledger: Ledger, descriptor: string, vendor: string | undefined): boolean {
+  const vendorWords = words(vendor ?? "");
+  const key = words(descriptor)[0];
+  if (!key || vendorWords.length === 0) return false;
+  if (vendorWords.some((v) => v === key || v.startsWith(key) || key.startsWith(v))) return false; // already matches by name
+  const known = ledger.state.settings["year"]?.vendorAliases ?? {};
+  const merged = [...new Set([...(known[key] ?? []), ...vendorWords])].sort();
+  if (merged.join() === (known[key] ?? []).join()) return false;
+  ledger.set("setting", "year", { vendorAliases: { ...known, [key]: merged } }, { label: "setting.aliasLearned" });
+  return true;
 }

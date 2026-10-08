@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@azure/msal-browser": "^5.25.0",
-    "@step-up/shared": "*"
+    "@step-up/shared": "*",
+    "pdfjs-dist": "^6.4.299"
   },
   "devDependencies": {
     "vite": "^8.3.3"

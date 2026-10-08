@@ -102,3 +102,5 @@ h4 { margin: 14px 0 6px; font-size: .9rem; }
 form.inline { display: flex; gap: 6px; } form.inline input { width: 7.5em; padding: 4px 8px; } form.inline button { padding: 4px 10px; background: transparent; color: var(--fg); border-color: var(--line); }
 .bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 6px; overflow: hidden; } .bar span { display: block; height: 100%; background: var(--accent); }
 .queue > li strong { font-variant-numeric: tabular-nums; }
+tr.muted td { color: var(--muted); }
+td button { padding: 3px 10px; margin: 2px 4px 2px 0; }

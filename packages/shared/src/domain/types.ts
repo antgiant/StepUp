@@ -136,6 +136,8 @@ export interface YearSettings {
   /** Default tax/shipping estimate rate used until a receipt value is entered (default 0.07). */
   defaultTaxRate?: number;
   mirror?: boolean;
+  /** Learned card-descriptor words -> vendor words ("zzq" -> ["amazon"]), so later statements match without asking. */
+  vendorAliases?: Record<string, string[]>;
 }
 
 /**

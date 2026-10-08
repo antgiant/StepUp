@@ -24,6 +24,17 @@ import {
   reallocateTax,
   observeActivity,
   yearSummary,
+  parseStatementText,
+  saveStatement,
+  matchStatement,
+  linkTransaction,
+  unlinkTransaction,
+  linkConfidentMatches,
+  relinkAllStatements,
+  learnAlias,
+  purchaseTotalCents,
+  type StatementData,
+  type TransactionMatch,
   openLedgerFolders,
   fetchItemContent,
   uploadReceipt,
@@ -46,6 +57,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, readCache, readOutbox, writeCache, writeOutbox } from "./cache.js";
 import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
+import { pdfToText } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import "./style.css";
 
@@ -99,22 +111,31 @@ const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
 let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string } | undefined;
-const downloaded = new Map<string, { url: string; kind: PreviewKind }>();
+const downloaded = new Map<string, { url: string; kind: PreviewKind; blob: Blob }>();
+
+/** Downloads a document once per session (documents never change) and keeps it for previews and for reading statements. */
+async function loadDocument(docId: string): Promise<{ url: string; kind: PreviewKind; blob: Blob }> {
+  const doc = ledger.state.documents[docId];
+  if (!doc?.driveItemId || !workspace) throw new Error("That file is not in OneDrive.");
+  const filename = doc.filename ?? "file";
+  let got = downloaded.get(docId);
+  if (!got) {
+    const res = await fetchItemContent(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
+    const raw = await res.blob();
+    const kind = previewKind(filename, raw.type);
+    const blob = kind === "pdf" && raw.type !== "application/pdf" ? new Blob([raw], { type: "application/pdf" }) : raw;
+    got = { url: URL.createObjectURL(blob), kind, blob };
+    downloaded.set(docId, got);
+  }
+  return got;
+}
 
 async function openPreview(docId: string): Promise<void> {
   const doc = ledger.state.documents[docId];
   if (!doc?.driveItemId || !workspace) return;
   const filename = doc.filename ?? "receipt";
-  let got = downloaded.get(docId);
-  if (!got) {
-    const res = await fetchItemContent(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
-    const blob = await res.blob();
-    const kind = previewKind(filename, blob.type);
-    const typed = kind === "pdf" && blob.type !== "application/pdf" ? new Blob([blob], { type: "application/pdf" }) : blob;
-    got = { url: URL.createObjectURL(typed), kind };
-    downloaded.set(docId, got);
-  }
-  preview = { docId, filename, ...got, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
+  const got = await loadDocument(docId);
+  preview = { docId, filename, url: got.url, kind: got.kind, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
 }
 
 function previewPanel(): string {
@@ -147,7 +168,7 @@ async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
   }, "Uploading to OneDrive…");
 }
 
-type View = { name: "queue" } | { name: "summary" } | { name: "purchase"; id: string; draft?: boolean };
+type View = { name: "queue" } | { name: "summary" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
@@ -288,6 +309,11 @@ async function guarded(action: () => Promise<void>, label = "Waiting for OneDriv
 }
 
 async function save(): Promise<void> {
+  // New or changed purchases may now match a charge on a statement we already read.
+  if (Object.values(ledger.state.documents).some((d) => d.statement)) {
+    const linked = relinkAllStatements(ledger);
+    if (linked) status = `Linked ${linked} charge(s) on your statements to purchases.`;
+  }
   await guarded(() => ledger.flush(), "Saving to OneDrive…");
   persist();
   scheduleMirror();
@@ -425,7 +451,7 @@ function queueView(): string {
     }).join("");
     const actions =
       e.kind === "unattached-document"
-        ? `<button data-start="${esc(e.id)}">Start purchase</button>${state.documents[e.id]?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${sugg}`
+        ? `<button data-start="${esc(e.id)}">Start purchase</button>${state.documents[e.id]?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${state.documents[e.id]?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as statement</button>` : `<button data-statement="${esc(e.id)}">Open statement</button>`}${sugg}`
         : `<button data-open="${esc(e.purchaseId ?? e.id)}">Open</button>${e.kind === "purchase-needs-items" ? `<button data-archive="${esc(e.id)}">Archive</button>` : ""}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}<br><small>${esc(e.reasons.join("; "))}</small></div><div class="actions">${actions}</div></li>`;
@@ -460,9 +486,85 @@ function summaryView(): string {
     ${counts.length ? `<ul class="queue">${counts.map(([k, n]) => `<li><span>${esc(k)}</span><strong>${n}</strong></li>`).join("")}</ul>` : "<p>No items yet.</p>"}`;
 }
 
+const purchaseLabel = (id: string) => {
+  const p = ledger.state.purchases[id];
+  if (!p) return "(removed purchase)";
+  const total = purchaseTotalCents(ledger.state, p);
+  return `${p.vendor ?? "Untitled purchase"}${p.date ? `, ${p.date}` : ""}${total !== undefined ? `, ${formatCents(total)}` : ""}`;
+};
+
+function statementsView(): string {
+  const state = ledger.state;
+  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement").sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const linkedBy = (docId: string) => new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId));
+  const rows = docs.map((d) => {
+    const charges = d.statement?.transactions.filter((t) => t.kind === "purchase") ?? [];
+    const linked = linkedBy(d.id);
+    const summary = d.statement ? `${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
+    return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${esc(summary)}${d.statement?.last4 ? ` &middot; card ending ${esc(d.statement.last4)}` : ""}</small></div>
+      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read statement"}</button></div></li>`;
+  });
+  return `<h2>Statements</h2>
+    <p class="note">A statement can prove payment for many purchases at once. Mark a file as a statement from the list page (<em>Mark as statement</em>), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</p>
+    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>No statements yet.</p>"}`;
+}
+
+function statementReview(id: string): string {
+  const state = ledger.state;
+  const doc = state.documents[id];
+  if (!doc) return `<p>That statement no longer exists.</p>`;
+  const data: StatementData | undefined = doc.statement;
+  const head = `<p><a href="#" data-go="statements">&larr; All statements</a></p><h2>${esc(doc.filename ?? id)}</h2>
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read statement"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
+  if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>`;
+
+  const cardKnown = data.last4 ? Object.values(state.paymentMethods).find((p) => p.last4?.includes(data.last4!)) : undefined;
+  const card = data.last4
+    ? cardKnown
+      ? `<p class="note">Card: ${esc(cardKnown.label ?? `ending ${data.last4}`)}</p>`
+      : `<form id="card-form" class="row" data-last4="${esc(data.last4)}" data-issuer="${esc(data.issuer)}"><input name="label" value="${esc(`${data.issuer ?? "Card"} ${data.last4}`)}" aria-label="Card name" required><button>Save this card</button></form>`
+    : "";
+  const period = data.periodStart && data.periodEnd ? `${data.periodStart} to ${data.periodEnd}` : "period not found";
+  const matches = new Map<string, TransactionMatch>(matchStatement(state, id, data).map((m) => [m.transactionId, m]));
+  const links = new Map(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.transactionId).map((a) => [a.transactionId!, a]));
+  const rows = data.transactions.map((t) => {
+    const amount = `<td class="num">${formatCents(t.amountCents)}</td>`;
+    const base = `<td>${esc(t.date)}</td><td>${esc(t.descriptor)}${t.confidence < 0.8 ? ` <small class="warn">check this row</small>` : ""}</td>${amount}`;
+    if (t.kind !== "purchase") return `<tr class="muted">${base}<td><small>${t.kind === "payment" ? "Payment to the card" : t.kind === "credit" ? "Refund or credit" : "Fee or interest"}</small></td></tr>`;
+    const link = links.get(t.id);
+    if (link?.ownerId) {
+      return `<tr>${base}<td><span class="ok">Linked</span> to ${esc(purchaseLabel(link.ownerId))}${link.source === "auto" ? ` <small>(automatic)</small>` : ""}
+        <button data-unlink="${esc(link.ownerId)}" data-txn="${esc(t.id)}" data-doc="${esc(id)}">Undo</button></td></tr>`;
+    }
+    const m = matches.get(t.id);
+    const cands = [m?.best, ...(m?.alternatives ?? [])].filter(Boolean).slice(0, 3);
+    const buttons = cands.map((c) => `<button data-link="${esc(c!.purchaseId)}" data-txn="${esc(t.id)}" data-doc="${esc(id)}" title="${esc(c!.reasons.join(", "))}">Link to ${esc(purchaseLabel(c!.purchaseId))} <small>${Math.round(c!.confidence * 100)}%</small></button>`).join(" ");
+    return `<tr>${base}<td>${buttons || `<small>No matching purchase yet</small>`}</td></tr>`;
+  });
+  const charges = data.transactions.filter((t) => t.kind === "purchase");
+  return `${head}<p class="note">${esc(data.issuer ?? "Card statement")}${data.last4 ? ` ending ${esc(data.last4)}` : ""} &middot; ${esc(period)} &middot; ${charges.filter((t) => links.has(t.id)).length} of ${charges.length} charges linked</p>${card}
+    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+/** Downloads a statement PDF, reads its text on this device, saves the charges and links the confident matches. */
+async function readStatement(docId: string): Promise<void> {
+  const got = await loadDocument(docId);
+  if (got.kind !== "pdf") throw new Error("Only PDF statements can be read automatically. Attach other files to a purchase by hand.");
+  note("Reading the statement on this device…");
+  const parsed = parseStatementText(await pdfToText(got.blob));
+  if (parsed.transactions.length === 0) {
+    status = parsed.warnings.join(" ") + " If this is a scanned PDF it has no text to read.";
+    return;
+  }
+  saveStatement(ledger, docId, parsed);
+  const auto = linkConfidentMatches(ledger, docId, matchStatement(ledger.state, docId, parsed));
+  await ledger.flush();
+  status = `Read ${parsed.transactions.length} line(s); linked ${auto} charge(s) automatically.${parsed.unparsedLines.length ? ` ${parsed.unparsedLines.length} line(s) could not be read.` : ""}`;
+}
+
 function tabs(): string {
-  const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
-  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("summary", "Summary")}</div>`;
+  const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") || (name === "statements" && view.name === "statement") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
+  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Statements")}${tab("summary", "Summary")}</div>`;
 }
 
 function purchaseView(id: string, draft = false): string {
@@ -586,7 +688,7 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 
 function render(): void {
   const onboarding = account && !workspace;
-  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : purchaseView(view.id, view.draft);
+  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + previewPanel() + body;
 }
 
@@ -600,7 +702,7 @@ root.addEventListener("click", async (ev) => {
   if (!t) return;
   if (!t.closest(".menu")) root.querySelector<HTMLDetailsElement>("details.menu")?.removeAttribute("open");
   const d = t.dataset;
-  if (d["go"]) { ev.preventDefault(); go({ name: d["go"] === "summary" ? "summary" : "queue" }); }
+  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
     if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");
@@ -672,6 +774,28 @@ root.addEventListener("click", async (ev) => {
     const result = d["role"] === "receipt" ? attachAsReceipt(ledger, target.id, d["attach"]) : attachAdditional(ledger, target, d["attach"]);
     if (!result.ok) alert(`Could not attach: ${result.reason}`);
     await save();
+  } else if (d["statement"]) {
+    view = { name: "statement", id: d["statement"] };
+    render();
+    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
+  } else if (d["readStatement"]) {
+    await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
+    persist();
+  } else if (d["relink"]) {
+    const n = relinkAllStatements(ledger);
+    status = n ? `Linked ${n} more charge(s).` : "No new confident matches.";
+    await save();
+  } else if (d["link"]) {
+    linkTransaction(ledger, d["link"], d["doc"]!, d["txn"]!, "manual");
+    const txn = ledger.state.documents[d["doc"]!]?.statement?.transactions.find((x) => x.id === d["txn"]);
+    if (txn && learnAlias(ledger, txn.descriptor, ledger.state.purchases[d["link"]]?.vendor)) status = "Linked. Next time this name will match by itself.";
+    await save();
+  } else if (d["unlink"]) {
+    unlinkTransaction(ledger, d["unlink"], d["doc"]!, d["txn"]!);
+    await save();
+  } else if (d["markStatement"]) {
+    ledger.set("document", d["markStatement"], { contentKind: "statement" }, { label: "document.markedStatement" });
+    await save();
   } else if (d["preview"]) {
     await guarded(() => openPreview(d["preview"]!), "Downloading the receipt…");
     window.scrollTo({ top: 0 });
@@ -740,7 +864,10 @@ root.addEventListener("submit", async (ev) => {
     }, "Setting up the school year…");
     return;
   }
-  if (form.id === "deadline-form") {
+  if (form.id === "card-form") {
+    const last4 = form.dataset["last4"]!;
+    ledger.set("paymentMethod", `pm-card-${last4}`, { label: val(form, "label"), kind: "card", last4: [last4], ...(form.dataset["issuer"] ? { issuer: form.dataset["issuer"] } : {}) }, { label: "paymentMethod.created" });
+  } else if (form.id === "deadline-form") {
     ledger.set("setting", "year", { submissionDeadline: val(form, "deadline") }, { label: "setting.deadlineSet" });
   } else if (form.dataset["cap"]) {
     const cap = toCents(val(form, "cap"));
