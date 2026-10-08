@@ -2,7 +2,7 @@ import {
   HlcClock,
   Ledger,
   OneDriveEventStore,
-  copyChildren,
+  copyYearSetup,
   YEAR_FOLDER_RE,
   GraphError,
   ensureFolder,
@@ -100,8 +100,8 @@ export interface OpenWorkspace {
   eventsId: string;
   /** True when this was built from the browser's cache and still needs `revalidate`. */
   fromCache?: boolean;
-  /** Students copied in from an earlier year on this open (unsaved until the ledger is flushed). */
-  carriedChildren: number;
+  /** What was copied in from an earlier year on this open (unsaved until the ledger is flushed). */
+  carried: { children: number; paymentMethods: number };
 }
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
@@ -115,22 +115,24 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const store = new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   await ledger.refresh();
-  const carriedChildren = Object.keys(ledger.state.children).length ? 0 : await carryOverChildren(pointer, ledger, ledgerYears, year.label, clientId);
-  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carriedChildren };
+  const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, ledgerYears, year.label, clientId);
+  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carried };
 }
 
-/** A new year starts with no students: copy them from the most recent earlier year that has any (read-only on that year). */
-async function carryOverChildren(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string): Promise<number> {
+/** A new year starts empty: copy the students, payment methods and tax rate from the most recent earlier year that has students (read-only on that year). */
+async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string): Promise<{ children: number; paymentMethods: number }> {
   const earlier = ledgerYears.filter((y) => y.label < current).sort((a, b) => b.label.localeCompare(a.label));
   for (const y of earlier) {
     const folders = await openLedgerFolders(pointer.driveId, y.folderId);
     if (!folders) continue;
     const past = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
     await past.refresh();
-    const added = copyChildren(ledger, past.state);
-    if (added) return added;
+    if (!Object.keys(past.state.children).length) continue;
+    const copied = copyYearSetup(ledger, past.state);
+    ledger.set("setting", "year", { year: current }, { label: "setting.yearNamed" });
+    return copied;
   }
-  return 0;
+  return { children: 0, paymentMethods: 0 };
 }
 
 /** Builds the workspace from what this browser remembered: no network, so the first paint is instant. Call `revalidate` next. */
@@ -141,7 +143,7 @@ export function openFromCache(pointer: Pointer, clientId: string, rec: Workspace
   store.seedCache(rec.logs);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   ledger.loadKnown(store.cachedEvents());
-  return { pointer: { ...pointer, year: year.label }, years: rec.years, year, driveId: pointer.driveId, ledger, store, eventsId: rec.eventsId, fromCache: true, carriedChildren: 0 };
+  return { pointer: { ...pointer, year: year.label }, years: rec.years, year, driveId: pointer.driveId, ledger, store, eventsId: rec.eventsId, fromCache: true, carried: { children: 0, paymentMethods: 0 } };
 }
 
 /** Brings a cache-built workspace up to date: re-lists the years and downloads only the logs whose ETag changed. Returns whether anything changed. */

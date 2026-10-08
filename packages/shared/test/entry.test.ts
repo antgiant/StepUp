@@ -11,6 +11,7 @@ import {
   attachAsReceipt,
   buildQueue,
   copyChildren,
+  copyYearSetup,
   setPurchaseArchived,
   createPurchase,
   detachAdditional,
@@ -235,5 +236,18 @@ describe("pending persistence", () => {
     const c = new Ledger(new MemoryEventStore(backend, "dev-a"), new HlcClock("dev-a"), "alice");
     await c.refresh();
     expect(c.state.children["kid"]?.name).toBe("Kid");
+  });
+
+  it("sets up a new year from an earlier one without overwriting", () => {
+    const last = new Ledger(new MemoryEventStore(new MemoryBackend(), "old"), new HlcClock("old"), "test");
+    last.set("child", "c9", { name: "Ann" });
+    last.set("paymentMethod", "pm9", { label: "Visa 1234", kind: "card", last4: ["1234"] });
+    last.set("setting", "year", { defaultTaxRate: 0.065, submissionDeadline: "2026-06-30" });
+    const fresh = new Ledger(new MemoryEventStore(new MemoryBackend(), "new"), new HlcClock("new"), "test");
+    expect(copyYearSetup(fresh, last.state)).toEqual({ children: 1, paymentMethods: 1 });
+    expect(fresh.state.paymentMethods["pm9"]).toMatchObject({ label: "Visa 1234", last4: ["1234"] });
+    expect(fresh.state.settings["year"]?.defaultTaxRate).toBe(0.065);
+    expect(fresh.state.settings["year"]?.submissionDeadline).toBeUndefined(); // the deadline is per year
+    expect(copyYearSetup(fresh, last.state)).toEqual({ children: 0, paymentMethods: 0 });
   });
 });

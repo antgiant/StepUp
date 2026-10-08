@@ -10,7 +10,7 @@ attach a file as a receipt or as additional documentation, and the receipt works
 items below with child/amount/category carry-over, estimated then real tax/shipping, per-item readiness reasons).
 Events are stored in this browser's localStorage; Import/Export events moves a ledger as `events.jsonl`.
 
-**Not yet:** join and new-year screens.
+
 
 **Onboarding:** sign in with Microsoft, pick a folder in the built-in navigator (your OneDrive or folders shared with you; you can create a new one), and if it has no school year yet, create one. The choice is remembered in this browser.
 
@@ -27,3 +27,5 @@ Events are stored in this browser's localStorage; Import/Export events moves a l
 **Category fixes:** a missing category, or one that needs a Service Date, is recorded for the year in the ledger (item page -> *Category missing, or needs a Service Date?*). *Advanced -> Share category fixes* downloads them as `category-edits.json`; a maintainer merges that with `npm run reference:promote -- category-edits.json`. Everything under "Testing and Assessments" requires a Service Date by default.
 
 **Offline:** edits are written to this device (IndexedDB outbox) the moment you make them and uploaded as soon as OneDrive is reachable; anything left over from a closed tab or lost connection is recovered and uploaded on the next visit, and the header shows when you are offline. Signing out or disconnecting with unuploaded changes asks first. The site is installable (web manifest) and its own files are cached by a service worker (`public/sw.js`); Microsoft traffic is never cached.
+
+**New year / joining:** the **New year** button creates the next school-year folder (suggesting the year after your newest) and brings over students, payment methods and the tax rate from the latest year; receipts and purchases start fresh. The first screen after sign-in offers *Set up a new workspace* or *Join a shared workspace* (shortcut steps, pasted sharing link, or a folder shared with you).

@@ -70,6 +70,7 @@ let status = "";
 let picker: { path: FolderEntry[]; mine?: FolderEntry; shared: FolderEntry[]; list: FolderEntry[] } = { path: [], shared: [], list: [] };
 let pendingYear: Pointer | undefined;
 let sharing = false;
+let newYearOpen = false;
 
 /** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
 let referenceBase: CategoryReference | undefined;
@@ -297,8 +298,9 @@ function attach(next: OpenWorkspace | undefined): void {
     void savePointer(next.pointer);
     if (!next.fromCache) persist();
     void useOutbox(next);
-    if (next.carriedChildren) {
-      status = `Added ${next.carriedChildren} student(s) from last year.`;
+    if (next.carried.children) {
+      const pms = next.carried.paymentMethods ? ` and ${next.carried.paymentMethods} payment method(s)` : "";
+      status = `Added ${next.carried.children} student(s)${pms} from last year.`;
       void ledger.flush().then(persist).catch((err) => { status = err instanceof Error ? err.message : String(err); render(); });
     }
   }
@@ -310,7 +312,25 @@ function connectionBar(): string {
   if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    <button id="check-files">Check for new files</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
+    <button id="check-files">Check for new files</button> <button id="new-year">New year</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
+}
+
+/** The year after the newest one we know ("2025-2026" -> "2026-2027"); with none, the school year that includes today. */
+function nextYearLabel(labels: string[]): string {
+  const newest = labels.filter((l) => /^\d{4}-\d{4}$/.test(l)).sort().pop();
+  if (newest) {
+    const end = Number(newest.slice(5));
+    return `${end}-${end + 1}`;
+  }
+  const now = new Date();
+  const start = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${start}-${start + 1}`;
+}
+
+function newYearForm(): string {
+  const next = nextYearLabel(workspace!.years.map((y) => y.label));
+  return `<form id="new-year-form" class="row"><input name="label" value="${esc(next)}" pattern="\\d{4}-\\d{4}" required aria-label="School year"><button>Create year</button></form>
+    <p class="note">Creates the folder next to your other years and brings over the students, payment methods and tax rate from your latest year. Receipts and purchases start fresh.</p>`;
 }
 
 function shareForm(): string {
@@ -336,7 +356,7 @@ function header(): string {
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
       </div></details></nav></header>
-    ${connectionBar()}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
+    ${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
 }
 
 function queueView(): string {
@@ -451,12 +471,15 @@ function onboardingView(): string {
   }
   const open = (list: FolderEntry[]) => list.map((f, i) => `<li><button data-pick="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || "<li><small>No folders here.</small></li>";
   if (picker.path.length === 0) {
-    return `<h2>Choose the folder to use</h2><p class="note">Pick the folder that holds (or will hold) your school-year folders.</p>
-      <h3>Your OneDrive</h3><ul class="queue"><li><button data-pick-mine="1">&#128193; My OneDrive</button></li></ul>
-      <h3>A folder someone shared with you</h3>
-      <p class="note">Paste its OneDrive sharing link, or in OneDrive choose "Add shortcut to My files" on the folder and open it from My OneDrive.</p>
-      <form id="pick-link" class="row"><input name="link" placeholder="OneDrive sharing link" required><button>Use this link</button></form>
-      ${picker.shared.length ? `<h3>Shared with you</h3><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("")}</ul>` : ""}`;
+    return `<h2>Welcome</h2><div class="choices">
+      <section class="card"><h3>Set up a new workspace</h3>
+        <p class="note">Pick (or create) a folder in your own OneDrive to hold your school-year folders.</p>
+        <p><button data-pick-mine="1">&#128193; Choose a folder in My OneDrive</button></p></section>
+      <section class="card"><h3>Join a shared workspace</h3>
+        <p class="note">If someone invited you to their folder, open the invitation, then in OneDrive choose <strong>Add shortcut to My files</strong> on it. After that, pick it from My OneDrive, or paste the folder's sharing link here.</p>
+        <form id="pick-link" class="row"><input name="link" placeholder="OneDrive sharing link" required><button>Join with this link</button></form>
+        ${picker.shared.length ? `<h4>Shared with you</h4><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("")}</ul>` : ""}</section>
+    </div>`;
   }
   const here = picker.path[picker.path.length - 1]!;
   return `<h2>Choose the folder to use</h2>
@@ -529,6 +552,7 @@ root.addEventListener("click", async (ev) => {
     }, "Disconnecting…");
   }
   else if (t.id === "share") { sharing = !sharing; render(); }
+  else if (t.id === "new-year") { newYearOpen = !newYearOpen; render(); }
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
       const plan = planIngest(ledger.state, await listLooseFiles(workspace!.driveId, workspace!.year.folderId));
@@ -612,6 +636,17 @@ root.addEventListener("submit", async (ev) => {
       status = `Invited ${email}. If they do not get an email, share the folder with them in OneDrive instead.`;
       sharing = false;
     }, "Inviting them to the folder…");
+    return;
+  }
+  if (form.id === "new-year-form" && workspace) {
+    const label = val(form, "label");
+    const pointer = workspace.pointer;
+    const exists = workspace.years.some((y) => y.label === label && y.kind === "ledger");
+    await guarded(async () => {
+      const target = exists ? pointer : await startYear(pointer, label);
+      attach(await openWorkspace(target, store.clientId, label));
+      newYearOpen = false;
+    }, `Setting up ${label}…`);
     return;
   }
   if (form.id === "start-year") {

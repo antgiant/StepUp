@@ -138,3 +138,21 @@ export function copyChildren(ledger: Ledger, from: LedgerState): number {
   }
   return added;
 }
+
+/**
+ * Sets up a new year from an earlier one: the students (see `copyChildren`), the payment methods (cards and the like
+ * carry over; their statements do not), and the tax-estimate rate. Nothing existing is overwritten.
+ */
+export function copyYearSetup(ledger: Ledger, from: LedgerState): { children: number; paymentMethods: number } {
+  const children = copyChildren(ledger, from);
+  let paymentMethods = 0;
+  for (const pm of Object.values(from.paymentMethods)) {
+    if (ledger.state.paymentMethods[pm.id]) continue;
+    const { id: _id, ...rest } = pm;
+    ledger.set("paymentMethod", pm.id, clean(rest as Fields), { label: "paymentMethod.carriedOver" });
+    paymentMethods++;
+  }
+  const rate = from.settings["year"]?.defaultTaxRate;
+  if (rate !== undefined && ledger.state.settings["year"]?.defaultTaxRate === undefined) ledger.set("setting", "year", { defaultTaxRate: rate }, { label: "setting.carriedOver" });
+  return { children, paymentMethods };
+}

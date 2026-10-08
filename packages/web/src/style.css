@@ -87,3 +87,9 @@ body[aria-busy="true"] #app { cursor: progress; }
 .preview > p { padding: 12px 14px; margin: 0; }
 input[type="checkbox"] { width: auto; }
 label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--fg); }
+
+/* Welcome / join */
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 18px 14px; box-shadow: var(--shadow); }
+.card h3 { margin-top: 14px; }
+h4 { margin: 14px 0 6px; font-size: .9rem; }
