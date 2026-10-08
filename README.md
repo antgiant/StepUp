@@ -1,13 +1,25 @@
 # Step Up Helper
 
-This is a system for tracking and managing the documentation and reimbursement requests for the Florida [StepUp For Students](https://apply.stepupforstudents.org/) program. It is available at https://stepup.wooleys.us however all data lives in your personal OneDrive account.
+This is a system for tracking and managing the documentation and reimbursement requests for the Florida [StepUp For Students](https://apply.stepupforstudents.org/) program. It is available at https://stepup.wooleys.us 
 
-Semi-automated Playwright helper for filing **FES-UA reimbursement requests** on [StepUp For Students](https://apply.stepupforstudents.org/), driven by your "FES UA Tracking Spreadsheet" on OneDrive. It:
+## Why
 
-- Reads unfiled purchase rows (`Status = "Unfiled (Ready to Submit)"`) directly from your OneDrive Excel workbook via the **Microsoft Graph API** — not a downloaded copy — so it's always current and safe to use even while other collaborators have the sheet open.
+This is a system built to solve the problem of keeping personal records for the reimbursement process of StepUp for Students. It is designed to make it easy to pull together all of the information required to submit for reimbursement and to streamline the submission process.
+
+## How it works
+
+When you first visit this site asks you to log in to your personal Microsoft OneDrive account. It then saves all of your data to a folder structure in OneDrive. This site never sees your data all of your data only ever goes from your computer to your OneDrive.
+
+## Excessivly Technical Details
+
+(Yes this part is AI Written)
+
+In addition to the web interface there is also a semi-automated Playwright helper for filing **reimbursement requests** on [StepUp For Students](https://apply.stepupforstudents.org/), driven by the data on OneDrive. It:
+
+- Reads unfiled purchase rows (`Status = "Unfiled (Ready to Submit)"`) directly from your OneDrive data via the **Microsoft Graph API** — not a downloaded copy — so it's always current and safe to use even while other collaborators have the sheet open.
 - Groups rows that share the same child and main receipt into one StepUp submission each (matching how one uploaded receipt can cover several line items).
 - Opens a real browser to StepUp and lets **you** log in manually every run (StepUp's own session handling is flaky — even the back button can log you out — so this never tries to persist or replay that login).
-- Fills what it reliably can (Category, Benefit Message, Item/Service URL, and — since you said Excel is the source of truth — Date/Cost/Tax/Vendor/Invoice#, overwriting StepUp's OCR guesses with a warning when they differ), and always pauses for **you** to review in the browser and click Continue/Submit yourself. It never navigates or submits on its own.
+- Fills what it reliably can (Category, Benefit Message, Item/Service URL, and Date/Cost/Tax/Vendor/Invoice#, overwriting StepUp's OCR guesses with a warning when they differ), and always pauses for **you** to review in the browser and click Continue/Submit yourself. It never navigates or submits on its own.
 - After you confirm you actually submitted, captures the Reimbursement # from the confirmation screen and writes Status/Submitted-date/Reimbursement ID/Line Number back to just those rows in the spreadsheet.
 - Passively keeps Status current afterward: StepUp's own reimbursements-list API loads automatically during normal navigation, and whenever that happens (throttled to once per 2 hours) it's used to sync each already-submitted row's Status as it moves through StepUp's review process (Submitted → Approved/Denied → Paid), matched per line item, not just per submission.
 - Also keeps `Table5` (Categories) current, at most once per 24h: StepUp's Category/Type/Detail picker APIs can't be called from scratch by us (they need an auth token only the page's own JS attaches), so instead — the first time you (or our own Category-filling step) naturally trigger one of those requests that day — we intercept it and piggyback an *additional* out-of-band request asking for every ID we know about so far, reusing that request's real auth, chunked and lightly throttled between chunks. The original request is always left completely untouched, so the page's own UI never sees anything different. Results accumulate in `.cache/category-tree-cache.json` across days, so full tree coverage typically only takes a couple of real Category clicks to bootstrap, not months of incidental exposure.

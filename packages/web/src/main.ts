@@ -1,6 +1,9 @@
 import {
   HlcClock,
   Ledger,
+  listLooseFiles,
+  planIngest,
+  registerLooseFiles,
   addItem,
   attachAdditional,
   attachAsReceipt,
@@ -17,10 +20,13 @@ import {
   startPurchaseFromDocument,
   suggestNextItem,
   toCents,
+  type EventStore,
   type MapTarget,
   type RulesContext,
 } from "@step-up/shared/web";
+import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
+import { loadPointer, openWorkspace, pointerFromLink, savePointer, type OpenWorkspace } from "./workspace.js";
 import "./style.css";
 
 const CLIENT_KEY = "stepup.clientId";
@@ -37,7 +43,11 @@ function clientId(): string {
 }
 
 const store = new LocalEventStore(clientId());
-const ledger = new Ledger(store, new HlcClock(store.clientId), "web");
+let ledger = new Ledger(store, new HlcClock(store.clientId), "web");
+let account: Awaited<ReturnType<typeof initAuth>> = null;
+let workspace: OpenWorkspace | undefined;
+let activeStore: EventStore = store;
+let status = "";
 
 // Category rules are shared reference data (plan §3.8) and are not loaded yet: every category counts as known.
 const ctx = (): RulesContext => ({
@@ -52,9 +62,40 @@ const root = document.getElementById("app")!;
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const val = (form: HTMLFormElement, name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value.trim() ?? "";
 
-async function save(): Promise<void> {
-  await ledger.flush();
+/** Runs an action that may hit the network; shows the error instead of leaving the page half-updated. */
+async function guarded(action: () => Promise<void>): Promise<void> {
+  status = "";
+  try {
+    await action();
+  } catch (err) {
+    status = err instanceof Error ? err.message : String(err);
+  }
   render();
+}
+
+async function save(): Promise<void> {
+  await guarded(() => ledger.flush());
+}
+
+async function attach(next: OpenWorkspace | undefined): Promise<void> {
+  workspace = next;
+  if (next) {
+    ledger = next.ledger;
+    activeStore = ledger.store;
+    savePointer(next.pointer);
+  }
+}
+
+function connectionBar(): string {
+  if (!account) return `<p class="note">Local mode: data stays in this browser. <button id="sign-in">Sign in with Microsoft</button></p>`;
+  const who = esc(account.username);
+  if (!workspace) {
+    return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>
+      <form id="connect" class="row"><input name="link" placeholder="Paste the OneDrive sharing link to the StepUp folder" required><button>Connect</button></form>`;
+  }
+  const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
+  return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
+    <button id="check-files">Check for new files</button> <button id="disconnect">Disconnect</button> <button id="sign-out">Sign out</button></p>`;
 }
 
 function header(): string {
@@ -62,7 +103,7 @@ function header(): string {
   return `<header><h1><a href="#" data-go="queue">Step Up Helper</a></h1>
     <nav><label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
     <button id="export">Export events</button>${unsaved ? `<span class="warn">${unsaved} unsaved</span>` : ""}</nav></header>
-    <p class="note">Local mode: data is kept in this browser only. OneDrive sign-in comes next.</p>`;
+    ${connectionBar()}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
 }
 
 function queueView(): string {
@@ -146,9 +187,20 @@ root.addEventListener("click", async (ev) => {
   if (!t) return;
   const d = t.dataset;
   if (d["go"]) { ev.preventDefault(); go({ name: "queue" }); }
+  else if (t.id === "sign-in") await signIn();
+  else if (t.id === "sign-out") { savePointer(undefined); await signOut(); }
+  else if (t.id === "disconnect") { savePointer(undefined); workspace = undefined; activeStore = store; ledger = new Ledger(store, new HlcClock(store.clientId), "web"); await ledger.refresh(); render(); }
+  else if (t.id === "check-files" && workspace) {
+    await guarded(async () => {
+      const plan = planIngest(ledger.state, await listLooseFiles(workspace!.driveId, workspace!.year.folderId));
+      registerLooseFiles(ledger, plan.toRegister);
+      await ledger.flush();
+      status = plan.toRegister.length ? `Registered ${plan.toRegister.length} new file(s).` : "No new files.";
+    });
+  }
   else if (t.id === "export") {
     await ledger.flush();
-    const url = URL.createObjectURL(new Blob([exportJsonl(await store.readAll())], { type: "text/plain" }));
+    const url = URL.createObjectURL(new Blob([exportJsonl(await activeStore.readAll())], { type: "text/plain" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: "events.jsonl" });
     a.click();
     URL.revokeObjectURL(url);
@@ -180,6 +232,10 @@ root.addEventListener("click", async (ev) => {
 root.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const form = ev.target as HTMLFormElement;
+  if (form.id === "connect") {
+    await guarded(async () => attach(await openWorkspace(await pointerFromLink(val(form, "link")), store.clientId)));
+    return;
+  }
   if (form.id === "add-child") {
     ledger.set("child", newId("child"), { name: val(form, "name"), ...(val(form, "scholarship") ? { scholarship: val(form, "scholarship") } : {}) }, { label: "child.created" });
   } else if (form.id === "purchase-form") {
@@ -207,12 +263,22 @@ root.addEventListener("submit", async (ev) => {
 
 root.addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;
+  if (input.id === "year-pick" && workspace) {
+    const pointer = workspace.pointer;
+    await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)));
+    return;
+  }
   if (input.id !== "import" || !input.files?.[0]) return;
   const events = parseJsonl(await input.files[0].text());
-  await store.appendOwn(events);
+  await activeStore.appendOwn(events);
   await ledger.refresh();
   render();
 });
 
 await ledger.refresh();
 render();
+await guarded(async () => {
+  account = await initAuth();
+  const pointer = loadPointer();
+  if (account && pointer) await attach(await openWorkspace(pointer, store.clientId));
+});

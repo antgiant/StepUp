@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@azure/msal-browser": "^5.25.0",
     "@step-up/shared": "*"
   },
   "devDependencies": {

@@ -19,7 +19,7 @@ export class Ledger {
   private cached?: LedgerState;
 
   constructor(
-    private readonly store: EventStore,
+    readonly store: EventStore,
     readonly clock: HlcClock,
     private readonly actor?: string
   ) {}
