@@ -133,3 +133,17 @@ pre.mail { white-space: pre-wrap; margin: 0; padding: 12px 14px; max-height: 70v
 .save-state { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; font-size: .9rem; color: var(--muted); grid-column: 1 / -1; }
 .save-state.saved .tick, .save-state.local .tick { color: var(--ok); font-weight: 700; }
 .save-state.error { color: var(--warn); }
+
+.gate { min-height: 80vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.gate-card { max-width: 560px; width: 100%; text-align: center; padding: 24px; }
+.gate-card .logo { width: 56px; height: 56px; }
+.gate-card h1 { margin: 8px 0 4px; }
+.gate-choices { display: flex; gap: 12px; margin-top: 18px; }
+.gate-choices button { flex: 1; }
+button.big { padding: 14px 18px; font-size: 1.05rem; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+button.big small { font-size: .8rem; opacity: .85; color: inherit; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button.secondary { background: var(--surface); border-color: var(--line); color: var(--fg); }
+form > button.secondary:last-child { background: var(--surface); border-color: var(--line); color: var(--fg); }
+.pick-bottom { margin-top: 16px; } .pick-bottom button { width: 100%; }
+@media (max-width: 480px) { .gate-choices { flex-direction: column; } }

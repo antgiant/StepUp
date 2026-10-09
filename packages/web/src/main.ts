@@ -1621,9 +1621,10 @@ function onboardingView(): string {
   const here = picker.path[picker.path.length - 1]!;
   return `<h2>Choose the folder to use</h2>
     <p>${picker.path.map((f) => esc(f.name)).join(" / ")}</p>
-    <p class="row"><button id="pick-up">&larr; Up</button><button id="pick-use"><strong>Use this folder</strong></button></p>
+    <p class="row"><button id="pick-up">&larr; Up</button></p>
+    <form id="new-folder" class="row"><input name="name" placeholder="New folder name" required><button class="secondary">Create folder in ${esc(here.name)}</button></form>
     <ul class="queue">${open(picker.list)}</ul>
-    <form id="new-folder" class="row"><input name="name" placeholder="New folder name" required><button>Create folder in ${esc(here.name)}</button></form>`;
+    <p class="pick-bottom"><button id="pick-use" class="primary big">Use this folder</button></p>`;
 }
 
 async function pickerTop(): Promise<void> {
@@ -1647,7 +1648,32 @@ async function useFolder(folder: FolderEntry): Promise<void> {
   }
 }
 
+const MODE_KEY = "stepup.mode";
+let authReady = false;
+let localChosen = (() => { try { return localStorage.getItem(MODE_KEY) === "local"; } catch { return false; } })();
+const setLocalChosen = (on: boolean): void => {
+  localChosen = on;
+  try { if (on) localStorage.setItem(MODE_KEY, "local"); else localStorage.removeItem(MODE_KEY); } catch { /* storage unavailable: the choice lasts for this page only */ }
+};
+
+/** Shown instead of the whole app until the person says where their data lives. */
+function chooserView(): string {
+  return `<main class="gate"><section class="card gate-card">
+    <img src="./icon.svg" alt="" class="logo">
+    <h1>Step Up Helper</h1>
+    <p class="note">Where should your data be stored?</p>
+    <div class="gate-choices">
+      <button id="sign-in" class="primary big">Sign in with Microsoft<small>Stored in your OneDrive</small></button>
+      <button id="use-local" class="big">Local only<small>Stays in this browser</small></button>
+    </div>
+  </section></main>`;
+}
+
 function render(): void {
+  if (!account && !localChosen) {
+    root.innerHTML = authReady ? chooserView() : "";
+    return;
+  }
   const onboarding = account && !workspace;
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body;
@@ -1673,11 +1699,12 @@ root.addEventListener("click", async (ev) => {
   }
   else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))), "Opening the folder…");
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
+  else if (t.id === "use-local") { setLocalChosen(true); render(); }
   else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
   else if (t.id === "sign-out") {
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you sign out. Sign out anyway?`)) return;
-    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy("Signing out of Microsoft…"); await signOut();
+    setLocalChosen(false); forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy("Signing out of Microsoft…"); await signOut();
   }
   else if (t.id === "disconnect") {
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you disconnect. Disconnect anyway?`)) return;
@@ -2076,6 +2103,8 @@ render();
 await guarded(async () => {
   note("Completing Microsoft sign-in…");
   account = await initAuth();
+  authReady = true;
+  if (!account) render();
   if (account) note("Finding your saved folder…");
   const pointer = account ? await loadPointer() : undefined;
   if (account && pointer) {
