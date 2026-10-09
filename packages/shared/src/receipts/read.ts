@@ -80,8 +80,23 @@ function readVendor(lines: string[], text: string): string | undefined {
     if (NOT_A_VENDOR.test(m[1]!)) continue;
     return m[1]![0]!.toUpperCase() + m[1]!.slice(1).toLowerCase();
   }
-  const candidate = lines.slice(0, 6).find((l) => /^[A-Z][A-Za-z]{2}/.test(l) && l.length <= 40 && !/receipt|invoice|order|page|thank|date|total|tax|details|transaction|statement|summary|confirmation|your |\d{3}|^[^A-Za-z]/i.test(l));
+  const candidate = lines.slice(0, 6).find((l) => /^[A-Z][A-Za-z]{2}/.test(l) && l.length <= 40 && !/receipt|invoice|order|page|thank|date|total|tax|details|transaction|statement|summary|confirmation|account|billed|your |\d{3}|^[^A-Za-z]/i.test(l));
   return candidate && text ? candidate : undefined;
+}
+
+/**
+ * Some receipts (Apple's, for one) print "ORDER ID" as a column heading with the value on the next line, often beside
+ * other headings ("APPLE ACCOUNT  DATE  ORDER ID"). Look for an id-shaped word (letters and digits mixed, or a long
+ * number) in the line or two under such a heading. Addresses, dates and short numbers do not look like one.
+ */
+function idBelowLabel(lines: string[]): string | undefined {
+  const at = lines.findIndex((l) => /\b(order|invoice|confirmation)\s*(id|no\.?|number|#)(?![\w:#-])/i.test(l) && !/[:#]\s*[A-Za-z0-9]/.test(l));
+  if (at < 0) return undefined;
+  for (const line of lines.slice(at + 1, at + 3)) {
+    const word = line.split(/\s+/).find((w) => (/^[A-Za-z0-9][A-Za-z0-9-]{5,}$/.test(w) && /\d/.test(w) && /[A-Za-z]/.test(w)) || /^\d{7,}$/.test(w));
+    if (word) return word;
+  }
+  return undefined;
 }
 
 /** Reads what a receipt's text says. Everything it returns is a suggestion for a person to confirm. Pure: the text comes from OCR or a PDF. */
@@ -98,7 +113,7 @@ export function readReceiptText(text: string): ReceiptReading {
   // "Order #112-...", "Invoice #A-10045": the id must contain a digit ("Order Placed" is not an id). An order id wins over
   // the other labels (receipt, confirmation...) because that is the number the seller and StepUp know the purchase by.
   const idAfter = (label: string) => [...text.matchAll(new RegExp(`(?:${label})\\s*(?:#|no\\.?|number|id)?\\s*[:#]?\\s*([A-Za-z0-9][A-Za-z0-9-]{3,})`, "gi"))].map((m) => m[1]!).find((id) => /\d/.test(id));
-  const invoice = idAfter("order") ?? idAfter("invoice|receipt|confirmation");
+  const invoice = idAfter("order") ?? idAfter("invoice|receipt|confirmation") ?? idBelowLabel(lines);
   if (invoice) out.invoiceNo = invoice;
 
   const total = readTotal(lines);

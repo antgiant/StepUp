@@ -1109,6 +1109,69 @@ function tabs(): string {
   return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Receipts")}${tab("summary", "Summary")}</div>`;
 }
 
+/** The "Saving… / Saved" mark next to the purchase details. Updated in place so typing and focus are never disturbed. */
+const saveIndicator = () => `<span class="save-state" id="save-state" role="status" aria-live="polite"></span>`;
+let saveStateTimer: ReturnType<typeof setTimeout> | undefined;
+function showSaveState(state: "saving" | "saved" | "local" | "error", detail = ""): void {
+  const el = document.getElementById("save-state");
+  if (!el) return;
+  clearTimeout(saveStateTimer);
+  el.className = `save-state ${state}`;
+  el.innerHTML =
+    state === "saving" ? `<span class="spinner" aria-hidden="true"></span> Saving…`
+    : state === "saved" ? `<span class="tick" aria-hidden="true">&#10003;</span> Saved`
+    : state === "local" ? `<span class="tick" aria-hidden="true">&#10003;</span> Saved on this device; it will sync when OneDrive is reachable`
+    : `<span aria-hidden="true">&#9888;</span> ${esc(detail)}`;
+  if (state === "saved") saveStateTimer = setTimeout(() => { el.textContent = ""; el.className = "save-state"; }, 2500);
+}
+
+let autosaveChain: Promise<void> = Promise.resolve();
+/**
+ * Saves the purchase's details when a field is left. The change is written to the ledger first, which keeps it on this
+ * device at once (so it survives a reload or a lost connection), and is then sent to OneDrive. Runs one at a time.
+ */
+function autosavePurchase(form: HTMLFormElement, focusNext?: string): Promise<void> {
+  autosaveChain = autosaveChain.then(() => autosavePurchaseNow(form, focusNext)).catch(() => undefined);
+  return autosaveChain;
+}
+
+async function autosavePurchaseNow(form: HTMLFormElement, focusNext?: string): Promise<void> {
+  const id = form.dataset["id"]!;
+  const existing = ledger.state.purchases[id];
+  const draft = !existing;
+  const fields: Record<string, string | number> = {};
+  const saved: Record<string, string | number | undefined> = { name: existing?.name, vendor: existing?.vendor, date: existing?.date, invoiceNo: existing?.invoiceNo, orderTotalCents: existing?.orderTotalCents, taxShippingTotalCents: existing?.taxShippingTotalCents };
+  for (const k of ["name", "vendor", "date", "invoiceNo"]) {
+    const v = val(form, k);
+    if (v !== (saved[k] ?? "")) fields[k] = v; // an emptied field is saved as empty
+  }
+  const total = toCents(val(form, "orderTotal"));
+  const tax = toCents(val(form, "taxTotal"));
+  if (total !== undefined && total !== saved["orderTotalCents"]) fields["orderTotalCents"] = total;
+  if (tax !== undefined && tax !== saved["taxShippingTotalCents"]) fields["taxShippingTotalCents"] = tax;
+  if (Object.keys(fields).length === 0) return;
+  if (draft && Object.values(fields).every((v) => v === "")) return;
+  showSaveState("saving");
+  ledger.set("purchase", id, fields, { label: draft ? "purchase.created" : "purchase.edited" });
+  if (fields["taxShippingTotalCents"] !== undefined) reallocateTax(ledger, id);
+  if (Object.values(ledger.state.documents).some((d) => d.statement)) relinkAllStatements(ledger);
+  try {
+    await ledger.flush();
+    persist();
+    scheduleMirror();
+    showSaveState("saved");
+  } catch (err) {
+    // The edit is already kept on this device; it is sent again with the next save or refresh.
+    showSaveState(navigator.onLine ? "error" : "local", `Could not reach OneDrive (${err instanceof Error ? err.message : err}). Your change is kept on this device.`);
+  }
+  if (draft) {
+    // The purchase now exists, so the full screen (items, documentation) replaces the blank one. Keep the cursor where it was going.
+    view = { name: "purchase", id };
+    render();
+    if (focusNext) document.getElementById("app")?.querySelector<HTMLElement>(`#purchase-form [name="${focusNext}"]`)?.focus();
+  }
+}
+
 function purchaseView(id: string, draft = false): string {
   const state = ledger.state;
   const p = state.purchases[id] ?? (draft ? { id } : undefined);
@@ -1137,7 +1200,7 @@ function purchaseView(id: string, draft = false): string {
   if (draft) {
     return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>New purchase</h2>
-  <p class="note">Nothing is saved until you enter at least one detail.</p>
+  <p class="note">This purchase is saved as soon as you fill in a detail and move to the next field.</p>
   <form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
     <label>Name<input name="name" placeholder="e.g. Math curriculum"></label>
     <label>Vendor${storeBox("vendor", undefined)}</label>
@@ -1145,8 +1208,8 @@ function purchaseView(id: string, draft = false): string {
     <label>Invoice #<input name="invoiceNo"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
-    <button>Save receipt details</button></form>
-  ${documentation(id, undefined, true)}`;
+    ${saveIndicator()}</form>
+  ${documentation(id, undefined, "top", true)}${documentation(id, undefined, "bottom", true)}`;
   }
   const categories = reference()
     ? reference()!.choices.map((c) => c.label)
@@ -1168,8 +1231,8 @@ function purchaseView(id: string, draft = false): string {
     <label>Invoice #<input name="invoiceNo" value="${esc(p.invoiceNo)}"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal" value="${money(p.orderTotalCents)}"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal" value="${money(p.taxShippingTotalCents)}"></label>
-    <button>Save receipt details</button></form>
-  ${documentation(id, p.receiptDocumentId)}
+    ${saveIndicator()}</form>
+  ${documentation(id, p.receiptDocumentId, "top")}
   <h3>Items${remaining !== undefined ? ` <small>(${formatCents(remaining)} left to itemize)</small>` : ""}</h3>
   ${items.length ? `<table><thead><tr><th>Child</th><th>Description</th><th>Amount</th><th>Tax/ship</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>` : "<p>No items yet.</p>"}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
@@ -1188,6 +1251,7 @@ function purchaseView(id: string, draft = false): string {
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
       <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
     <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}
+  ${documentation(id, p.receiptDocumentId, "bottom")}
   <hr><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p>`;
 }
 
@@ -1196,7 +1260,7 @@ function purchaseView(id: string, draft = false): string {
  * paid for it; additional documentation is anything else that backs the purchase up (a card statement, an order email,
  * a letter). Each part has its own ways to add a file.
  */
-function documentation(purchaseId: string, receiptId: string | undefined, draft = false): string {
+function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false): string {
   const state = ledger.state;
   const online = Boolean(workspace);
   const nameOf = (id: string | undefined) => esc(state.documents[id ?? ""]?.filename ?? "file");
@@ -1228,7 +1292,10 @@ function documentation(purchaseId: string, receiptId: string | undefined, draft 
     <p class="note">Anything else that backs this purchase up and is not the receipt itself: a card statement showing the payment, an email, a letter. It is optional, and you can add several.</p>
     ${extras.length ? `<ul class="queue">${extras.map((a) => `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${state.documents[a.documentId ?? ""]?.driveItemId && online ? `<button data-preview="${esc(a.documentId)}">Preview</button>` : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`).join("")}</ul><p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>` : `<p><small>None yet.</small></p>`}
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
-  return `<section><h3>Documentation</h3>${receiptPart}${extraPart}
+  // Until there is a receipt, adding one comes first (above the items). After that, its details stay at the top of the
+  // screen and the controls to replace or move it sit down here with the rest of the documentation.
+  if (part === "top") return receiptId ? "" : `<section><h3>Receipt</h3>${receiptPart.replace("<h4>Receipt</h4>", "")}</section>`;
+  return `<section><h3>Documentation</h3>${receiptId ? receiptPart : ""}${extraPart}
     ${online ? `<h4>Not for a purchase yet</h4><p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits in Unattached files on the list page until you attach it.</small></p>` : ""}</section>`;
 }
 
@@ -1349,6 +1416,18 @@ root.addEventListener("input", (ev) => {
     else if (t.name === "serviceProvider") t.dataset["picked"] = "";
     filterCombo(t);
   }
+});
+// Leaving a field of the purchase details saves them; a date picked on a phone may never blur, so a change does too.
+root.addEventListener("focusout", (ev) => {
+  const t = ev.target as HTMLInputElement;
+  const form = t.form;
+  if (form?.id !== "purchase-form" || t.tagName !== "INPUT") return;
+  const next = (ev as FocusEvent).relatedTarget as HTMLInputElement | null;
+  void autosavePurchase(form, next && next.form === form ? next.name : undefined);
+});
+root.addEventListener("change", (ev) => {
+  const t = ev.target as HTMLInputElement;
+  if (t.form?.id === "purchase-form" && t.type === "date") void autosavePurchase(t.form);
 });
 root.addEventListener("focusin", (ev) => {
   const t = ev.target as HTMLInputElement;
@@ -1728,6 +1807,10 @@ root.addEventListener("click", async (ev) => {
 root.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const form = ev.target as HTMLFormElement;
+  if (form.id === "purchase-form") {
+    await autosavePurchase(form); // Enter in a field saves like leaving it does
+    return;
+  }
   if (form.id === "pick-link") {
     await guarded(async () => useFolder(await folderFromLink(val(form, "link"))), "Opening the shared link…");
     return;
@@ -1813,23 +1896,6 @@ root.addEventListener("submit", async (ev) => {
   } else if (form.id === "add-child") {
     addingChild = false;
     ledger.set("child", newId("child"), { name: val(form, "name"), ...(val(form, "scholarship") ? { scholarship: val(form, "scholarship") } : {}) }, { label: "child.created" });
-  } else if (form.id === "purchase-form") {
-    const fields: Record<string, string | number> = {};
-    for (const k of ["name", "vendor", "date", "invoiceNo"]) if (val(form, k)) fields[k] = val(form, k);
-    if (form.dataset["draft"] !== "1" && !val(form, "name") && ledger.state.purchases[form.dataset["id"]!]?.name) fields["name"] = "";
-    const total = toCents(val(form, "orderTotal"));
-    const tax = toCents(val(form, "taxTotal"));
-    if (total !== undefined) fields["orderTotalCents"] = total;
-    if (tax !== undefined) fields["taxShippingTotalCents"] = tax;
-    const draft = form.dataset["draft"] === "1";
-    if (draft && Object.keys(fields).length === 0) {
-      status = "Enter at least one detail to save this purchase.";
-      render();
-      return;
-    }
-    ledger.set("purchase", form.dataset["id"]!, fields, { label: draft ? "purchase.created" : "purchase.edited" });
-    if (draft && view.name === "purchase") view = { name: "purchase", id: view.id };
-    if (tax !== undefined) reallocateTax(ledger, form.dataset["id"]!);
   } else if (form.id === "item-form") {
     addItem(ledger, form.dataset["id"]!, {
       childId: val(form, "childId"),

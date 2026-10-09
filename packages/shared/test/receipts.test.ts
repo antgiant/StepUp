@@ -84,6 +84,14 @@ describe("readReceiptText", () => {
     expect(readReceiptText("Acme Shop\nReceipt #R-99812\nTotal $9.00").invoiceNo).toBe("R-99812");
   });
 
+  it("finds an order id printed under its heading, as Apple's emails and receipts do", () => {
+    const email = "Patty Wooley <patty.wooley@gmail.com>\nYour purchases from Apple.\nApple <no_reply@email.apple.com> Mon, Jul 27 at 3:04PM\nAPPLE ACCOUNT DATE ORDER ID\npatty.wooley@gmail.com Jul 27, 2026 MQKXQ1GX5H\nApp Store\nProcreate $12.99\nTOTAL $12.99";
+    expect(readReceiptText(email)).toMatchObject({ vendor: "Apple", date: "2026-07-27", invoiceNo: "MQKXQ1GX5H", totalCents: 1299 });
+    const receipt = "Receipt\nAPPLE ACCOUNT\nantgiant@example.us BILLED TO\nDATE Travis Wooley\nJan 7, 2026 2311 Jeslan Ct\nORDER ID DOCUMENT NO. USA\nMVWT1MLWMY 744074245753\nApp Store\nSplitly $2.99\nTOTAL $2.99";
+    expect(readReceiptText(receipt)).toMatchObject({ invoiceNo: "MVWT1MLWMY", date: "2026-01-07", totalCents: 299 });
+    expect(readReceiptText(receipt).vendor).not.toBe("APPLE ACCOUNT");
+  });
+
   it("returns only what it found", () => {
     expect(readReceiptText("hello world")).toEqual({});
   });

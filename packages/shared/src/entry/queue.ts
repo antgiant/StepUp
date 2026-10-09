@@ -47,7 +47,7 @@ export function buildQueue(state: LedgerState, ctx: RulesContext): QueueEntry[] 
   const withItems = new Set(Object.values(state.items).filter((i) => !i.archived).map((i) => i.purchaseId));
   for (const p of Object.values(state.purchases).sort((a, b) => a.id.localeCompare(b.id))) {
     if (!p.archived && !withItems.has(p.id)) {
-      entries.push({ kind: "purchase-needs-items", id: p.id, purchaseId: p.id, title: p.vendor ?? state.documents[p.receiptDocumentId ?? ""]?.filename ?? p.id, reasons: ["Add the items on this receipt"] });
+      entries.push({ kind: "purchase-needs-items", id: p.id, purchaseId: p.id, title: p.vendor || (state.documents[p.receiptDocumentId ?? ""]?.filename ?? p.id), reasons: ["Add the items on this receipt"] });
     }
   }
 

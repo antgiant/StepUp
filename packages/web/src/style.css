@@ -130,3 +130,6 @@ pre.mail { white-space: pre-wrap; margin: 0; padding: 12px 14px; max-height: 70v
 .combo-list li:hover, .combo-list li.active { background: var(--accent-soft); }
 .combo-list li.combo-empty { cursor: default; color: var(--muted); }
 .combo-list li[hidden] { display: none; }
+.save-state { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; font-size: .9rem; color: var(--muted); grid-column: 1 / -1; }
+.save-state.saved .tick, .save-state.local .tick { color: var(--ok); font-weight: 700; }
+.save-state.error { color: var(--warn); }
