@@ -35,6 +35,8 @@ export interface PaymentMethod {
 /** One order/receipt. Exactly one receipt document; everything else is additional (see AdditionalDoc). */
 export interface Purchase {
   id: string;
+  /** A friendly, editable name ("Math curriculum"); when absent the vendor and date stand in for it. */
+  name?: string;
   vendor?: string;
   date?: string;
   invoiceNo?: string;

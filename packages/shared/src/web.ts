@@ -8,6 +8,7 @@ export * from "./events/upcast.js";
 export * from "./events/changes.js";
 export * from "./events/store.js";
 export * from "./events/ledger.js";
+export { scholarshipNamesMatch } from "./rules.js";
 export * from "./rules/readiness.js";
 export * from "./rules/budget.js";
 export * from "./util/hash.js";

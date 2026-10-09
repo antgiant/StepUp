@@ -121,7 +121,7 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
 }
 
 /** A new year starts empty: copy the students, payment methods and tax rate from the most recent earlier year that has students (read-only on that year). */
-async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string): Promise<{ children: number; paymentMethods: number }> {
+async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string, force = false): Promise<{ children: number; paymentMethods: number }> {
   const earlier = ledgerYears.filter((y) => y.label < current).sort((a, b) => b.label.localeCompare(a.label));
   for (const y of earlier) {
     const folders = await openLedgerFolders(pointer.driveId, y.folderId);
@@ -130,11 +130,23 @@ async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo
     await past.refresh();
     if (!Object.keys(past.state.children).length) continue;
     const copied = copyYearSetup(ledger, past.state);
-    ledger.set("setting", "year", { year: current }, { label: "setting.yearNamed" });
+    if (!force || ledger.state.settings["year"]?.year === undefined) ledger.set("setting", "year", { year: current }, { label: "setting.yearNamed" });
     return copied;
   }
   return { children: 0, paymentMethods: 0 };
 }
+
+/**
+ * Copies the students (and payment methods, tax rate) from the most recent earlier year into the open one. Only adds
+ * what is missing, so it is safe to run again. The caller flushes the ledger.
+ */
+export async function copyFromPreviousYear(ws: OpenWorkspace, clientId: string): Promise<{ children: number; paymentMethods: number }> {
+  const ledgerYears = ws.years.filter((y) => y.kind === "ledger");
+  return carryOver(ws.pointer, ws.ledger, ledgerYears, ws.year.label, clientId, true);
+}
+
+/** True when an earlier school year exists to copy from. */
+export const hasEarlierYear = (ws: OpenWorkspace): boolean => ws.years.some((y) => y.kind === "ledger" && y.label < ws.year.label);
 
 /** Builds the workspace from what this browser remembered: no network, so the first paint is instant. Call `revalidate` next. */
 export function openFromCache(pointer: Pointer, clientId: string, rec: WorkspaceCache): OpenWorkspace | undefined {
@@ -153,6 +165,9 @@ export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
   ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
   await ws.ledger.refresh();
   ws.fromCache = false;
+  // Opening from the cache skips the carry-over done on a fresh open, so a new year would stay without its students.
+  ws.carried = { children: 0, paymentMethods: 0 };
+  if (!Object.keys(ws.ledger.state.children).length) ws.carried = await copyFromPreviousYear(ws, ws.ledger.store.clientId);
   return JSON.stringify([ws.ledger.state, ws.years]) !== before;
 }
 

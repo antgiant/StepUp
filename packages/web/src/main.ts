@@ -1,5 +1,6 @@
 import {
   HlcClock,
+  scholarshipNamesMatch,
   Ledger,
   createSubfolder,
   folderFromLink,
@@ -79,7 +80,7 @@ import {
 import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
-import { loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { loadBaseline as loadReference } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -217,7 +218,8 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
 }
 
 /** A receipt being photographed page by page. Nothing leaves this device until it is saved. */
-let scan: { name: string; pages: ScanPage[] } | undefined;
+/** `purchaseId`: the purchase the scan is for (the PDF becomes its receipt, or extra documentation if it has one). */
+let scan: { name: string; pages: ScanPage[]; purchaseId?: string } | undefined;
 
 function discardScan(): void {
   for (const p of scan?.pages ?? []) URL.revokeObjectURL(p.url);
@@ -325,7 +327,7 @@ function previewPanel(): string {
  * Uploads a receipt file, or - if there is no connection - keeps it on this device and uploads it when there is one.
  * Returns what happened so the caller can tell the person.
  */
-async function uploadOrQueue(file: { name: string; blob: Blob; sha256?: string }): Promise<{ status: "uploaded" | "duplicate" | "queued"; name: string }> {
+async function uploadOrQueue(file: { name: string; blob: Blob; sha256?: string }): Promise<{ status: "uploaded" | "duplicate" | "queued"; name: string; documentId?: string }> {
   const ws = workspace!;
   const queue = async () => {
     await queueUpload(keyOf(ws.pointer), file);
@@ -380,11 +382,25 @@ async function flushQueuedUploads(): Promise<void> {
   }
 }
 
-async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
+/**
+ * Puts an uploaded file on a purchase: its receipt if it has none, otherwise extra documentation. A purchase that is
+ * still a blank draft is created here, with the file as its receipt.
+ */
+function attachToPurchase(purchaseId: string, docId: string): void {
+  const p = ledger.state.purchases[purchaseId];
+  if (!p) {
+    ledger.set("purchase", purchaseId, { receiptDocumentId: docId }, { label: "purchase.created" });
+    if (view.name === "purchase" && view.id === purchaseId) view = { name: "purchase", id: purchaseId };
+  } else if (!p.receiptDocumentId) attachAsReceipt(ledger, purchaseId, docId);
+  else attachAdditional(ledger, { kind: "purchase", id: purchaseId }, docId);
+}
+
+async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: string): Promise<void> {
   if (!workspace || files.length === 0) return;
   await guarded(async () => {
     let added = 0;
     let waiting = 0;
+    let attached = 0;
     const dupes: string[] = [];
     for (const [i, file] of files.entries()) {
       note(`Preparing ${file.name} (${i + 1} of ${files.length})…`);
@@ -394,10 +410,16 @@ async function uploadFiles(files: File[], fromCamera: boolean): Promise<void> {
       if (result.status === "uploaded") added++;
       else if (result.status === "queued") waiting++;
       else dupes.push(result.name);
+      if (purchaseId && result.documentId && result.status !== "queued") {
+        attachToPurchase(purchaseId, result.documentId);
+        attached++;
+      }
     }
+    if (attached) await ledger.flush();
     persist();
     status = [
-      added ? `Added ${added} file(s) to the list.` : "",
+      purchaseId ? (attached ? `Attached ${attached} file(s) to this purchase.` : "") : added ? `Added ${added} file(s) to your unattached files.` : "",
+      purchaseId && added > attached ? `Added ${added - attached} file(s) to your unattached files.` : "",
       waiting ? `${waiting} file(s) saved on this device; they will upload when you are back online.` : "",
       dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : "",
     ].filter(Boolean).join(" ");
@@ -520,6 +542,10 @@ async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
     const changed = await revalidate(ws);
     lastRefresh = Date.now();
     if (workspace !== ws) return;
+    if (ws.carried.children) {
+      status = `Added ${ws.carried.children} student(s) from last year.`;
+      await ledger.flush();
+    }
     persist();
     checkSince(ws);
     if ((changed || sinceLines.length) && !typing()) render(); // never replace a form someone is typing in; the next action shows the update
@@ -638,7 +664,7 @@ function connectionBar(): string {
   if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    <button id="check-files">Check for new files</button> <button id="new-year">New year</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
+    <button id="check-files">Check for new files</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
 }
 
 /** The year after the newest one we know ("2025-2026" -> "2026-2027"); with none, the school year that includes today. */
@@ -679,6 +705,7 @@ function header(): string {
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
+        ${workspace ? `<button id="new-year">New year</button>` : ""}
         ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
@@ -768,38 +795,64 @@ function scheduleClaimPoll(): void {
   }, 60_000);
 }
 
+/** The programs StepUp accepts, as the labels its category list uses (so a child's program can be matched to category eligibility). */
+const SCHOLARSHIPS: Array<[string, string]> = [
+  ["FES-UA", "FES-UA (Family Empowerment, Unique Abilities)"],
+  ["FESEO", "FESEO (Family Empowerment, Educational Options)"],
+  ["FTC", "FTC (Florida Tax Credit)"],
+  ["FTCPEP", "FTC-PEP (Personalized Education Program)"],
+  ["READ", "READ (Reading Scholarship Accounts)"],
+];
+
+/** A drop-down of the supported programs. A value saved earlier that is not on the list stays selectable so it is not lost silently. */
+function scholarshipSelect(current: string | undefined, attrs: string): string {
+  const known = SCHOLARSHIPS.some(([v]) => scholarshipNamesMatch(v, current ?? ""));
+  const selected = (v: string) => (current && scholarshipNamesMatch(v, current) ? " selected" : "");
+  return `<select ${attrs}>${current ? "" : `<option value="" selected disabled>Choose a program</option>`}${SCHOLARSHIPS.map(([v, n]) => `<option value="${esc(v)}"${selected(v)}>${esc(n)}</option>`).join("")}${current && !known ? `<option value="${esc(current)}" selected>${esc(current)} (not a supported program)</option>` : ""}</select>`;
+}
+
 function queueView(): string {
   const state = ledger.state;
-  const entries = buildQueue(state, ctx());
+  const all = buildQueue(state, ctx());
   const children = Object.values(state.children);
-  const childForm = `<details><summary>Children (${children.length})</summary>
-    <ul>${children.map((c) => `<li>${esc(c.name)} ${c.scholarship ? `<small>${esc(c.scholarship)}</small>` : ""}</li>`).join("")}</ul>
-    <form id="add-child" class="row"><input name="name" placeholder="Name" required><input name="scholarship" placeholder="Scholarship (e.g. FES-UA)"><button>Add child</button></form></details>`;
+  const canCopy = workspace && hasEarlierYear(workspace);
+  const childForm = `<details${children.length === 0 ? " open" : ""}><summary>Children (${children.length})</summary>
+    <ul>${children.map((c) => `<li>${esc(c.name)} ${scholarshipSelect(c.scholarship, `data-child-scholarship="${esc(c.id)}" aria-label="Program for ${esc(c.name)}" style="width:auto"`)}</li>`).join("")}</ul>
+    ${canCopy ? `<p><button id="copy-children">Copy children from the previous year</button> <small>Adds anyone who is missing; nothing is overwritten.</small></p>` : ""}
+    <form id="add-child" class="row"><input name="name" placeholder="Name" required>${scholarshipSelect(undefined, `name="scholarship" required aria-label="Program"`)}<button>Add child</button></form></details>`;
   const banner = sinceBanner() + filingBanner();
-  const uploads = workspace
-    ? ` <label class="btn">Add receipt files<input type="file" id="upload" multiple accept="application/pdf,image/*" hidden></label>
-        <label class="btn">Take a photo<input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
-        <button id="start-scan">Scan a receipt (several pages)</button>`
-    : "";
-  const startBlank = `<p class="row"><button id="new-purchase">New purchase without a file</button>${uploads}</p>`;
+  const startBlank = `<p class="row"><button id="new-purchase">New purchase</button></p>`;
   const archived = Object.values(state.purchases).filter((p) => p.archived);
   const archivedList = archived.length
-    ? `<details><summary>Archived purchases (${archived.length})</summary><ul class="queue">${archived.map((p) => `<li class="q"><span>${esc(p.vendor ?? state.documents[p.receiptDocumentId ?? ""]?.filename ?? "Untitled purchase")} <small>${esc(p.date)}</small></span><button data-unarchive="${esc(p.id)}">Restore</button></li>`).join("")}</ul></details>`
+    ? `<details><summary>Archived purchases (${archived.length})</summary><ul class="queue">${archived.map((p) => `<li class="q"><span>${esc(purchaseName(p))}</span><button data-unarchive="${esc(p.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
-  if (entries.length === 0) return `${banner}${childForm}${startBlank}<p>Nothing needs attention.</p>${archivedList}`;
-  const rows = entries.map((e) => {
+
+  // Files that belong to nothing yet are kept apart: only purchases are listed under "Needs your attention".
+  const loose = all.filter((e) => e.kind === "unattached-document");
+  const looseRows = loose.map((e) => {
     const sugg = (e.suggestions ?? []).map((s) => {
-      const name = s.target.kind === "purchase" ? state.purchases[s.target.id]?.vendor ?? s.target.id : state.items[s.target.id]?.description ?? s.target.id;
+      const name = s.target.kind === "purchase" ? (state.purchases[s.target.id] ? purchaseName(state.purchases[s.target.id]!) : s.target.id) : state.items[s.target.id]?.description ?? s.target.id;
       return `<button data-attach="${esc(e.id)}" data-kind="${s.target.kind}" data-target="${esc(s.target.id)}" data-role="${s.role}">${s.role === "receipt" ? "Receipt of" : "Attach to"} ${esc(name)}</button>`;
     }).join("");
-    const actions =
-      e.kind === "unattached-document"
-        ? `<button data-start="${esc(e.id)}">Start purchase</button>${state.documents[e.id]?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(state.documents[e.id]?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${state.documents[e.id]?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as statement</button>` : `<button data-statement="${esc(e.id)}">Open statement</button>`}${sugg}`
-        : `<button data-open="${esc(e.purchaseId ?? e.id)}">Open</button>${e.kind === "purchase-needs-items" ? `<button data-archive="${esc(e.id)}">Archive</button>` : ""}`;
+    const doc = state.documents[e.id];
+    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Receipt</button>` : `<button data-statement="${esc(e.id)}">Open receipt</button>`}${sugg}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
-    return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}<br><small>${esc(e.reasons.join("; "))}</small></div><div class="actions">${actions}</div></li>`;
+    return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}</div><div class="actions">${actions}</div></li>`;
   });
-  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${entries.length})</h2><ul class="queue">${rows.join("")}</ul>${archivedList}`;
+  const looseList = loose.length ? `<details><summary>Unattached files (${loose.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : "";
+
+  // One row per purchase: receipts with no items, and purchases with items that cannot be filed yet.
+  const byPurchase = new Map<string, { title: string; reasons: string[]; needsItems: boolean }>();
+  for (const e of all) {
+    if (e.kind === "unattached-document" || !e.purchaseId) continue;
+    const row = byPurchase.get(e.purchaseId) ?? { title: purchaseLabel(e.purchaseId), reasons: [], needsItems: false };
+    if (e.kind === "purchase-needs-items") row.needsItems = true;
+    for (const r of e.kind === "item-blocked" ? e.reasons.map((x) => `${e.title}: ${x}`) : e.reasons) if (!row.reasons.includes(r)) row.reasons.push(r);
+    byPurchase.set(e.purchaseId, row);
+  }
+  if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${looseList}${archivedList}`;
+  const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><div><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></div><div class="actions"><button data-open="${esc(id)}">Open</button>${r.needsItems ? `<button data-archive="${esc(id)}">Archive</button>` : ""}</div></li>`);
+  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${looseList}${archivedList}`;
 }
 
 function summaryView(): string {
@@ -830,11 +883,18 @@ function summaryView(): string {
     ${counts.length ? `<ul class="queue">${counts.map(([k, n]) => `<li><span>${esc(k)}</span><strong>${n}</strong></li>`).join("")}</ul>` : "<p>No items yet.</p>"}`;
 }
 
+/** The purchase's own name if it has one, else "Vendor, date", else the receipt's file name. */
+function purchaseName(p: { name?: string; vendor?: string; date?: string; receiptDocumentId?: string }): string {
+  if (p.name?.trim()) return p.name.trim();
+  const auto = [p.vendor, p.date].filter(Boolean).join(", ");
+  return auto || ledger.state.documents[p.receiptDocumentId ?? ""]?.filename || "Untitled purchase";
+}
+
 const purchaseLabel = (id: string) => {
   const p = ledger.state.purchases[id];
   if (!p) return "(removed purchase)";
   const total = purchaseTotalCents(ledger.state, p);
-  return `${p.vendor ?? "Untitled purchase"}${p.date ? `, ${p.date}` : ""}${total !== undefined ? `, ${formatCents(total)}` : ""}`;
+  return `${purchaseName(p)}${total !== undefined ? `, ${formatCents(total)}` : ""}`;
 };
 
 function statementsView(): string {
@@ -846,20 +906,20 @@ function statementsView(): string {
     const linked = linkedBy(d.id);
     const summary = d.statement ? `${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
     return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${esc(summary)}${d.statement?.last4 ? ` &middot; card ending ${esc(d.statement.last4)}` : ""}</small></div>
-      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read statement"}</button></div></li>`;
+      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read receipt"}</button></div></li>`;
   });
-  return `<h2>Statements</h2>
-    <p class="note">A statement can prove payment for many purchases at once. Mark a file as a statement from the list page (<em>Mark as statement</em>), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</p>
-    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>No statements yet.</p>"}`;
+  return `<h2>Receipts</h2>
+    <p class="note">A receipt such as a card statement can prove payment for many purchases at once. Mark a file as a receipt from the list page (<em>Mark as Receipt</em>), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</p>
+    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>No receipts yet.</p>"}`;
 }
 
 function statementReview(id: string): string {
   const state = ledger.state;
   const doc = state.documents[id];
-  if (!doc) return `<p>That statement no longer exists.</p>`;
+  if (!doc) return `<p>That receipt no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
-  const head = `<p><a href="#" data-go="statements">&larr; All statements</a></p><h2>${esc(doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read statement"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
+  const head = `<p><a href="#" data-go="statements">&larr; All receipts</a></p><h2>${esc(doc.filename ?? id)}</h2>
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read receipt"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Keep every page</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -922,7 +982,7 @@ function statementReview(id: string): string {
 /** Downloads a statement PDF, reads its text on this device, saves the charges and links the confident matches. */
 async function readStatement(docId: string): Promise<void> {
   const got = await loadDocument(docId);
-  note("Reading the statement on this device…");
+  note("Reading the receipt on this device…");
   let text: string;
   let ocr = false;
   if (got.kind === "pdf") ({ text, ocr } = await pdfToText(got.blob));
@@ -999,7 +1059,7 @@ async function readReceipt(purchaseId: string): Promise<void> {
 
 function tabs(): string {
   const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") || (name === "statements" && view.name === "statement") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
-  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Statements")}${tab("summary", "Summary")}</div>`;
+  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Receipts")}${tab("summary", "Summary")}</div>`;
 }
 
 function purchaseView(id: string, draft = false): string {
@@ -1032,12 +1092,14 @@ function purchaseView(id: string, draft = false): string {
   <h2>New purchase</h2>
   <p class="note">Nothing is saved until you enter at least one detail.</p>
   <form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
+    <label>Name<input name="name" placeholder="e.g. Math curriculum"></label>
     <label>Vendor<input name="vendor"></label>
     <label>Date<input name="date" type="date"></label>
     <label>Invoice #<input name="invoiceNo"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
-    <button>Save receipt details</button></form>`;
+    <button>Save receipt details</button></form>
+  ${documentation(id, undefined, true)}`;
   }
   const categories = reference()
     ? reference()!.choices.map((c) => c.label)
@@ -1053,13 +1115,14 @@ function purchaseView(id: string, draft = false): string {
   ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}
   ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
+    <label>Name<input name="name" value="${esc(p.name)}" placeholder="${esc(purchaseName({ ...p, name: undefined }))}"></label>
     <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
     <label>Invoice #<input name="invoiceNo" value="${esc(p.invoiceNo)}"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal" value="${money(p.orderTotalCents)}"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal" value="${money(p.taxShippingTotalCents)}"></label>
     <button>Save receipt details</button></form>
-  <p><button data-archive="${esc(id)}">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p>
+  ${documentation(id, p.receiptDocumentId)}
   <h3>Items${remaining !== undefined ? ` <small>(${formatCents(remaining)} left to itemize)</small>` : ""}</h3>
   ${items.length ? `<table><thead><tr><th>Child</th><th>Description</th><th>Amount</th><th>Tax/ship</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>` : "<p>No items yet.</p>"}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
@@ -1077,7 +1140,31 @@ function purchaseView(id: string, draft = false): string {
   ${reference() ? `<details><summary>Category missing, or needs a Service Date?</summary>
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
       <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
-    <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}`;
+    <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}
+  <hr><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p>`;
+}
+
+/** Every way to add documentation, in one place: new files, photos, scans, files already uploaded, or a file kept for later. */
+function documentation(purchaseId: string, receiptId: string | undefined, draft = false): string {
+  const state = ledger.state;
+  const online = Boolean(workspace);
+  const extras = Object.values(state.additionalDocs).filter((a) => a.ownerKind === "purchase" && a.ownerId === purchaseId);
+  const attachedList = extras.length ? `<p class="note">Also attached: ${extras.map((a) => esc(state.documents[a.documentId ?? ""]?.filename ?? "file")).join(", ")}</p>` : "";
+  const used = new Set<string>([...Object.values(state.purchases).flatMap((q) => (q.receiptDocumentId ? [q.receiptDocumentId] : [])), ...Object.values(state.additionalDocs).flatMap((a) => (a.documentId ? [a.documentId] : []))]);
+  const hasCopy = new Set(Object.values(state.documents).flatMap((d) => (d.derivedFrom ? [d.derivedFrom] : [])));
+  const loose = Object.values(state.documents).filter((d) => !used.has(d.id) && !d.derivedFrom && !hasCopy.has(d.id)).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const role = receiptId ? "extra documentation" : "the receipt";
+  const looseRows = loose.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}">Use as ${role}</button></span></li>`);
+  const own = online
+    ? `<p class="row"><label class="btn">Add files<input type="file" id="upload" data-purchase="${esc(purchaseId)}" multiple accept="application/pdf,image/*" hidden></label>
+        <label class="btn">Take a photo<input type="file" id="photo" data-purchase="${esc(purchaseId)}" accept="image/*" capture="environment" hidden></label>
+        <button id="start-scan" data-for-purchase="${esc(purchaseId)}">Scan (several pages)</button></p>
+        <p class="row"><label class="btn">Attach a file with no purchase yet<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>Kept in your unattached files on the list page.</small></p>`
+    : `<p class="note">Sign in with Microsoft to add files.</p>`;
+  return `<section><h3>Documentation</h3>
+    <p class="note">${receiptId ? "A receipt is attached. New files you add here become extra documentation (for example a card statement)." : "The first file you add becomes this purchase's receipt."}${draft ? " Adding a file saves the purchase." : ""}</p>
+    ${own}${attachedList}
+    ${looseRows.length ? `<details><summary>Use a file you already added (${looseRows.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : ""}</section>`;
 }
 
 /** A picked/typed label becomes the StepUp category id (and its path); anything else is kept as typed and flagged as unknown. */
@@ -1181,7 +1268,7 @@ root.addEventListener("click", async (ev) => {
     }, "Disconnecting…");
   }
   else if (t.id === "share") { sharing = !sharing; render(); }
-  else if (t.id === "new-year") { newYearOpen = !newYearOpen; render(); }
+  else if (t.id === "new-year") { newYearOpen = !newYearOpen; root.querySelector<HTMLDetailsElement>("details.menu")?.removeAttribute("open"); render(); }
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
       const ws = workspace!;
@@ -1241,6 +1328,13 @@ root.addEventListener("click", async (ev) => {
     URL.revokeObjectURL(url);
     status = "Saved category-edits.json. Send it to the maintainers (or open an issue on the project) so everyone gets these fixes.";
     render();
+  } else if (t.id === "copy-children" && workspace) {
+    await guarded(async () => {
+      const got = await copyFromPreviousYear(workspace!, store.clientId);
+      await ledger.flush();
+      status = got.children ? `Added ${got.children} child(ren) from the previous year.` : "Everyone from the previous year is already here.";
+    }, "Copying from the previous year…");
+    persist();
   } else if (t.id === "new-purchase") {
     go({ name: "purchase", id: newId("purchase"), draft: true });
   } else if (d["open"]) go({ name: "purchase", id: d["open"] });
@@ -1255,14 +1349,17 @@ root.addEventListener("click", async (ev) => {
     const result = d["role"] === "receipt" ? attachAsReceipt(ledger, target.id, d["attach"]) : attachAdditional(ledger, target, d["attach"]);
     if (!result.ok) alert(`Could not attach: ${result.reason}`);
     await save();
+  } else if (d["useDoc"]) {
+    attachToPurchase(d["purchase"]!, d["useDoc"]);
+    await save();
   } else if (d["statement"]) {
     view = { name: "statement", id: d["statement"] };
     render();
-    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
+    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the receipt…");
   } else if (t.id === "start-scan") {
     const now = new Date();
     const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
-    scan = { name: `Scan ${stamp}.pdf`, pages: [] };
+    scan = { name: `Scan ${stamp}.pdf`, pages: [], ...(d["forPurchase"] ? { purchaseId: d["forPurchase"] } : {}) };
     render();
   } else if (t.id === "scan-cancel") {
     discardScan();
@@ -1315,7 +1412,7 @@ root.addEventListener("click", async (ev) => {
     await guarded(() => readReceipt(d["readReceipt"]!), "Reading the receipt…");
     persist();
   } else if (d["readStatement"]) {
-    await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
+    await guarded(() => readStatement(d["readStatement"]!), "Reading the receipt…");
     persist();
   } else if (t.id === "save-redaction") {
     await guarded(saveRedaction, "Saving the redacted copy…");
@@ -1432,7 +1529,11 @@ root.addEventListener("submit", async (ev) => {
       const bytes = await buildScanPdf(draft.pages, MAX_PROOF_BYTES);
       const body = new Blob([bytes as BlobPart], { type: "application/pdf" });
       const result = await uploadOrQueue({ name, blob: body, sha256: (await sha256Hex(body)) || undefined });
-      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s)) to the list.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
+      if (draft.purchaseId && result.documentId && result.status !== "queued") {
+        attachToPurchase(draft.purchaseId, result.documentId);
+        await ledger.flush();
+      }
+      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s))${draft.purchaseId ? " on this purchase" : " to your unattached files"}.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
       discardScan();
       persist();
     }, "Building the PDF…");
@@ -1457,7 +1558,8 @@ root.addEventListener("submit", async (ev) => {
     ledger.set("child", newId("child"), { name: val(form, "name"), ...(val(form, "scholarship") ? { scholarship: val(form, "scholarship") } : {}) }, { label: "child.created" });
   } else if (form.id === "purchase-form") {
     const fields: Record<string, string | number> = {};
-    for (const k of ["vendor", "date", "invoiceNo"]) if (val(form, k)) fields[k] = val(form, k);
+    for (const k of ["name", "vendor", "date", "invoiceNo"]) if (val(form, k)) fields[k] = val(form, k);
+    if (form.dataset["draft"] !== "1" && !val(form, "name") && ledger.state.purchases[form.dataset["id"]!]?.name) fields["name"] = "";
     const total = toCents(val(form, "orderTotal"));
     const tax = toCents(val(form, "taxTotal"));
     if (total !== undefined) fields["orderTotalCents"] = total;
@@ -1492,6 +1594,11 @@ root.addEventListener("change", async (ev) => {
     await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);
     return;
   }
+  if (input.dataset["childScholarship"]) {
+    ledger.set("child", input.dataset["childScholarship"], { scholarship: (input as unknown as HTMLSelectElement).value }, { label: "child.programSet" });
+    await save();
+    return;
+  }
   if (input.id === "ocr-lang") {
     const v = (input as unknown as HTMLSelectElement).value;
     setOcrLanguages(v === "all" ? ocrLanguages().available : [v]);
@@ -1505,10 +1612,11 @@ root.addEventListener("change", async (ev) => {
     }, "Checking the photo…");
     return;
   }
-  if ((input.id === "upload" || input.id === "photo") && input.files?.length) {
+  if ((input.id === "upload" || input.id === "upload-later" || input.id === "photo") && input.files?.length) {
     const files = [...input.files];
+    const purchaseId = input.dataset["purchase"];
     input.value = "";
-    await uploadFiles(files, input.id === "photo");
+    await uploadFiles(files, input.id === "photo", purchaseId);
     return;
   }
   if (input.id !== "import" || !input.files?.[0]) return;
