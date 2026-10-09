@@ -673,7 +673,7 @@ function shareForm(): string {
 
 function header(): string {
   const unsaved = ledger.unflushedCount;
-  return `<header><h1><a href="#" data-go="queue"><img src="./icon.svg" alt="Step Up Helper" class="logo"></a></h1>
+  return `<header><h1><a href="#" data-go="queue"><img src="./icon.svg" alt="" class="logo">Step Up Helper</a></h1>
     <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}${queuedUploads ? `<span class="badge warn">${queuedUploads} file(s) waiting to upload</span>` : ""}
     <details class="menu"><summary class="btn">Advanced</summary>
       <div class="menu-panel">
