@@ -105,7 +105,7 @@ export interface OpenWorkspace {
   /** True when this was built from the browser's cache and still needs `revalidate`. */
   fromCache?: boolean;
   /** What was copied in from an earlier year on this open (unsaved until the ledger is flushed). */
-  carried: { children: number; paymentMethods: number };
+  carried: CarryResult;
 }
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
@@ -123,53 +123,92 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carried };
 }
 
+export interface CarryResult {
+  children: number;
+  paymentMethods: number;
+  /** Why an earlier year could not be used (shown to the person so a silent miss is never a mystery). */
+  problems?: string[];
+}
+
+type TableJson = { values: unknown[][] };
+
 /** Reads the students (name and program) from an old year's tracking workbook, read-only, through OneDrive's Excel service. */
 async function readLegacyChildren(driveId: string, year: YearInfo): Promise<Array<{ name: string; scholarship?: string }>> {
   if (!year.workbookName) return [];
   const book = await findChild(driveId, year.folderId, year.workbookName);
-  if (!book) return [];
-  const base = `/drives/${driveId}/items/${book.id}/workbook/tables/${CHILDREN_TABLE}`;
-  const head = await graphJson<{ values: unknown[][] }>(`${base}/headerRowRange?$select=values`);
-  const rows = await graphJson<{ value: Array<{ values: unknown[][] }> }>(`${base}/rows?$select=values`);
-  const headers = (head.values[0] ?? []).map((h) => String(h).trim());
-  const nameAt = headers.indexOf("Children");
-  const programAt = headers.indexOf("Scholarship");
-  if (nameAt < 0) return [];
-  return rows.value
-    .map((r) => ({ name: String(r.values[0]?.[nameAt] ?? "").trim(), scholarship: programAt >= 0 ? String(r.values[0]?.[programAt] ?? "").trim() : "" }))
-    .filter((c) => c.name)
-    .map((c) => ({ name: c.name, ...(c.scholarship ? { scholarship: c.scholarship } : {}) }));
+  if (!book) throw new Error(`${year.workbookName} was not found`);
+  const tables = `/drives/${driveId}/items/${book.id}/workbook/tables`;
+  // The children table is normally "Table2"; if it was renamed, any table with a "Children" column will do.
+  const names = [CHILDREN_TABLE, ...(await graphJson<{ value: Array<{ name: string }> }>(`${tables}?$select=name`)).value.map((t) => t.name).filter((n) => n !== CHILDREN_TABLE)];
+  for (const name of names) {
+    let head: TableJson;
+    try {
+      head = await graphJson<TableJson>(`${tables}/${encodeURIComponent(name)}/headerRowRange?$select=values`);
+    } catch (err) {
+      if (err instanceof GraphError && err.status === 404) continue;
+      throw err;
+    }
+    const headers = (head.values[0] ?? []).map((h) => String(h).trim().toLowerCase());
+    const nameAt = headers.indexOf("children");
+    if (nameAt < 0) continue;
+    const programAt = headers.indexOf("scholarship");
+    const rows = await graphJson<{ value: Array<{ values: unknown[][] }> }>(`${tables}/${encodeURIComponent(name)}/rows?$select=values`);
+    return rows.value
+      .map((r) => ({ name: String(r.values[0]?.[nameAt] ?? "").trim(), scholarship: programAt >= 0 ? String(r.values[0]?.[programAt] ?? "").trim() : "" }))
+      .filter((c) => c.name)
+      .map((c) => ({ name: c.name, ...(c.scholarship ? { scholarship: c.scholarship } : {}) }));
+  }
+  throw new Error(`${year.workbookName} has no table with a "Children" column`);
 }
 
 /** A new year starts empty: copy the students, payment methods and tax rate from the most recent earlier year that has students (read-only on that year). */
-async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string, force = false): Promise<{ children: number; paymentMethods: number }> {
-  const earlier = ledgerYears.filter((y) => y.label < current).sort((a, b) => b.label.localeCompare(a.label));
-  for (const y of earlier) {
-    if (y.kind === "legacy-excel") {
-      // A year kept in the old Excel workbook has no ledger; its students are in the workbook's children table.
-      const kids = await readLegacyChildren(pointer.driveId, y).catch(() => []);
-      if (!kids.length) continue;
-      const children = copyLegacyChildren(ledger, kids);
-      if (!force || ledger.state.settings["year"]?.year === undefined) ledger.set("setting", "year", { year: current }, { label: "setting.yearNamed" });
-      return { children, paymentMethods: 0 };
-    }
-    const folders = await openLedgerFolders(pointer.driveId, y.folderId);
-    if (!folders) continue;
-    const past = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
-    await past.refresh();
-    if (!Object.keys(past.state.children).length) continue;
-    const copied = copyYearSetup(ledger, past.state);
+async function carryOver(pointer: Pointer, ledger: Ledger, years: YearInfo[], current: string, clientId: string, force = false): Promise<CarryResult> {
+  const earlier = years.filter((y) => y.label < current).sort((a, b) => b.label.localeCompare(a.label));
+  const problems: string[] = [];
+  const named = () => {
     if (!force || ledger.state.settings["year"]?.year === undefined) ledger.set("setting", "year", { year: current }, { label: "setting.yearNamed" });
-    return copied;
+  };
+  for (const y of earlier) {
+    if (y.kind === "ledger") {
+      try {
+        const folders = await openLedgerFolders(pointer.driveId, y.folderId);
+        if (folders) {
+          const past = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
+          await past.refresh();
+          if (Object.keys(past.state.children).length) {
+            const copied = copyYearSetup(ledger, past.state);
+            named();
+            return copied;
+          }
+        }
+      } catch (err) {
+        problems.push(`${y.label}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    // A year kept in (or alongside) the old Excel workbook: its students are in the workbook's children table.
+    if (y.workbookName) {
+      try {
+        const kids = await readLegacyChildren(pointer.driveId, y);
+        if (kids.length) {
+          const children = copyLegacyChildren(ledger, kids);
+          named();
+          return { children, paymentMethods: 0 };
+        }
+        problems.push(`${y.label}: the workbook's children table is empty`);
+      } catch (err) {
+        problems.push(`${y.label}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
   }
-  return { children: 0, paymentMethods: 0 };
+  if (!earlier.length) problems.push("there is no earlier school year folder");
+  return { children: 0, paymentMethods: 0, problems };
 }
 
 /**
  * Copies the students (and payment methods, tax rate) from the most recent earlier year into the open one. Only adds
  * what is missing, so it is safe to run again. The caller flushes the ledger.
  */
-export async function copyFromPreviousYear(ws: OpenWorkspace, clientId: string): Promise<{ children: number; paymentMethods: number }> {
+export async function copyFromPreviousYear(ws: OpenWorkspace, clientId: string): Promise<CarryResult> {
   const ledgerYears = ws.years.filter((y) => y.kind !== "empty");
   return carryOver(ws.pointer, ws.ledger, ledgerYears, ws.year.label, clientId, true);
 }

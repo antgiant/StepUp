@@ -437,6 +437,26 @@ busyEl.setAttribute("aria-live", "polite");
 document.body.append(busyEl);
 let pending = 0;
 let fallbackLabel = "";
+/** The current label is about work on this device (reading text), not OneDrive, so it is always shown as written. */
+let fallbackLocal = false;
+
+const DETAIL_KEY = "stepup.detailedRefresh";
+/** Off by default: the spinner just says OneDrive data is refreshing. On, it names each request. Remembered per browser. */
+let detailedRefresh = (() => {
+  try {
+    return localStorage.getItem(DETAIL_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+function setDetailedRefresh(on: boolean): void {
+  detailedRefresh = on;
+  try {
+    localStorage.setItem(DETAIL_KEY, on ? "1" : "0");
+  } catch {
+    /* storage blocked: the choice lasts until the page is closed */
+  }
+}
 /** Requests in flight right now, by id, with their plain-language label (see describeRequest in shared). */
 const active = new Map<number, string>();
 observeActivity((ev) => {
@@ -447,26 +467,28 @@ observeActivity((ev) => {
 /** Shows what we are actually waiting on (the newest request), else the operation the person started. */
 function paintBusy(): void {
   const labels = [...active.values()];
-  const main = labels[labels.length - 1] ?? fallbackLabel;
+  const detailed = labels[labels.length - 1] ?? fallbackLabel;
+  const main = detailedRefresh || (fallbackLocal && labels.length === 0) ? detailed : detailed ? "Refreshing OneDrive Data" : "";
   if (!main || (pending === 0 && labels.length === 0)) {
     busyEl.hidden = true;
     document.body.removeAttribute("aria-busy");
     return;
   }
-  const more = labels.length > 1 ? `<small>+${labels.length - 1} more</small>` : "";
+  const more = detailedRefresh && labels.length > 1 ? `<small>+${labels.length - 1} more</small>` : "";
   busyEl.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(main)}</span>${more}`;
   busyEl.hidden = false;
   document.body.setAttribute("aria-busy", "true");
 }
 onOcrProgress(({ status, progress }) => {
-  if (status === "recognizing text") note(`Reading text on this device… ${Math.round(progress * 100)}%`);
-  else if (status.includes("core")) note("Loading the text-reading engine (first time only)…");
-  else if (status.includes("language") || status.includes("traineddata")) note("Loading language data (first time only)…");
+  if (status === "recognizing text") note(`Reading text on this device… ${Math.round(progress * 100)}%`, true);
+  else if (status.includes("core")) note("Loading the text-reading engine (first time only)…", true);
+  else if (status.includes("language") || status.includes("traineddata")) note("Loading language data (first time only)…", true);
 });
 
 /** Names the current operation; shown whenever no more specific request is in flight. */
-function note(label: string): void {
+function note(label: string, local = false): void {
   fallbackLabel = label;
+  fallbackLocal = local;
   paintBusy();
 }
 function showBusy(label: string): void {
@@ -546,7 +568,7 @@ async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
     if (ws.carried.children) {
       status = `Added ${ws.carried.children} student(s) from last year.`;
       await ledger.flush();
-    }
+    } else if (ws.carried.problems?.length) status = `Could not find children to copy from an earlier year: ${ws.carried.problems.join("; ")}.`;
     persist();
     checkSince(ws);
     if ((changed || sinceLines.length) && !typing()) render(); // never replace a form someone is typing in; the next action shows the update
@@ -706,6 +728,7 @@ function header(): string {
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
+        <button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button>
         ${workspace ? `<button id="new-year">New year</button>` : ""}
         ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
@@ -1370,9 +1393,13 @@ root.addEventListener("click", async (ev) => {
       const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
       const inbox = folders ? planIngest(ledger.state, await listLooseFiles(ws.driveId, folders.inboxId)) : { toRegister: [], alreadyKnown: 0 };
       registerLooseFiles(ledger, inbox.toRegister, "inbox");
+      const carried = Object.keys(ledger.state.children).length ? undefined : await copyFromPreviousYear(ws, store.clientId);
       await ledger.flush();
       const n = loose.toRegister.length + inbox.toRegister.length;
-      status = n ? `Registered ${n} new file(s)${inbox.toRegister.length ? ` (${inbox.toRegister.length} from the inbox folder)` : ""}.` : "No new files.";
+      status = [
+        n ? `Registered ${n} new file(s)${inbox.toRegister.length ? ` (${inbox.toRegister.length} from the inbox folder)` : ""}.` : "No new files.",
+        carried?.children ? `Added ${carried.children} child(ren) from the previous year.` : carried?.problems?.length ? `Could not find children to copy: ${carried.problems.join("; ")}.` : "",
+      ].filter(Boolean).join(" ");
     }, "Checking OneDrive for new files…");
   }
   else if (t.id === "export") {
@@ -1397,6 +1424,10 @@ root.addEventListener("click", async (ev) => {
       const result = await publishMirrorNow();
       status = result === "written" ? "Spreadsheet updated." : result === "unchanged" ? "Spreadsheet is already up to date." : "The spreadsheet is open in Excel; close it and try again.";
     }, "Building the spreadsheet…");
+  } else if (t.id === "toggle-detail") {
+    setDetailedRefresh(!detailedRefresh);
+    paintBusy();
+    render();
   } else if (t.id === "toggle-mirror") {
     ledger.set("setting", "year", { mirror: !mirrorOn() }, { label: "setting.mirrorToggled" });
     await save();
@@ -1424,7 +1455,7 @@ root.addEventListener("click", async (ev) => {
     await guarded(async () => {
       const got = await copyFromPreviousYear(workspace!, store.clientId);
       await ledger.flush();
-      status = got.children ? `Added ${got.children} child(ren) from the previous year.` : "Everyone from the previous year is already here.";
+      status = got.children ? `Added ${got.children} child(ren) from the previous year.` : got.problems?.length ? `Could not find children to copy: ${got.problems.join("; ")}.` : "Everyone from the previous year is already here.";
     }, "Copying from the previous year…");
     persist();
   } else if (t.id === "new-purchase") {
