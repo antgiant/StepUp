@@ -1,3 +1,5 @@
+<p align="center"><img src="packages/web/public/icon.svg" alt="Step Up Helper logo" width="200"></p>
+
 # Step Up Helper
 
 This is a system for tracking and managing the documentation and reimbursement requests for the Florida [StepUp For Students](https://apply.stepupforstudents.org/) program. It is available at https://stepup.wooleys.us 
