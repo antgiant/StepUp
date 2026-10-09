@@ -22,7 +22,8 @@
     "backup": "tsx packages/cli/src/backup.ts",
     "reference:build": "tsx packages/cli/src/referenceBuild.ts",
     "reference:promote": "tsx packages/cli/src/referenceBuild.ts promote",
-    "reference:validate": "tsx packages/cli/src/referenceBuild.ts validate"
+    "reference:validate": "tsx packages/cli/src/referenceBuild.ts validate",
+    "reference:vendors": "tsx packages/cli/src/vendorsBuild.ts"
   },
   "license": "ISC",
   "devDependencies": {

@@ -82,6 +82,23 @@ export function attachAsReceipt(ledger: Ledger, purchaseId: string, docId: strin
   return { ok: true };
 }
 
+/** Takes the file off the purchase as its receipt. The file itself stays (it goes back to the unattached files). */
+export function detachReceipt(ledger: Ledger, purchaseId: string): AttachResult {
+  const purchase = ledger.state.purchases[purchaseId];
+  if (!purchase) return { ok: false, reason: "target-missing" };
+  if (!purchase.receiptDocumentId) return { ok: true };
+  ledger.set("purchase", purchaseId, { receiptDocumentId: "" }, { label: "purchase.receiptRemoved" });
+  return { ok: true };
+}
+
+/** The receipt becomes additional documentation of the same purchase, leaving it with no receipt. */
+export function moveReceiptToAdditional(ledger: Ledger, purchaseId: string): AttachResult {
+  const docId = ledger.state.purchases[purchaseId]?.receiptDocumentId;
+  if (!docId) return { ok: false, reason: "document-missing" };
+  detachReceipt(ledger, purchaseId);
+  return attachAdditional(ledger, { kind: "purchase", id: purchaseId }, docId);
+}
+
 export const additionalDocId = (target: MapTarget, docId: string) => `add-${hashString(`${target.kind}:${target.id}::${docId}`)}`;
 
 /** Attaches the document as additional documentation (statement, explanation, letter...) to a purchase or a single item. */

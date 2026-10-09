@@ -15,6 +15,8 @@ import {
   addItem,
   attachAdditional,
   attachAsReceipt,
+  detachAdditional,
+  moveReceiptToAdditional,
   buildQueue,
   duplicateItem,
   evaluateItem,
@@ -81,7 +83,7 @@ import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { loadBaseline as loadReference } from "./reference.js";
+import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
 import { cacheDocument, clearCachedDocuments, getCachedDocument } from "./docCache.js";
@@ -118,6 +120,8 @@ let sharing = false;
 let newYearOpen = false;
 /** The add-child fields stay hidden until "New child" is pressed. */
 let addingChild = false;
+/** The purchase whose receipt is being replaced: only then are the ways to add a receipt shown. */
+let replacingReceipt: string | undefined;
 
 /** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
 /** The latest published category list; each year works from its own frozen copy of it (`referenceBase`). */
@@ -391,6 +395,7 @@ async function flushQueuedUploads(): Promise<void> {
  */
 function attachToPurchase(purchaseId: string, docId: string, role: DocRole = "receipt"): void {
   const p = ledger.state.purchases[purchaseId];
+  if (role === "receipt" && replacingReceipt === purchaseId) replacingReceipt = undefined;
   if (!p) {
     ledger.set("purchase", purchaseId, { receiptDocumentId: docId }, { label: "purchase.created" });
     if (view.name === "purchase" && view.id === purchaseId) view = { name: "purchase", id: purchaseId };
@@ -1119,7 +1124,7 @@ function purchaseView(id: string, draft = false): string {
   <p class="note">Nothing is saved until you enter at least one detail.</p>
   <form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
     <label>Name<input name="name" placeholder="e.g. Math curriculum"></label>
-    <label>Vendor<input name="vendor"></label>
+    <label>Vendor${storeBox("vendor", undefined)}</label>
     <label>Date<input name="date" type="date"></label>
     <label>Invoice #<input name="invoiceNo"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal"></label>
@@ -1142,7 +1147,7 @@ function purchaseView(id: string, draft = false): string {
   ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label>Name<input name="name" value="${esc(p.name)}" placeholder="${esc(purchaseName({ ...p, name: undefined }))}"></label>
-    <label>Vendor<input name="vendor" value="${esc(p.vendor)}"></label>
+    <label>Vendor${storeBox("vendor", p.vendor)}</label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
     <label>Invoice #<input name="invoiceNo" value="${esc(p.invoiceNo)}"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal" value="${money(p.orderTotalCents)}"></label>
@@ -1161,7 +1166,7 @@ function purchaseView(id: string, draft = false): string {
     <label>Category${categoryPicker()}</label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
     <label>Benefit message<input name="benefitMessage" required></label>
     <label>Service date<input name="serviceDate" type="date"></label>
-    <label>Service provider<input name="serviceProvider" value="${esc(next.serviceProvider)}"></label>
+    <label>Service provider${providerBox(next.serviceProvider)}</label>
     <button>Save and add another</button></form>
   ${reference() ? `<details><summary>Category missing, or needs a Service Date?</summary>
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
@@ -1191,35 +1196,113 @@ function documentation(purchaseId: string, receiptId: string | undefined, draft 
   const pick = (role: DocRole, label: string) => loose.length
     ? `<details><summary>Use a file you already added (${loose.length})</summary><ul class="queue">${loose.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}" data-role="${role}">${label}</button></span></li>`).join("")}</ul></details>`
     : "";
-  const receiptPart = `<h4>Receipt</h4>
-    <p class="note">The one document that shows what you bought and what it cost: an order confirmation, invoice or store receipt.${receiptId ? " Adding another one here replaces it." : ""}</p>
+  const replacing = replacingReceipt === purchaseId;
+  const receiptPart = receiptId && !replacing
+    ? `<h4>Receipt</h4>
+    <p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>
+    <p class="row">${state.documents[receiptId]?.driveItemId && online ? `<button data-preview="${esc(receiptId)}">Preview</button>` : ""}<button data-replace-receipt="${esc(purchaseId)}">Replace Receipt</button><button data-receipt-to-extra="${esc(purchaseId)}">Move to additional documentation</button></p>`
+    : `<h4>Receipt</h4>
+    <p class="note">The one document that shows what you bought and what it cost: an order confirmation, invoice or store receipt.${receiptId ? " Whatever you choose here replaces the current receipt, which goes back to your unattached files." : ""}</p>
     ${receiptId ? `<p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>` : `<p class="warn">No receipt yet.</p>`}
-    ${adders("receipt")}${pick("receipt", receiptId ? "Replace the receipt with this" : "Use as the receipt")}`;
+    ${adders("receipt")}${pick("receipt", receiptId ? "Replace the receipt with this" : "Use as the receipt")}
+    ${receiptId ? `<p><button data-cancel-replace="1">Keep the current receipt</button></p>` : ""}`;
   const extraPart = draft
     ? `<h4>Additional documentation</h4><p class="note">Save the purchase details above (or add a receipt) first; then you can add more documentation here.</p>`
     : `<h4>Additional documentation</h4>
     <p class="note">Anything else that backs this purchase up and is not the receipt itself: a card statement showing the payment, an email, a letter. It is optional, and you can add several.</p>
-    ${extras.length ? `<ul>${extras.map((a) => `<li>${nameOf(a.documentId)}</li>`).join("")}</ul>` : `<p><small>None yet.</small></p>`}
+    ${extras.length ? `<ul class="queue">${extras.map((a) => `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${state.documents[a.documentId ?? ""]?.driveItemId && online ? `<button data-preview="${esc(a.documentId)}">Preview</button>` : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`).join("")}</ul><p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>` : `<p><small>None yet.</small></p>`}
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
   return `<section><h3>Documentation</h3>${receiptPart}${extraPart}
     ${online ? `<h4>Not for a purchase yet</h4><p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits in Unattached files on the list page until you attach it.</small></p>` : ""}</section>`;
 }
 
 /**
- * The category chooser: a search box with a list under it that narrows as you type (every word must appear somewhere in
- * the full path). Each row leads with the last part of the path, which is what tells options apart, and shows the rest
- * smaller beneath. Picking a row puts the full path in the box. Without the shared list it is a plain text box.
+ * A search box with a list under it that narrows as you type (every word must appear somewhere in the row). Each row
+ * leads with `title`, the part that tells options apart, with `detail` smaller beneath. Picking a row puts its `value`
+ * in the box. `free` lets any text be kept, for names that are not in the list.
  */
+function searchBox(name: string, value: string | undefined, rows: Array<{ value: string; title: string; detail?: string }>, o: { placeholder: string; required?: boolean; empty: string }): string {
+  const items = rows.map((r) => `<li role="option" data-value="${esc(r.value)}" data-hay="${esc((r.value + " " + r.title + " " + (r.detail ?? "")).toLowerCase())}"><strong>${esc(r.title)}</strong>${r.detail ? `<small>${esc(r.detail)}</small>` : ""}</li>`);
+  return `<span class="combo"><input name="${esc(name)}"${o.required ? " required" : ""} value="${esc(value)}" autocomplete="off" data-combo placeholder="${esc(o.placeholder)}" role="combobox" aria-expanded="false">
+    <ul class="combo-list" role="listbox" hidden>${items.join("")}<li class="combo-empty" hidden>${o.empty}</li></ul></span>`;
+}
+
+/** The category chooser: leads each row with the last part of the path, which is what tells categories apart. */
 function categoryPicker(): string {
   const ref = reference();
   if (!ref) return `<input name="categoryId" list="cats" required>`;
-  const rows = ref.choices.map((c) => {
-    const leaf = c.path[c.path.length - 1] ?? c.label;
-    const rest = c.path.slice(0, -1).join(" - ");
-    return `<li role="option" data-value="${esc(c.label)}" data-hay="${esc(c.label.toLowerCase())}"><strong>${esc(leaf)}</strong>${rest ? `<small>${esc(rest)}</small>` : ""}</li>`;
+  return searchBox("categoryId", undefined, ref.choices.map((c) => ({ value: c.label, title: c.path[c.path.length - 1] ?? c.label, detail: c.path.slice(0, -1).join(" - ") || undefined })), {
+    placeholder: "Search categories…",
+    required: true,
+    empty: "No category matches. Add it below under &ldquo;Category missing&rdquo;.",
   });
-  return `<span class="combo"><input name="categoryId" required autocomplete="off" data-combo placeholder="Search categories…" role="combobox" aria-expanded="false">
-    <ul class="combo-list" role="listbox" hidden>${rows.join("")}<li class="combo-empty" hidden>No category matches. Add it below under &ldquo;Category missing&rdquo;.</li></ul></span>`;
+}
+
+/** The stores and businesses already entered on purchases (the receipt's vendor is not tied to a category). */
+function storeBox(name: string, value: string | undefined): string {
+  const known = new Map<string, string>();
+  for (const p of Object.values(ledger.state.purchases)) if (p.vendor?.trim() && !known.has(p.vendor.trim().toLowerCase())) known.set(p.vendor.trim().toLowerCase(), p.vendor.trim());
+  const rows = [...known.values()].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, title: v, detail: "Used before" }));
+  return searchBox(name, value, rows, { placeholder: "Search, or type a name", empty: "No match. What you type is kept as it is." });
+}
+
+/** Providers StepUp has offered, by category id (when published). */
+let publishedProviders: Record<string, string[]> = {};
+const PROVIDER_PROMPT = "Choose a category first: StepUp's list of providers depends on it. You can still type a name.";
+
+/** The category and the levels above it: a provider offered for a parent also applies below it. */
+function categoryChain(id: string): string[] {
+  const parent = new Map<string, string | undefined>();
+  for (const n of referenceBase?.categories ?? []) parent.set(n.id, n.parentId);
+  for (const n of Object.values(ledger.state.categories)) if (n.parentId) parent.set(n.id, n.parentId);
+  const chain: string[] = [];
+  for (let cur: string | undefined = id; cur && !chain.includes(cur); cur = parent.get(cur)) chain.push(cur);
+  return chain;
+}
+
+/** Providers that fit a category: those StepUp offered for it, and those already used on items filed under it. */
+function providersFor(categoryText: string): Array<{ value: string; title: string; detail: string }> {
+  const id = reference()?.idForLabel(categoryText);
+  if (!id) return [];
+  const chain = categoryChain(id);
+  const found = new Map<string, { value: string; title: string; detail: string }>();
+  const add = (n: string | undefined, detail: string) => {
+    const t = n?.trim();
+    if (t && !found.has(t.toLowerCase())) found.set(t.toLowerCase(), { value: t, title: t, detail });
+  };
+  for (const c of chain) for (const n of publishedProviders[c] ?? []) add(n, "Offered by StepUp for this category");
+  for (const i of Object.values(ledger.state.items)) if (i.categoryId && chain.includes(i.categoryId)) add(i.serviceProvider ?? i.vendor, "Used before in this category");
+  return [...found.values()].sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/** The "Who did you pay?" box: empty until a category is chosen, then it lists that category's providers. */
+function providerBox(value: string | undefined): string {
+  return searchBox("serviceProvider", value, [], { placeholder: "Search, or type a name", empty: PROVIDER_PROMPT });
+}
+
+/** The category changed: refill the provider list, and drop a provider that was picked from the old category's list. */
+function categoryChanged(input: HTMLInputElement): void {
+  const form = input.form;
+  const provider = form?.elements.namedItem("serviceProvider") as HTMLInputElement | null;
+  if (!provider || provider.dataset["combo"] === undefined) return;
+  const rows = providersFor(input.value);
+  const list = provider.nextElementSibling as HTMLUListElement;
+  list.querySelectorAll("li[data-value]").forEach((li) => li.remove());
+  const empty = list.querySelector<HTMLElement>(".combo-empty")!;
+  for (const r of rows) {
+    const li = document.createElement("li");
+    li.setAttribute("role", "option");
+    li.dataset["value"] = r.value;
+    li.dataset["hay"] = `${r.value} ${r.detail}`.toLowerCase();
+    li.innerHTML = `<strong>${esc(r.title)}</strong><small>${esc(r.detail)}</small>`;
+    list.insertBefore(li, empty);
+  }
+  empty.textContent = reference()?.idForLabel(input.value) ? "No known provider for this category yet. What you type is kept as it is." : PROVIDER_PROMPT;
+  // StepUp resets the provider when the category changes; a name picked from the old list does not carry over.
+  if (provider.dataset["picked"] === "1" && provider.value && !rows.some((r) => r.value.toLowerCase() === provider.value.toLowerCase())) {
+    provider.value = "";
+    provider.dataset["picked"] = "";
+  }
 }
 
 /** Shows the rows matching what was typed; returns how many. */
@@ -1245,7 +1328,11 @@ function closeCombo(input: HTMLInputElement): void {
 
 root.addEventListener("input", (ev) => {
   const t = ev.target as HTMLInputElement;
-  if (t.dataset?.["combo"] !== undefined) filterCombo(t);
+  if (t.dataset?.["combo"] !== undefined) {
+    if (t.name === "categoryId") categoryChanged(t);
+    else if (t.name === "serviceProvider") t.dataset["picked"] = "";
+    filterCombo(t);
+  }
 });
 root.addEventListener("focusin", (ev) => {
   const t = ev.target as HTMLInputElement;
@@ -1262,7 +1349,9 @@ root.addEventListener("pointerdown", (ev) => {
   ev.preventDefault();
   const input = li.closest(".combo")!.querySelector<HTMLInputElement>("input")!;
   input.value = li.dataset["value"]!;
+  input.dataset["picked"] = "1";
   closeCombo(input);
+  if (input.name === "categoryId") categoryChanged(input);
 });
 root.addEventListener("keydown", (ev) => {
   const input = ev.target as HTMLInputElement;
@@ -1280,7 +1369,9 @@ root.addEventListener("keydown", (ev) => {
   } else if (ev.key === "Enter" && !list.hidden && at >= 0) {
     ev.preventDefault();
     input.value = visible[at]!.dataset["value"]!;
+    input.dataset["picked"] = "1";
     closeCombo(input);
+    if (input.name === "categoryId") categoryChanged(input);
   } else if (ev.key === "Escape") closeCombo(input);
 });
 
@@ -1349,6 +1440,7 @@ function render(): void {
 
 function go(next: View): void {
   view = next;
+  replacingReceipt = undefined;
   render();
 }
 
@@ -1481,6 +1573,22 @@ root.addEventListener("click", async (ev) => {
     const result = d["role"] === "receipt" ? attachAsReceipt(ledger, target.id, d["attach"]) : attachAdditional(ledger, target, d["attach"]);
     if (!result.ok) alert(`Could not attach: ${result.reason}`);
     await save();
+  } else if (d["replaceReceipt"]) {
+    replacingReceipt = d["replaceReceipt"];
+    render();
+  } else if (d["cancelReplace"]) {
+    replacingReceipt = undefined;
+    render();
+  } else if (d["receiptToExtra"]) {
+    moveReceiptToAdditional(ledger, d["receiptToExtra"]);
+    status = "Moved the receipt to additional documentation. Add a new receipt below.";
+    replacingReceipt = undefined;
+    await save();
+  } else if (d["unlinkExtra"]) {
+    if (confirm("Remove this file from the purchase? The file itself is kept in your unattached files.")) {
+      detachAdditional(ledger, { kind: "purchase", id: d["purchase"]! }, d["unlinkExtra"]);
+      await save();
+    }
   } else if (d["useDoc"]) {
     attachToPurchase(d["purchase"]!, d["useDoc"], d["role"] === "additional" ? "additional" : "receipt");
     await save();
@@ -1798,6 +1906,9 @@ await guarded(async () => {
   } else if (account) await pickerTop();
 }, "Connecting to OneDrive…");
 if (workspace?.fromCache) void refreshInBackground(workspace);
+void loadProviders().then((byCategory) => {
+  publishedProviders = byCategory;
+});
 void loadReference().then((r) => {
   publishedRef = r;
   if (!yearSnapshot) referenceBase = r; // before the year's own copy is known (or in local mode)

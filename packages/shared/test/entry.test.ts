@@ -15,6 +15,8 @@ import {
   setPurchaseArchived,
   createPurchase,
   detachAdditional,
+  detachReceipt,
+  moveReceiptToAdditional,
   duplicateItem,
   evaluateItem,
   planIngest,
@@ -135,6 +137,21 @@ describe("loose files: need data, or belong to something already entered", () =>
     ledger.set("document", "second", { filename: "another.pdf" });
     expect(attachAsReceipt(ledger, waiting, "second")).toEqual({ ok: false, reason: "purchase-has-receipt" });
     expect(attachAsReceipt(ledger, waiting, "second", { replace: true })).toEqual({ ok: true });
+  });
+
+  it("moves a receipt to additional documentation, or lets go of it, without losing the file", () => {
+    const id = createPurchase(ledger, { vendor: "Acme", receiptDocumentId: "r1" });
+    ledger.set("document", "r1", { filename: "r1.pdf" });
+    expect(moveReceiptToAdditional(ledger, id)).toEqual({ ok: true });
+    expect(ledger.state.purchases[id]!.receiptDocumentId).toBeFalsy();
+    expect(Object.values(ledger.state.additionalDocs).some((a) => a.ownerId === id && a.documentId === "r1")).toBe(true);
+    expect(moveReceiptToAdditional(ledger, id)).toMatchObject({ ok: false });
+
+    attachAsReceipt(ledger, id, "r1");
+    detachAdditional(ledger, { kind: "purchase", id }, "r1");
+    expect(detachReceipt(ledger, id)).toEqual({ ok: true });
+    expect(ledger.state.purchases[id]!.receiptDocumentId).toBeFalsy();
+    expect(buildQueue(ledger.state, ctx).some((q) => q.kind === "unattached-document" && q.id === "r1")).toBe(true);
   });
 
   it("suggests a statement for purchases awaiting proof, attaches it, and the items become ready", () => {
