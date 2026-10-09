@@ -1071,20 +1071,37 @@ async function readReceipt(purchaseId: string): Promise<void> {
   if (!p || !docId) return;
   const { text, ocr } = await documentText(docId);
   const r = readReceiptText(text);
+  const names: Record<string, string> = { vendor: "vendor", date: "date", invoiceNo: "invoice #", orderTotalCents: "total", taxShippingTotalCents: "tax/shipping" };
+  const read: Record<string, string | number> = {};
+  if (r.vendor) read["vendor"] = r.vendor;
+  if (r.date) read["date"] = r.date;
+  if (r.invoiceNo) read["invoiceNo"] = r.invoiceNo;
+  if (r.totalCents !== undefined) read["orderTotalCents"] = r.totalCents;
+  if (r.taxShippingCents !== undefined) read["taxShippingTotalCents"] = r.taxShippingCents;
+  const saved: Record<string, string | number | undefined> = { vendor: p.vendor, date: p.date, invoiceNo: p.invoiceNo, orderTotalCents: p.orderTotalCents, taxShippingTotalCents: p.taxShippingTotalCents };
+  const show = (k: string, v: string | number | undefined) => (typeof v === "number" ? formatCents(v) : String(v));
   const fields: Record<string, string | number> = {};
-  if (!p.vendor && r.vendor) fields["vendor"] = r.vendor;
-  if (!p.date && r.date) fields["date"] = r.date;
-  if (!p.invoiceNo && r.invoiceNo) fields["invoiceNo"] = r.invoiceNo;
-  if (p.orderTotalCents === undefined && r.totalCents !== undefined) fields["orderTotalCents"] = r.totalCents;
-  if (p.taxShippingTotalCents === undefined && r.taxShippingCents !== undefined) fields["taxShippingTotalCents"] = r.taxShippingCents;
+  const differs: string[] = [];
+  for (const [k, v] of Object.entries(read)) {
+    if (saved[k] === undefined || saved[k] === "") fields[k] = v;
+    else if (saved[k] !== v) differs.push(k);
+  }
+  // Values already saved are never replaced silently (they may have been typed by hand), but a re-read that finds
+  // something different is offered, so a wrong earlier reading can be corrected.
+  if (differs.length && confirm(`The receipt now reads differently from what is saved:\n\n${differs.map((k) => `${names[k]}: ${show(k, saved[k])} \u2192 ${show(k, read[k])}`).join("\n")}\n\nReplace the saved values?`)) {
+    for (const k of differs) fields[k] = read[k]!;
+  }
   if (Object.keys(fields).length) ledger.set("purchase", purchaseId, fields, { label: "purchase.readFromReceipt" });
   if (fields["taxShippingTotalCents"] !== undefined) reallocateTax(ledger, purchaseId);
   if (r.paymentEvidence) ledger.set("document", docId, { paymentEvidenceConfidence: r.paymentEvidence.confidence, paymentEvidenceSnippet: r.paymentEvidence.snippet }, { label: "document.paymentEvidence" });
   await ledger.flush();
-  const names: Record<string, string> = { vendor: "vendor", date: "date", invoiceNo: "invoice #", orderTotalCents: "total", taxShippingTotalCents: "tax/shipping" };
   const filled = Object.keys(fields).map((k) => names[k]);
   const proof = r.paymentEvidence ? (r.paymentEvidence.confidence >= 0.8 ? " The receipt shows payment, so it counts as proof." : " It does not clearly show payment; a statement may be needed.") : " No sign of payment was found on it.";
-  status = filled.length || r.paymentEvidence ? `${filled.length ? `Filled in ${filled.join(", ")}${ocr ? " (read by OCR: please check)" : ""}.` : "Nothing new to fill in."}${proof}` : "Could not read anything useful from this receipt. Fill in the details by hand.";
+  if (text.trim().length < 10) status = `No text could be read from this file${ocr ? " (even with OCR)" : ""}. Fill in the details by hand.`;
+  else if (Object.keys(read).length === 0 && !r.paymentEvidence) status = "The text was read, but no vendor, date, order number or total could be found in it. Fill in the details by hand.";
+  else if (filled.length) status = `Filled in ${filled.join(", ")}${ocr ? " (read by OCR: please check)" : ""}.${proof}`;
+  else if (differs.length) status = `Kept the saved ${differs.map((k) => names[k]).join(", ")}.${proof}`;
+  else status = `Everything it could read (${Object.keys(read).map((k) => names[k]).join(", ") || "payment"}) is already filled in.${proof}`;
 }
 
 function tabs(): string {
