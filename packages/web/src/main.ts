@@ -763,7 +763,7 @@ function header(): string {
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
       </div></details></nav></header>
-    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}`;
+    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
 
 /** "Since you were last here": what other people and the command line did while this browser was away. */
@@ -1648,6 +1648,9 @@ async function useFolder(folder: FolderEntry): Promise<void> {
   }
 }
 
+/** Set when a newer copy of the app has taken over in the background; the banner offers a reload. */
+let updateReady = false;
+
 const MODE_KEY = "stepup.mode";
 let authReady = false;
 let localChosen = (() => { try { return localStorage.getItem(MODE_KEY) === "local"; } catch { return false; } })();
@@ -1699,6 +1702,7 @@ root.addEventListener("click", async (ev) => {
   }
   else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))), "Opening the folder…");
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
+  else if (t.id === "reload-app") location.reload();
   else if (t.id === "use-local") { setLocalChosen(true); render(); }
   else if (t.id === "pick-again") await guarded(pickerTop);
   else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
@@ -2150,5 +2154,17 @@ void loadReference().then((r) => {
 
 // Installable / works offline: the page and its scripts are cached by the service worker (public/sw.js).
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./sw.js").catch(() => undefined);
+  // The worker takes over as soon as it installs, so a controller change after we already had one means a new version.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || updateReady) return;
+    updateReady = true;
+    if (!typing()) render();
+  });
+  navigator.serviceWorker.register("./sw.js").then((reg) => {
+    // A long-open installed app only re-checks on launch; also check whenever it comes back to the foreground.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void reg.update().catch(() => undefined);
+    });
+  }).catch(() => undefined);
 }
