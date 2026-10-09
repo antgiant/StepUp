@@ -116,6 +116,8 @@ let picker: { path: FolderEntry[]; mine?: FolderEntry; shared: FolderEntry[]; li
 let pendingYear: Pointer | undefined;
 let sharing = false;
 let newYearOpen = false;
+/** The add-child fields stay hidden until "New child" is pressed. */
+let addingChild = false;
 
 /** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
 /** The latest published category list; each year works from its own frozen copy of it (`referenceBase`). */
@@ -730,6 +732,7 @@ function header(): string {
         <button id="export">Export events</button>
         <button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button>
         ${workspace ? `<button id="new-year">New year</button>` : ""}
+        ${workspace && hasEarlierYear(workspace) ? `<button id="copy-children" title="Adds anyone who is missing; nothing is overwritten">Copy children from previous year</button>` : ""}
         ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
@@ -839,11 +842,10 @@ function queueView(): string {
   const state = ledger.state;
   const all = buildQueue(state, ctx());
   const children = Object.values(state.children);
-  const canCopy = workspace && hasEarlierYear(workspace);
-  const childForm = `<details${children.length === 0 ? " open" : ""}><summary>Children (${children.length})</summary>
+  const childForm = `<details${children.length === 0 || addingChild ? " open" : ""}><summary>Children (${children.length})</summary>
     <ul>${children.map((c) => `<li>${esc(c.name)} ${scholarshipSelect(c.scholarship, `data-child-scholarship="${esc(c.id)}" aria-label="Program for ${esc(c.name)}" style="width:auto"`)}</li>`).join("")}</ul>
-    ${canCopy ? `<p><button id="copy-children">Copy children from the previous year</button> <small>Adds anyone who is missing; nothing is overwritten.</small></p>` : ""}
-    <form id="add-child" class="row"><input name="name" placeholder="Name" required>${scholarshipSelect(undefined, `name="scholarship" required aria-label="Program"`)}<button>Add child</button></form></details>`;
+    ${addingChild ? "" : `<p><button id="new-child">New child</button></p>`}
+    ${!addingChild ? "" : `<form id="add-child" class="row"><input name="name" placeholder="Name" required>${scholarshipSelect(undefined, `name="scholarship" required aria-label="Program"`)}<button>Add child</button><button type="button" id="cancel-child">Cancel</button></form>`}</details>`;
   const banner = sinceBanner() + filingBanner();
   const startBlank = `<p class="row"><button id="new-purchase">New purchase</button></p>`;
   const archived = Object.values(state.purchases).filter((p) => p.archived);
@@ -1451,6 +1453,13 @@ root.addEventListener("click", async (ev) => {
     URL.revokeObjectURL(url);
     status = "Saved category-edits.json. Send it to the maintainers (or open an issue on the project) so everyone gets these fixes.";
     render();
+  } else if (t.id === "new-child") {
+    addingChild = true;
+    render();
+    root.querySelector<HTMLInputElement>("#add-child input[name=name]")?.focus();
+  } else if (t.id === "cancel-child") {
+    addingChild = false;
+    render();
   } else if (t.id === "copy-children" && workspace) {
     await guarded(async () => {
       const got = await copyFromPreviousYear(workspace!, store.clientId);
@@ -1678,6 +1687,7 @@ root.addEventListener("submit", async (ev) => {
       status = "Category saved for this year.";
     }
   } else if (form.id === "add-child") {
+    addingChild = false;
     ledger.set("child", newId("child"), { name: val(form, "name"), ...(val(form, "scholarship") ? { scholarship: val(form, "scholarship") } : {}) }, { label: "child.created" });
   } else if (form.id === "purchase-form") {
     const fields: Record<string, string | number> = {};
