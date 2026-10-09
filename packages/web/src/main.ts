@@ -1132,7 +1132,7 @@ function purchaseView(id: string, draft = false): string {
     <label>Child<select name="childId" required>${children.map((c) => `<option value="${esc(c.id)}"${c.id === next.childId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
     <label>Description<input name="description" required></label>
     <label>Amount<input name="amount" inputmode="decimal" required value="${money(next.amountCents)}"></label>
-    <label>Category<input name="categoryId" list="cats" required${reference() ? ` placeholder="Start typing to search"` : ""}></label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <label>Category${categoryPicker()}</label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
     <label>Benefit message<input name="benefitMessage" required></label>
     <label>Service date<input name="serviceDate" type="date"></label>
     <label>Service provider<input name="serviceProvider" value="${esc(next.serviceProvider)}"></label>
@@ -1165,6 +1165,23 @@ function documentation(purchaseId: string, receiptId: string | undefined, draft 
     <p class="note">${receiptId ? "A receipt is attached. New files you add here become extra documentation (for example a card statement)." : "The first file you add becomes this purchase's receipt."}${draft ? " Adding a file saves the purchase." : ""}</p>
     ${own}${attachedList}
     ${looseRows.length ? `<details><summary>Use a file you already added (${looseRows.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : ""}</section>`;
+}
+
+/**
+ * The category chooser. With the shared list it is a drop-down grouped by top-level category, so each option starts with
+ * what tells it apart (long full paths in a type-ahead list get cut off and many look identical). Without the list,
+ * a free-text box is all there is.
+ */
+function categoryPicker(): string {
+  const ref = reference();
+  if (!ref) return `<input name="categoryId" list="cats" required>`;
+  const groups = new Map<string, Array<{ label: string; text: string }>>();
+  for (const c of ref.choices) {
+    const top = c.path[0] ?? c.label;
+    groups.set(top, [...(groups.get(top) ?? []), { label: c.label, text: c.path.slice(1).join(" - ") || top }]);
+  }
+  const body = [...groups.entries()].map(([top, opts]) => `<optgroup label="${esc(top)}">${opts.map((o) => `<option value="${esc(o.label)}">${esc(o.text)}</option>`).join("")}</optgroup>`).join("");
+  return `<select name="categoryId" required><option value="" selected disabled>Choose a category</option>${body}</select>`;
 }
 
 /** A picked/typed label becomes the StepUp category id (and its path); anything else is kept as typed and flagged as unknown. */
