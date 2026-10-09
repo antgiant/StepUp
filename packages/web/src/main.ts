@@ -900,7 +900,7 @@ function queueView(): string {
     byPurchase.set(e.purchaseId, row);
   }
   if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${looseList}${archivedList}`;
-  const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><div><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></div><div class="actions"><button data-open="${esc(id)}">Open</button></div></li>`);
+  const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><button class="row-button" data-open="${esc(id)}"><span><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`);
   return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${looseList}${archivedList}`;
 }
 

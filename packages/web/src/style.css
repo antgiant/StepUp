@@ -147,3 +147,8 @@ button.secondary { background: var(--surface); border-color: var(--line); color:
 form > button.secondary:last-child { background: var(--surface); border-color: var(--line); color: var(--fg); }
 .pick-bottom { margin-top: 16px; } .pick-bottom button { width: 100%; }
 @media (max-width: 480px) { .gate-choices { flex-direction: column; } }
+/* A list row that is one big button (the whole row opens the purchase) */
+.q:has(> .row-button) { padding: 0; }
+.row-button { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px; text-align: left; padding: 12px 16px; border: 0; border-radius: var(--radius); background: none; }
+.row-button:hover { background: var(--accent-soft); }
+.row-button .chev { color: var(--muted); font-size: 1.5rem; line-height: 1; }
