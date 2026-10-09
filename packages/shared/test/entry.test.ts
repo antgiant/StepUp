@@ -6,6 +6,7 @@ import {
   MemoryBackend,
   MemoryEventStore,
   addItem,
+  updateItem,
   allocateProportionally,
   attachAdditional,
   attachAsReceipt,
@@ -137,6 +138,18 @@ describe("loose files: need data, or belong to something already entered", () =>
     ledger.set("document", "second", { filename: "another.pdf" });
     expect(attachAsReceipt(ledger, waiting, "second")).toEqual({ ok: false, reason: "purchase-has-receipt" });
     expect(attachAsReceipt(ledger, waiting, "second", { replace: true })).toEqual({ ok: true });
+  });
+
+  it("edits an item in place; the estimated tax follows the amount, a clean field stays cleared", () => {
+    const purchase = createPurchase(ledger, { vendor: "Acme" });
+    const id = addItem(ledger, purchase, { description: "Book", amountCents: 1000, serviceProvider: "Acme Tutoring", categoryId: "books" });
+    const before = ledger.state.items[id]!.taxShippingCents;
+    updateItem(ledger, id, { amountCents: 2000, serviceProvider: "" });
+    const after = ledger.state.items[id]!;
+    expect(after.amountCents).toBe(2000);
+    expect(after.taxShippingCents).toBeGreaterThan(before ?? 0);
+    expect(after.serviceProvider).toBeFalsy();
+    expect(after.description).toBe("Book");
   });
 
   it("moves a receipt to additional documentation, or lets go of it, without losing the file", () => {

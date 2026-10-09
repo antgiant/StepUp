@@ -64,6 +64,22 @@ export function addItem(ledger: Ledger, purchaseId: string, input: NewItemInput)
   return id;
 }
 
+/**
+ * Changes an item's details. Only the fields given are touched; an empty text clears the field. When the amount changes
+ * and the tax/shipping is still an estimate, the estimate follows the new amount.
+ */
+export function updateItem(ledger: Ledger, itemId: string, input: NewItemInput): void {
+  const item = ledger.state.items[itemId];
+  if (!item) return;
+  const fields: Record<string, Json> = {};
+  for (const [k, v] of Object.entries(input)) if (v !== undefined) fields[k] = v as Json;
+  if (input.amountCents !== undefined && input.amountCents !== item.amountCents && item.taxShippingEstimated !== false && input.taxShippingCents === undefined) {
+    fields["taxShippingCents"] = estimateTaxCents(input.amountCents, defaultTaxRate(ledger.state));
+    fields["taxShippingEstimated"] = true;
+  }
+  if (Object.keys(fields).length) ledger.set("item", itemId, fields, { label: "item.edited" });
+}
+
 /** Hides a purchase and its items everywhere (queue, plan, budget) without losing anything; `archived = false` brings it back. */
 export function setPurchaseArchived(ledger: Ledger, purchaseId: string, archived = true): void {
   const label = archived ? "purchase.archived" : "purchase.unarchived";

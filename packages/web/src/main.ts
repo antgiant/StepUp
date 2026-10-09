@@ -16,6 +16,7 @@ import {
   attachAdditional,
   attachAsReceipt,
   detachAdditional,
+  updateItem,
   moveReceiptToAdditional,
   buildQueue,
   duplicateItem,
@@ -122,6 +123,24 @@ let newYearOpen = false;
 let addingChild = false;
 /** The purchase whose receipt is being replaced: only then are the ways to add a receipt shown. */
 let replacingReceipt: string | undefined;
+/** The item the add-an-item form is working on: once its required details are filled in it exists and edits update it. */
+let itemEdit: { purchaseId: string; itemId?: string } | undefined;
+const itemDraftKey = (purchaseId: string) => `stepup.itemdraft.${purchaseId}`;
+function readItemDraft(purchaseId: string): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(itemDraftKey(purchaseId)) ?? "{}") as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+function writeItemDraft(purchaseId: string, values: Record<string, string> | undefined): void {
+  try {
+    if (values) localStorage.setItem(itemDraftKey(purchaseId), JSON.stringify(values));
+    else localStorage.removeItem(itemDraftKey(purchaseId));
+  } catch {
+    /* storage blocked: the half-filled form is just not remembered */
+  }
+}
 
 /** Shared category tree (plan §3.8), loaded in the background. Until it arrives (or if it cannot load) every category counts as known. */
 /** The latest published category list; each year works from its own frozen copy of it (`referenceBase`). */
@@ -866,7 +885,7 @@ function queueView(): string {
       return `<button data-attach="${esc(e.id)}" data-kind="${s.target.kind}" data-target="${esc(s.target.id)}" data-role="${s.role}">${s.role === "receipt" ? "Receipt of" : "Attach to"} ${esc(name)}</button>`;
     }).join("");
     const doc = state.documents[e.id];
-    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Receipt</button>` : `<button data-statement="${esc(e.id)}">Open receipt</button>`}${sugg}`;
+    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Proof of Payment</button>` : `<button data-statement="${esc(e.id)}">Open proof of payment</button>`}${sugg}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}</div><div class="actions">${actions}</div></li>`;
   });
@@ -936,20 +955,20 @@ function statementsView(): string {
     const linked = linkedBy(d.id);
     const summary = d.statement ? `${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
     return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${esc(summary)}${d.statement?.last4 ? ` &middot; card ending ${esc(d.statement.last4)}` : ""}</small></div>
-      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read receipt"}</button></div></li>`;
+      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button></div></li>`;
   });
-  return `<h2>Receipts</h2>
-    <p class="note">A receipt such as a card statement can prove payment for many purchases at once. Mark a file as a receipt from the list page (<em>Mark as Receipt</em>), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</p>
-    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>No receipts yet.</p>"}`;
+  return `<h2>Proof of payment</h2>
+    <p class="note">A card or bank statement can prove payment for many purchases at once. Mark a file as proof of payment from the list page (<em>Mark as Proof of Payment</em>), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</p>
+    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>Nothing marked as proof of payment yet.</p>"}`;
 }
 
 function statementReview(id: string): string {
   const state = ledger.state;
   const doc = state.documents[id];
-  if (!doc) return `<p>That receipt no longer exists.</p>`;
+  if (!doc) return `<p>That proof of payment no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
-  const head = `<p><a href="#" data-go="statements">&larr; All receipts</a></p><h2>${esc(doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read receipt"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
+  const head = `<p><a href="#" data-go="statements">&larr; All proof of payment</a></p><h2>${esc(doc.filename ?? id)}</h2>
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Keep every page</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -1012,7 +1031,7 @@ function statementReview(id: string): string {
 /** Downloads a statement PDF, reads its text on this device, saves the charges and links the confident matches. */
 async function readStatement(docId: string): Promise<void> {
   const got = await loadDocument(docId);
-  note("Reading the receipt on this device…");
+  note("Reading the statement on this device…");
   let text: string;
   let ocr = false;
   if (got.kind === "pdf") ({ text, ocr } = await pdfToText(got.blob));
@@ -1035,7 +1054,7 @@ async function documentText(docId: string): Promise<{ text: string; ocr: boolean
   const cached = documentTexts.get(docId);
   if (cached) return cached;
   const got = await loadDocument(docId);
-  note("Reading the receipt on this device…");
+  note("Reading the file on this device…");
   let read: { text: string; ocr: boolean };
   if (got.kind === "pdf") read = await pdfToText(got.blob);
   else if (got.kind === "image") read = { text: (await ocrImage(got.blob)).text, ocr: true };
@@ -1106,14 +1125,40 @@ async function readReceipt(purchaseId: string): Promise<void> {
 
 function tabs(): string {
   const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") || (name === "statements" && view.name === "statement") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
-  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Receipts")}${tab("summary", "Summary")}</div>`;
+  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Proof of payment")}${tab("summary", "Summary")}</div>`;
+}
+
+/**
+ * The item being worked on. Nothing to press: once child, description, amount, category and benefit message are filled in
+ * the item is saved, and every later change to a field is saved as the field is left. "Add another" starts the next one.
+ */
+function itemForm(purchaseId: string, next: ReturnType<typeof suggestNextItem>): string {
+  const state = ledger.state;
+  const children = Object.values(state.children);
+  const money = (c: number | undefined) => (c === undefined ? "" : (c / 100).toFixed(2));
+  const current = itemEdit?.purchaseId === purchaseId && itemEdit.itemId ? state.items[itemEdit.itemId] : undefined;
+  const draft = current ? {} : readItemDraft(purchaseId);
+  const text = (k: string, saved: string | undefined) => esc(current ? saved : draft[k]);
+  const childId = current?.childId ?? draft["childId"] ?? next.childId;
+  const categoryText = current ? categoryLabel(current) : draft["categoryId"];
+  const needsDate = Boolean(reference() ? reference()!.category(reference()!.idForLabel(categoryText ?? "") ?? "")?.requiresServiceDate : false);
+  const categories = reference() ? [] : [...new Set(Object.values(state.items).map((i) => categoryLabel(i)).filter(Boolean))];
+  return `<form id="item-form" class="grid" data-id="${esc(purchaseId)}">
+    <label>Child<select name="childId" required>${children.map((c) => `<option value="${esc(c.id)}"${c.id === childId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+    <label>Description<input name="description" required value="${text("description", current?.description)}"></label>
+    <label>Amount<input name="amount" inputmode="decimal" required value="${esc(current ? money(current.amountCents) : (draft["amount"] ?? money(next.amountCents)))}"></label>
+    <label>Category${categoryPicker(categoryText)}</label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <label>Benefit message<input name="benefitMessage" required value="${text("benefitMessage", current?.benefitMessage)}"></label>
+    <label data-service-date${needsDate || !reference() ? "" : " hidden"}>Service date<input name="serviceDate" type="date" value="${text("serviceDate", current?.serviceDate)}"></label>
+    <label>Service provider${providerBox(current ? current.serviceProvider : (draft["serviceProvider"] ?? next.serviceProvider), categoryText)}</label>
+    ${saveIndicator("item-save-state")}</form>`;
 }
 
 /** The "Saving… / Saved" mark next to the purchase details. Updated in place so typing and focus are never disturbed. */
-const saveIndicator = () => `<span class="save-state" id="save-state" role="status" aria-live="polite"></span>`;
+const saveIndicator = (elId = "save-state") => `<span class="save-state" id="${elId}" role="status" aria-live="polite"></span>`;
 let saveStateTimer: ReturnType<typeof setTimeout> | undefined;
-function showSaveState(state: "saving" | "saved" | "local" | "error", detail = ""): void {
-  const el = document.getElementById("save-state");
+function showSaveState(state: "saving" | "saved" | "local" | "error", detail = "", elId = "save-state"): void {
+  const el = document.getElementById(elId);
   if (!el) return;
   clearTimeout(saveStateTimer);
   el.className = `save-state ${state}`;
@@ -1169,6 +1214,62 @@ async function autosavePurchaseNow(form: HTMLFormElement, focusNext?: string): P
     view = { name: "purchase", id };
     render();
     if (focusNext) document.getElementById("app")?.querySelector<HTMLElement>(`#purchase-form [name="${focusNext}"]`)?.focus();
+  }
+}
+
+let itemChain: Promise<void> = Promise.resolve();
+/** Saves the item being worked on when a field is left (see `itemForm`). Runs one at a time. */
+function autosaveItem(form: HTMLFormElement, focusNext?: string): Promise<void> {
+  itemChain = itemChain.then(() => autosaveItemNow(form, focusNext)).catch(() => undefined);
+  return itemChain;
+}
+
+async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promise<void> {
+  const purchaseId = form.dataset["id"]!;
+  const itemId = itemEdit?.purchaseId === purchaseId ? itemEdit.itemId : undefined;
+  const dateField = form.querySelector<HTMLElement>("[data-service-date]");
+  const dateShown = !dateField?.hidden;
+  const raw = Object.fromEntries(["childId", "description", "amount", "categoryId", "benefitMessage", "serviceDate", "serviceProvider"].map((k) => [k, val(form, k)]));
+  if (!dateShown) raw["serviceDate"] = "";
+  if (!itemId) writeItemDraft(purchaseId, raw); // kept on this device even while the form is incomplete
+  const amountCents = toCents(raw["amount"]!);
+  if (!raw["childId"] || !raw["description"] || amountCents === undefined || !raw["categoryId"] || !raw["benefitMessage"]) return;
+  const input = {
+    childId: raw["childId"],
+    description: raw["description"],
+    amountCents,
+    ...categoryFields(raw["categoryId"]),
+    benefitMessage: raw["benefitMessage"],
+    serviceDate: raw["serviceDate"] ?? "",
+    serviceProvider: raw["serviceProvider"] ?? "",
+  };
+  const existing = itemId ? ledger.state.items[itemId] : undefined;
+  if (existing) {
+    const same = existing.childId === input.childId && existing.description === input.description && existing.amountCents === input.amountCents && existing.categoryId === input.categoryId && (existing.benefitMessage ?? "") === input.benefitMessage && (existing.serviceDate ?? "") === input.serviceDate && (existing.serviceProvider ?? "") === input.serviceProvider;
+    if (same) return;
+  }
+  showSaveState("saving", "", "item-save-state");
+  let created = false;
+  if (existing) updateItem(ledger, existing.id, input);
+  else {
+    const id = addItem(ledger, purchaseId, { ...input, serviceDate: input.serviceDate || undefined, serviceProvider: input.serviceProvider || undefined });
+    itemEdit = { purchaseId, itemId: id };
+    writeItemDraft(purchaseId, undefined);
+    created = true;
+  }
+  if (ledger.state.purchases[purchaseId]?.taxShippingTotalCents !== undefined) reallocateTax(ledger, purchaseId);
+  try {
+    await ledger.flush();
+    persist();
+    scheduleMirror();
+    showSaveState("saved", "", "item-save-state");
+  } catch (err) {
+    showSaveState(navigator.onLine ? "error" : "local", `Could not reach OneDrive (${err instanceof Error ? err.message : err}). Your change is kept on this device.`, "item-save-state");
+  }
+  if (created) {
+    // The new item now shows in the list above, so draw the screen again and put the cursor back where it was heading.
+    render();
+    if (focusNext) root.querySelector<HTMLElement>(`#item-form [name="${focusNext}"]`)?.focus();
   }
 }
 
@@ -1236,17 +1337,10 @@ function purchaseView(id: string, draft = false): string {
   <h3>Items${remaining !== undefined ? ` <small>(${formatCents(remaining)} left to itemize)</small>` : ""}</h3>
   ${items.length ? `<table><thead><tr><th>Child</th><th>Description</th><th>Amount</th><th>Tax/ship</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>` : "<p>No items yet.</p>"}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
-  <h3>Add an item</h3>
+  <h3>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Item" : "Add an item"}</h3>
   ${children.length === 0 ? `<p class="warn">Add a child on the list page first.</p>` : ""}
-  <form id="item-form" class="grid" data-id="${esc(id)}">
-    <label>Child<select name="childId" required>${children.map((c) => `<option value="${esc(c.id)}"${c.id === next.childId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-    <label>Description<input name="description" required></label>
-    <label>Amount<input name="amount" inputmode="decimal" required value="${money(next.amountCents)}"></label>
-    <label>Category${categoryPicker()}</label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
-    <label>Benefit message<input name="benefitMessage" required></label>
-    <label>Service date<input name="serviceDate" type="date"></label>
-    <label>Service provider${providerBox(next.serviceProvider)}</label>
-    <button>Save and add another</button></form>
+  ${itemForm(id, next)}
+  <p><button type="button" id="add-another"${itemEdit?.purchaseId === id && itemEdit.itemId ? "" : " disabled"}>Add another</button></p>
   ${reference() ? `<details><summary>Category missing, or needs a Service Date?</summary>
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
       <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
@@ -1311,10 +1405,10 @@ function searchBox(name: string, value: string | undefined, rows: Array<{ value:
 }
 
 /** The category chooser: leads each row with the last part of the path, which is what tells categories apart. */
-function categoryPicker(): string {
+function categoryPicker(value?: string): string {
   const ref = reference();
-  if (!ref) return `<input name="categoryId" list="cats" required>`;
-  return searchBox("categoryId", undefined, ref.choices.map((c) => ({ value: c.label, title: c.path[c.path.length - 1] ?? c.label, detail: c.path.slice(0, -1).join(" - ") || undefined })), {
+  if (!ref) return `<input name="categoryId" list="cats" required value="${esc(value)}">`;
+  return searchBox("categoryId", value, ref.choices.map((c) => ({ value: c.label, title: c.path[c.path.length - 1] ?? c.label, detail: c.path.slice(0, -1).join(" - ") || undefined })), {
     placeholder: "Search categories…",
     required: true,
     empty: "No category matches. Add it below under &ldquo;Category missing&rdquo;.",
@@ -1359,13 +1453,20 @@ function providersFor(categoryText: string): Array<{ value: string; title: strin
 }
 
 /** The "Who did you pay?" box: empty until a category is chosen, then it lists that category's providers. */
-function providerBox(value: string | undefined): string {
-  return searchBox("serviceProvider", value, [], { placeholder: "Search, or type a name", empty: PROVIDER_PROMPT });
+function providerBox(value: string | undefined, categoryText?: string): string {
+  return searchBox("serviceProvider", value, categoryText ? providersFor(categoryText) : [], { placeholder: "Search, or type a name", empty: categoryText ? "No known provider for this category yet. What you type is kept as it is." : PROVIDER_PROMPT });
 }
 
 /** The category changed: refill the provider list, and drop a provider that was picked from the old category's list. */
 function categoryChanged(input: HTMLInputElement): void {
   const form = input.form;
+  // The Service date only exists on StepUp's form for categories that need one.
+  const dateLabel = form?.querySelector<HTMLElement>("[data-service-date]");
+  const ref = reference();
+  if (dateLabel && ref) {
+    const id = ref.idForLabel(input.value);
+    dateLabel.hidden = !(id && ref.category(id)?.requiresServiceDate);
+  }
   const provider = form?.elements.namedItem("serviceProvider") as HTMLInputElement | null;
   if (!provider || provider.dataset["combo"] === undefined) return;
   const rows = providersFor(input.value);
@@ -1417,36 +1518,59 @@ root.addEventListener("input", (ev) => {
     filterCombo(t);
   }
 });
-// Leaving a field of the purchase details saves them; a date picked on a phone may never blur, so a change does too.
+
+/** Saves whichever form this field belongs to: the purchase details or the item being worked on. */
+function autosaveFor(field: HTMLElement, nextName?: string): void {
+  const form = (field as HTMLInputElement).form;
+  if (form?.id === "purchase-form") void autosavePurchase(form, nextName);
+  else if (form?.id === "item-form") void autosaveItem(form, nextName);
+}
+
+// Leaving a field saves it; a date picked on a phone may never blur, so a change does too.
+let listTouch = false; // a finger is on a suggestion list (scrolling it), so the box losing focus must not close it
 root.addEventListener("focusout", (ev) => {
   const t = ev.target as HTMLInputElement;
-  const form = t.form;
-  if (form?.id !== "purchase-form" || t.tagName !== "INPUT") return;
+  if (t.dataset?.["combo"] !== undefined && !listTouch) closeCombo(t);
+  if (!["INPUT", "SELECT"].includes(t.tagName) || !t.form) return;
   const next = (ev as FocusEvent).relatedTarget as HTMLInputElement | null;
-  void autosavePurchase(form, next && next.form === form ? next.name : undefined);
+  autosaveFor(t, next && next.form === t.form ? next.name : undefined);
 });
 root.addEventListener("change", (ev) => {
   const t = ev.target as HTMLInputElement;
-  if (t.form?.id === "purchase-form" && t.type === "date") void autosavePurchase(t.form);
+  if (t.type === "date" || t.tagName === "SELECT") autosaveFor(t);
 });
 root.addEventListener("focusin", (ev) => {
   const t = ev.target as HTMLInputElement;
   if (t.dataset?.["combo"] !== undefined) filterCombo(t);
 });
-root.addEventListener("focusout", (ev) => {
-  const t = ev.target as HTMLInputElement;
-  if (t.dataset?.["combo"] !== undefined) closeCombo(t);
-});
-// pointerdown (not click) so choosing a row happens before the box loses focus and closes the list.
-root.addEventListener("pointerdown", (ev) => {
-  const li = (ev.target as HTMLElement).closest<HTMLLIElement>(".combo-list li[data-value]");
-  if (!li) return;
-  ev.preventDefault();
+
+/** Puts a suggestion in its box and saves. */
+function pickRow(li: HTMLElement): void {
   const input = li.closest(".combo")!.querySelector<HTMLInputElement>("input")!;
   input.value = li.dataset["value"]!;
   input.dataset["picked"] = "1";
   closeCombo(input);
   if (input.name === "categoryId") categoryChanged(input);
+  autosaveFor(input);
+}
+
+// A mouse keeps the box focused while it picks. A finger must not: pressing on the list is how it scrolls, so nothing is
+// picked until the tap is finished (the click), and the list stays open while it is being touched.
+root.addEventListener("pointerdown", (ev) => {
+  if (!(ev.target as HTMLElement).closest(".combo-list")) return;
+  if (ev.pointerType === "mouse") ev.preventDefault();
+  else listTouch = true;
+});
+document.addEventListener("pointerdown", (ev) => {
+  if ((ev.target as HTMLElement).closest(".combo")) return;
+  listTouch = false;
+  root.querySelectorAll<HTMLInputElement>("input[data-combo]").forEach(closeCombo);
+});
+root.addEventListener("click", (ev) => {
+  const li = (ev.target as HTMLElement).closest<HTMLLIElement>(".combo-list li[data-value]");
+  if (!li) return;
+  listTouch = false;
+  pickRow(li);
 });
 root.addEventListener("keydown", (ev) => {
   const input = ev.target as HTMLInputElement;
@@ -1463,10 +1587,7 @@ root.addEventListener("keydown", (ev) => {
     next?.scrollIntoView({ block: "nearest" });
   } else if (ev.key === "Enter" && !list.hidden && at >= 0) {
     ev.preventDefault();
-    input.value = visible[at]!.dataset["value"]!;
-    input.dataset["picked"] = "1";
-    closeCombo(input);
-    if (input.name === "categoryId") categoryChanged(input);
+    pickRow(visible[at]!);
   } else if (ev.key === "Escape") closeCombo(input);
 });
 
@@ -1536,6 +1657,7 @@ function render(): void {
 function go(next: View): void {
   view = next;
   replacingReceipt = undefined;
+  itemEdit = undefined;
   render();
 }
 
@@ -1640,6 +1762,11 @@ root.addEventListener("click", async (ev) => {
     URL.revokeObjectURL(url);
     status = "Saved category-edits.json. Send it to the maintainers (or open an issue on the project) so everyone gets these fixes.";
     render();
+  } else if (t.id === "add-another" && view.name === "purchase") {
+    writeItemDraft(view.id, undefined);
+    itemEdit = { purchaseId: view.id };
+    render();
+    root.querySelector<HTMLElement>('#item-form [name="description"]')?.focus();
   } else if (t.id === "new-child") {
     addingChild = true;
     render();
@@ -1690,7 +1817,7 @@ root.addEventListener("click", async (ev) => {
   } else if (d["statement"]) {
     view = { name: "statement", id: d["statement"] };
     render();
-    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the receipt…");
+    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
   } else if (t.id === "start-scan") {
     const now = new Date();
     const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
@@ -1747,7 +1874,7 @@ root.addEventListener("click", async (ev) => {
     await guarded(() => readReceipt(d["readReceipt"]!), "Reading the receipt…");
     persist();
   } else if (d["readStatement"]) {
-    await guarded(() => readStatement(d["readStatement"]!), "Reading the receipt…");
+    await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
     persist();
   } else if (t.id === "save-redaction") {
     await guarded(saveRedaction, "Saving the redacted copy…");
@@ -1809,6 +1936,10 @@ root.addEventListener("submit", async (ev) => {
   const form = ev.target as HTMLFormElement;
   if (form.id === "purchase-form") {
     await autosavePurchase(form); // Enter in a field saves like leaving it does
+    return;
+  }
+  if (form.id === "item-form") {
+    await autosaveItem(form);
     return;
   }
   if (form.id === "pick-link") {
@@ -1896,16 +2027,6 @@ root.addEventListener("submit", async (ev) => {
   } else if (form.id === "add-child") {
     addingChild = false;
     ledger.set("child", newId("child"), { name: val(form, "name"), ...(val(form, "scholarship") ? { scholarship: val(form, "scholarship") } : {}) }, { label: "child.created" });
-  } else if (form.id === "item-form") {
-    addItem(ledger, form.dataset["id"]!, {
-      childId: val(form, "childId"),
-      description: val(form, "description"),
-      amountCents: toCents(val(form, "amount")),
-      ...categoryFields(val(form, "categoryId")),
-      benefitMessage: val(form, "benefitMessage"),
-      serviceDate: val(form, "serviceDate") || undefined,
-      serviceProvider: val(form, "serviceProvider") || undefined,
-    });
   }
   await save();
 });
