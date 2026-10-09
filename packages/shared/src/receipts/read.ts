@@ -71,9 +71,15 @@ function readPayment(lines: string[], text: string): { evidence?: PaymentEvidenc
   return { ...(best ? { evidence: best } : {}), ...(last4 ? { last4 } : {}) };
 }
 
+/** Mail services and the like: they show up on a printed email (the sender's address, the page header) but are never who was paid. */
+const NOT_A_VENDOR = /^(www|mail|email|noreply|gmail|googlemail|google|yahoo|outlook|hotmail|live|msn|icloud|me|aol|proton|protonmail|comcast|verizon|att)$/i;
+
 function readVendor(lines: string[], text: string): string | undefined {
-  const domain = /\b(?:www\.)?([a-z0-9][a-z0-9-]{2,})\.(?:com|org|net|edu)\b/i.exec(lines.slice(0, 10).join("\n"));
-  if (domain && !/^(www|mail|email|noreply)$/i.test(domain[1]!)) return domain[1]![0]!.toUpperCase() + domain[1]!.slice(1).toLowerCase();
+  const head = lines.slice(0, 10).join("\n");
+  for (const m of head.matchAll(/(?<![\w.-])(?:[a-z0-9-]+\.)*([a-z0-9][a-z0-9-]{2,})\.(?:com|org|net|edu)\b/gi)) {
+    if (NOT_A_VENDOR.test(m[1]!)) continue;
+    return m[1]![0]!.toUpperCase() + m[1]!.slice(1).toLowerCase();
+  }
   const candidate = lines.slice(0, 6).find((l) => /^[A-Z][A-Za-z]{2}/.test(l) && l.length <= 40 && !/receipt|invoice|order|page|thank|date|total|tax|details|transaction|statement|summary|confirmation|your |\d{3}|^[^A-Za-z]/i.test(l));
   return candidate && text ? candidate : undefined;
 }

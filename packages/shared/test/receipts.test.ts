@@ -73,6 +73,12 @@ describe("readReceiptText", () => {
     expect(readReceiptText("Transaction details X\nYouTube Premium\nAug 3, 2025\nTotal $26.12").vendor).toBe("YouTube Premium");
   });
 
+  it("does not take a mail service from a printed email for the vendor", () => {
+    const printed = "Gmail - Your order\nhttps://mail.google.com/mail/u/0/\nFrom: Acme Tutoring <billing@acmetutoring.com>\nTo: jane@gmail.com\nTotal $20.00";
+    expect(readReceiptText(printed).vendor).not.toMatch(/gmail|google/i);
+    expect(readReceiptText("Order confirmation\nsomeone@gmail.com\nStar Learning Supply\nTotal $5.00").vendor).toBe("Star Learning Supply");
+  });
+
   it("returns only what it found", () => {
     expect(readReceiptText("hello world")).toEqual({});
   });
