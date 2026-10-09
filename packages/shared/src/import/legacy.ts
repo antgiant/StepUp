@@ -7,6 +7,7 @@ import { evaluateItem, type CategoryInfo, type RulesContext } from "../rules/rea
 import { parseCategoryLevels } from "../rules.js";
 import { categoryIdForPath } from "../reference/categories.js";
 import { hashString } from "../util/hash.js";
+import { childIdForName } from "../entry/actions.js";
 
 /** Imports are stamped well in the past so any later human edit in the app always wins over imported values. */
 const IMPORT_WALL = 1_600_000_000_000;
@@ -130,7 +131,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
 
   const childIds = new Map<string, string>();
   for (const c of input.children) {
-    const id = `child-${slug(c.name)}`;
+    const id = childIdForName(c.name);
     childIds.set(c.name.trim().toLowerCase(), id);
     emit("child", id, clean({ name: c.name, scholarship: c.scholarship, capCents: c.capDollars === undefined ? undefined : Math.round(c.capDollars * 100) }), "legacy.child");
   }

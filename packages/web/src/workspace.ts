@@ -3,6 +3,9 @@ import {
   Ledger,
   OneDriveEventStore,
   copyYearSetup,
+  copyLegacyChildren,
+  CHILDREN_TABLE,
+  findChild,
   YEAR_FOLDER_RE,
   GraphError,
   ensureFolder,
@@ -116,14 +119,40 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const store = new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   await ledger.refresh();
-  const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, ledgerYears, year.label, clientId);
+  const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, years.filter((y) => y.kind !== "empty"), year.label, clientId);
   return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carried };
+}
+
+/** Reads the students (name and program) from an old year's tracking workbook, read-only, through OneDrive's Excel service. */
+async function readLegacyChildren(driveId: string, year: YearInfo): Promise<Array<{ name: string; scholarship?: string }>> {
+  if (!year.workbookName) return [];
+  const book = await findChild(driveId, year.folderId, year.workbookName);
+  if (!book) return [];
+  const base = `/drives/${driveId}/items/${book.id}/workbook/tables/${CHILDREN_TABLE}`;
+  const head = await graphJson<{ values: unknown[][] }>(`${base}/headerRowRange?$select=values`);
+  const rows = await graphJson<{ value: Array<{ values: unknown[][] }> }>(`${base}/rows?$select=values`);
+  const headers = (head.values[0] ?? []).map((h) => String(h).trim());
+  const nameAt = headers.indexOf("Children");
+  const programAt = headers.indexOf("Scholarship");
+  if (nameAt < 0) return [];
+  return rows.value
+    .map((r) => ({ name: String(r.values[0]?.[nameAt] ?? "").trim(), scholarship: programAt >= 0 ? String(r.values[0]?.[programAt] ?? "").trim() : "" }))
+    .filter((c) => c.name)
+    .map((c) => ({ name: c.name, ...(c.scholarship ? { scholarship: c.scholarship } : {}) }));
 }
 
 /** A new year starts empty: copy the students, payment methods and tax rate from the most recent earlier year that has students (read-only on that year). */
 async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo[], current: string, clientId: string, force = false): Promise<{ children: number; paymentMethods: number }> {
   const earlier = ledgerYears.filter((y) => y.label < current).sort((a, b) => b.label.localeCompare(a.label));
   for (const y of earlier) {
+    if (y.kind === "legacy-excel") {
+      // A year kept in the old Excel workbook has no ledger; its students are in the workbook's children table.
+      const kids = await readLegacyChildren(pointer.driveId, y).catch(() => []);
+      if (!kids.length) continue;
+      const children = copyLegacyChildren(ledger, kids);
+      if (!force || ledger.state.settings["year"]?.year === undefined) ledger.set("setting", "year", { year: current }, { label: "setting.yearNamed" });
+      return { children, paymentMethods: 0 };
+    }
     const folders = await openLedgerFolders(pointer.driveId, y.folderId);
     if (!folders) continue;
     const past = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
@@ -141,12 +170,12 @@ async function carryOver(pointer: Pointer, ledger: Ledger, ledgerYears: YearInfo
  * what is missing, so it is safe to run again. The caller flushes the ledger.
  */
 export async function copyFromPreviousYear(ws: OpenWorkspace, clientId: string): Promise<{ children: number; paymentMethods: number }> {
-  const ledgerYears = ws.years.filter((y) => y.kind === "ledger");
+  const ledgerYears = ws.years.filter((y) => y.kind !== "empty");
   return carryOver(ws.pointer, ws.ledger, ledgerYears, ws.year.label, clientId, true);
 }
 
 /** True when an earlier school year exists to copy from. */
-export const hasEarlierYear = (ws: OpenWorkspace): boolean => ws.years.some((y) => y.kind === "ledger" && y.label < ws.year.label);
+export const hasEarlierYear = (ws: OpenWorkspace): boolean => ws.years.some((y) => y.kind !== "empty" && y.label < ws.year.label);
 
 /** Builds the workspace from what this browser remembered: no network, so the first paint is instant. Call `revalidate` next. */
 export function openFromCache(pointer: Pointer, clientId: string, rec: WorkspaceCache): OpenWorkspace | undefined {

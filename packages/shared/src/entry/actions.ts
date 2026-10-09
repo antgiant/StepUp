@@ -139,6 +139,21 @@ export function copyChildren(ledger: Ledger, from: LedgerState): number {
   return added;
 }
 
+/** The id a student gets when they come from an old workbook; the same name always gives the same id, on every device and in the legacy import. */
+export const childIdForName = (name: string): string => `child-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+
+/** Adds students read from an old Excel year (name and program only). Existing ones are left alone. Returns how many were added. */
+export function copyLegacyChildren(ledger: Ledger, children: Array<{ name: string; scholarship?: string }>): number {
+  let added = 0;
+  for (const c of children) {
+    const id = childIdForName(c.name);
+    if (ledger.state.children[id]) continue;
+    ledger.set("child", id, clean({ name: c.name, scholarship: c.scholarship }), { label: "child.carriedOver" });
+    added++;
+  }
+  return added;
+}
+
 /**
  * Sets up a new year from an earlier one: the students (see `copyChildren`), the payment methods (cards and the like
  * carry over; their statements do not), and the tax-estimate rate. Nothing existing is overwritten.

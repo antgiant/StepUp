@@ -219,7 +219,8 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
 
 /** A receipt being photographed page by page. Nothing leaves this device until it is saved. */
 /** `purchaseId`: the purchase the scan is for (the PDF becomes its receipt, or extra documentation if it has one). */
-let scan: { name: string; pages: ScanPage[]; purchaseId?: string } | undefined;
+let scan: { name: string; pages: ScanPage[]; purchaseId?: string; role?: DocRole } | undefined;
+type DocRole = "receipt" | "additional";
 
 function discardScan(): void {
   for (const p of scan?.pages ?? []) URL.revokeObjectURL(p.url);
@@ -383,19 +384,19 @@ async function flushQueuedUploads(): Promise<void> {
 }
 
 /**
- * Puts an uploaded file on a purchase: its receipt if it has none, otherwise extra documentation. A purchase that is
- * still a blank draft is created here, with the file as its receipt.
+ * Puts a file on a purchase as its receipt (replacing any earlier one) or as additional documentation. A purchase that
+ * is still a blank draft is created here, with the file as its receipt.
  */
-function attachToPurchase(purchaseId: string, docId: string): void {
+function attachToPurchase(purchaseId: string, docId: string, role: DocRole = "receipt"): void {
   const p = ledger.state.purchases[purchaseId];
   if (!p) {
     ledger.set("purchase", purchaseId, { receiptDocumentId: docId }, { label: "purchase.created" });
     if (view.name === "purchase" && view.id === purchaseId) view = { name: "purchase", id: purchaseId };
-  } else if (!p.receiptDocumentId) attachAsReceipt(ledger, purchaseId, docId);
+  } else if (role === "receipt") attachAsReceipt(ledger, purchaseId, docId, { replace: true });
   else attachAdditional(ledger, { kind: "purchase", id: purchaseId }, docId);
 }
 
-async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: string): Promise<void> {
+async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: string, role: DocRole = "receipt"): Promise<void> {
   if (!workspace || files.length === 0) return;
   await guarded(async () => {
     let added = 0;
@@ -411,7 +412,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
       else if (result.status === "queued") waiting++;
       else dupes.push(result.name);
       if (purchaseId && result.documentId && result.status !== "queued") {
-        attachToPurchase(purchaseId, result.documentId);
+        attachToPurchase(purchaseId, result.documentId, role);
         attached++;
       }
     }
@@ -664,7 +665,7 @@ function connectionBar(): string {
   if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    <button id="check-files">Check for new files</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
+    <button id="check-files">Refresh data</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
 }
 
 /** The year after the newest one we know ("2025-2026" -> "2026-2027"); with none, the school year that includes today. */
@@ -1111,7 +1112,7 @@ function purchaseView(id: string, draft = false): string {
     : "";
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
-  <h2>Receipt${doc ? `: ${esc(doc.filename)}` : " (no file yet)"}</h2>
+  <h2>${doc ? `Receipt: ${esc(doc.filename)}` : "Purchase (no file yet)"}</h2>
   ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}
   ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
@@ -1144,45 +1145,119 @@ function purchaseView(id: string, draft = false): string {
   <hr><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p>`;
 }
 
-/** Every way to add documentation, in one place: new files, photos, scans, files already uploaded, or a file kept for later. */
+/**
+ * Documentation, in two clearly separate parts. The receipt is the one document showing what was bought and what was
+ * paid for it; additional documentation is anything else that backs the purchase up (a card statement, an order email,
+ * a letter). Each part has its own ways to add a file.
+ */
 function documentation(purchaseId: string, receiptId: string | undefined, draft = false): string {
   const state = ledger.state;
   const online = Boolean(workspace);
+  const nameOf = (id: string | undefined) => esc(state.documents[id ?? ""]?.filename ?? "file");
   const extras = Object.values(state.additionalDocs).filter((a) => a.ownerKind === "purchase" && a.ownerId === purchaseId);
-  const attachedList = extras.length ? `<p class="note">Also attached: ${extras.map((a) => esc(state.documents[a.documentId ?? ""]?.filename ?? "file")).join(", ")}</p>` : "";
   const used = new Set<string>([...Object.values(state.purchases).flatMap((q) => (q.receiptDocumentId ? [q.receiptDocumentId] : [])), ...Object.values(state.additionalDocs).flatMap((a) => (a.documentId ? [a.documentId] : []))]);
   const hasCopy = new Set(Object.values(state.documents).flatMap((d) => (d.derivedFrom ? [d.derivedFrom] : [])));
   const loose = Object.values(state.documents).filter((d) => !used.has(d.id) && !d.derivedFrom && !hasCopy.has(d.id)).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
-  const role = receiptId ? "extra documentation" : "the receipt";
-  const looseRows = loose.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}">Use as ${role}</button></span></li>`);
-  const own = online
-    ? `<p class="row"><label class="btn">Add files<input type="file" id="upload" data-purchase="${esc(purchaseId)}" multiple accept="application/pdf,image/*" hidden></label>
-        <label class="btn">Take a photo<input type="file" id="photo" data-purchase="${esc(purchaseId)}" accept="image/*" capture="environment" hidden></label>
-        <button id="start-scan" data-for-purchase="${esc(purchaseId)}">Scan (several pages)</button></p>
-        <p class="row"><label class="btn">Attach a file with no purchase yet<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>Kept in your unattached files on the list page.</small></p>`
+  const adders = (role: DocRole) => online
+    ? `<p class="row"><label class="btn">Add files<input type="file" id="upload" data-purchase="${esc(purchaseId)}" data-role="${role}" multiple accept="application/pdf,image/*" hidden></label>
+        <label class="btn">Take a photo<input type="file" id="photo" data-purchase="${esc(purchaseId)}" data-role="${role}" accept="image/*" capture="environment" hidden></label>
+        <button id="start-scan" data-for-purchase="${esc(purchaseId)}" data-role="${role}">Scan (several pages)</button></p>`
     : `<p class="note">Sign in with Microsoft to add files.</p>`;
-  return `<section><h3>Documentation</h3>
-    <p class="note">${receiptId ? "A receipt is attached. New files you add here become extra documentation (for example a card statement)." : "The first file you add becomes this purchase's receipt."}${draft ? " Adding a file saves the purchase." : ""}</p>
-    ${own}${attachedList}
-    ${looseRows.length ? `<details><summary>Use a file you already added (${looseRows.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : ""}</section>`;
+  const pick = (role: DocRole, label: string) => loose.length
+    ? `<details><summary>Use a file you already added (${loose.length})</summary><ul class="queue">${loose.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}" data-role="${role}">${label}</button></span></li>`).join("")}</ul></details>`
+    : "";
+  const receiptPart = `<h4>Receipt</h4>
+    <p class="note">The one document that shows what you bought and what it cost: an order confirmation, invoice or store receipt.${receiptId ? " Adding another one here replaces it." : ""}</p>
+    ${receiptId ? `<p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>` : `<p class="warn">No receipt yet.</p>`}
+    ${adders("receipt")}${pick("receipt", receiptId ? "Replace the receipt with this" : "Use as the receipt")}`;
+  const extraPart = draft
+    ? `<h4>Additional documentation</h4><p class="note">Save the purchase details above (or add a receipt) first; then you can add more documentation here.</p>`
+    : `<h4>Additional documentation</h4>
+    <p class="note">Anything else that backs this purchase up and is not the receipt itself: a card statement showing the payment, an email, a letter. It is optional, and you can add several.</p>
+    ${extras.length ? `<ul>${extras.map((a) => `<li>${nameOf(a.documentId)}</li>`).join("")}</ul>` : `<p><small>None yet.</small></p>`}
+    ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
+  return `<section><h3>Documentation</h3>${receiptPart}${extraPart}
+    ${online ? `<h4>Not for a purchase yet</h4><p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits in Unattached files on the list page until you attach it.</small></p>` : ""}</section>`;
 }
 
 /**
- * The category chooser. With the shared list it is a drop-down grouped by top-level category, so each option starts with
- * what tells it apart (long full paths in a type-ahead list get cut off and many look identical). Without the list,
- * a free-text box is all there is.
+ * The category chooser: a search box with a list under it that narrows as you type (every word must appear somewhere in
+ * the full path). Each row leads with the last part of the path, which is what tells options apart, and shows the rest
+ * smaller beneath. Picking a row puts the full path in the box. Without the shared list it is a plain text box.
  */
 function categoryPicker(): string {
   const ref = reference();
   if (!ref) return `<input name="categoryId" list="cats" required>`;
-  const groups = new Map<string, Array<{ label: string; text: string }>>();
-  for (const c of ref.choices) {
-    const top = c.path[0] ?? c.label;
-    groups.set(top, [...(groups.get(top) ?? []), { label: c.label, text: c.path.slice(1).join(" - ") || top }]);
-  }
-  const body = [...groups.entries()].map(([top, opts]) => `<optgroup label="${esc(top)}">${opts.map((o) => `<option value="${esc(o.label)}">${esc(o.text)}</option>`).join("")}</optgroup>`).join("");
-  return `<select name="categoryId" required><option value="" selected disabled>Choose a category</option>${body}</select>`;
+  const rows = ref.choices.map((c) => {
+    const leaf = c.path[c.path.length - 1] ?? c.label;
+    const rest = c.path.slice(0, -1).join(" - ");
+    return `<li role="option" data-value="${esc(c.label)}" data-hay="${esc(c.label.toLowerCase())}"><strong>${esc(leaf)}</strong>${rest ? `<small>${esc(rest)}</small>` : ""}</li>`;
+  });
+  return `<span class="combo"><input name="categoryId" required autocomplete="off" data-combo placeholder="Search categories…" role="combobox" aria-expanded="false">
+    <ul class="combo-list" role="listbox" hidden>${rows.join("")}<li class="combo-empty" hidden>No category matches. Add it below under &ldquo;Category missing&rdquo;.</li></ul></span>`;
 }
+
+/** Shows the rows matching what was typed; returns how many. */
+function filterCombo(input: HTMLInputElement): void {
+  const list = input.nextElementSibling as HTMLUListElement;
+  const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0;
+  list.querySelectorAll<HTMLLIElement>("li[data-hay]").forEach((li) => {
+    const hit = words.every((w) => li.dataset["hay"]!.includes(w));
+    li.hidden = !hit;
+    li.classList.remove("active");
+    if (hit) shown++;
+  });
+  list.querySelector<HTMLElement>(".combo-empty")!.hidden = shown > 0;
+  list.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+
+function closeCombo(input: HTMLInputElement): void {
+  (input.nextElementSibling as HTMLElement).hidden = true;
+  input.setAttribute("aria-expanded", "false");
+}
+
+root.addEventListener("input", (ev) => {
+  const t = ev.target as HTMLInputElement;
+  if (t.dataset?.["combo"] !== undefined) filterCombo(t);
+});
+root.addEventListener("focusin", (ev) => {
+  const t = ev.target as HTMLInputElement;
+  if (t.dataset?.["combo"] !== undefined) filterCombo(t);
+});
+root.addEventListener("focusout", (ev) => {
+  const t = ev.target as HTMLInputElement;
+  if (t.dataset?.["combo"] !== undefined) closeCombo(t);
+});
+// pointerdown (not click) so choosing a row happens before the box loses focus and closes the list.
+root.addEventListener("pointerdown", (ev) => {
+  const li = (ev.target as HTMLElement).closest<HTMLLIElement>(".combo-list li[data-value]");
+  if (!li) return;
+  ev.preventDefault();
+  const input = li.closest(".combo")!.querySelector<HTMLInputElement>("input")!;
+  input.value = li.dataset["value"]!;
+  closeCombo(input);
+});
+root.addEventListener("keydown", (ev) => {
+  const input = ev.target as HTMLInputElement;
+  if (input.dataset?.["combo"] === undefined) return;
+  const list = input.nextElementSibling as HTMLUListElement;
+  const visible = [...list.querySelectorAll<HTMLLIElement>("li[data-hay]")].filter((li) => !li.hidden);
+  const at = visible.findIndex((li) => li.classList.contains("active"));
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    ev.preventDefault();
+    if (list.hidden) filterCombo(input);
+    const next = visible[(at + (ev.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length];
+    visible.forEach((li) => li.classList.remove("active"));
+    next?.classList.add("active");
+    next?.scrollIntoView({ block: "nearest" });
+  } else if (ev.key === "Enter" && !list.hidden && at >= 0) {
+    ev.preventDefault();
+    input.value = visible[at]!.dataset["value"]!;
+    closeCombo(input);
+  } else if (ev.key === "Escape") closeCombo(input);
+});
 
 /** A picked/typed label becomes the StepUp category id (and its path); anything else is kept as typed and flagged as unknown. */
 function categoryFields(text: string): { categoryId: string; categoryPath?: string[] } {
@@ -1367,7 +1442,7 @@ root.addEventListener("click", async (ev) => {
     if (!result.ok) alert(`Could not attach: ${result.reason}`);
     await save();
   } else if (d["useDoc"]) {
-    attachToPurchase(d["purchase"]!, d["useDoc"]);
+    attachToPurchase(d["purchase"]!, d["useDoc"], d["role"] === "additional" ? "additional" : "receipt");
     await save();
   } else if (d["statement"]) {
     view = { name: "statement", id: d["statement"] };
@@ -1376,7 +1451,7 @@ root.addEventListener("click", async (ev) => {
   } else if (t.id === "start-scan") {
     const now = new Date();
     const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
-    scan = { name: `Scan ${stamp}.pdf`, pages: [], ...(d["forPurchase"] ? { purchaseId: d["forPurchase"] } : {}) };
+    scan = { name: `Scan ${stamp}.pdf`, pages: [], ...(d["forPurchase"] ? { purchaseId: d["forPurchase"], role: d["role"] === "additional" ? "additional" as const : "receipt" as const } : {}) };
     render();
   } else if (t.id === "scan-cancel") {
     discardScan();
@@ -1547,7 +1622,7 @@ root.addEventListener("submit", async (ev) => {
       const body = new Blob([bytes as BlobPart], { type: "application/pdf" });
       const result = await uploadOrQueue({ name, blob: body, sha256: (await sha256Hex(body)) || undefined });
       if (draft.purchaseId && result.documentId && result.status !== "queued") {
-        attachToPurchase(draft.purchaseId, result.documentId);
+        attachToPurchase(draft.purchaseId, result.documentId, draft.role);
         await ledger.flush();
       }
       status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s))${draft.purchaseId ? " on this purchase" : " to your unattached files"}.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
@@ -1633,7 +1708,7 @@ root.addEventListener("change", async (ev) => {
     const files = [...input.files];
     const purchaseId = input.dataset["purchase"];
     input.value = "";
-    await uploadFiles(files, input.id === "photo", purchaseId);
+    await uploadFiles(files, input.id === "photo", purchaseId, input.dataset["role"] === "additional" ? "additional" : "receipt");
     return;
   }
   if (input.id !== "import" || !input.files?.[0]) return;
