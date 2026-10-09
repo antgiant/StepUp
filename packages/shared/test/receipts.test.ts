@@ -79,6 +79,11 @@ describe("readReceiptText", () => {
     expect(readReceiptText("Order confirmation\nsomeone@gmail.com\nStar Learning Supply\nTotal $5.00").vendor).toBe("Star Learning Supply");
   });
 
+  it("prefers the order id over a receipt or confirmation number", () => {
+    expect(readReceiptText("Acme Shop\nReceipt #R-99812\nConfirmation: C77410\nOrder ID: 5521-8890\nTotal $9.00").invoiceNo).toBe("5521-8890");
+    expect(readReceiptText("Acme Shop\nReceipt #R-99812\nTotal $9.00").invoiceNo).toBe("R-99812");
+  });
+
   it("returns only what it found", () => {
     expect(readReceiptText("hello world")).toEqual({});
   });

@@ -95,8 +95,10 @@ export function readReceiptText(text: string): ReceiptReading {
   const dated = lines.filter((l) => /order|date|placed|purchased|invoice|ordered/i.test(l)).map(dateIn).find(Boolean) ?? lines.map(dateIn).find(Boolean);
   if (dated) out.date = dated;
 
-  // "Order #112-...", "Invoice #A-10045": the id must contain a digit ("Order Placed" is not an id).
-  const invoice = [...text.matchAll(/(?:order|invoice|receipt|confirmation)\s*(?:#|no\.?|number|id)?\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{3,})/gi)].map((m) => m[1]!).find((id) => /\d/.test(id));
+  // "Order #112-...", "Invoice #A-10045": the id must contain a digit ("Order Placed" is not an id). An order id wins over
+  // the other labels (receipt, confirmation...) because that is the number the seller and StepUp know the purchase by.
+  const idAfter = (label: string) => [...text.matchAll(new RegExp(`(?:${label})\\s*(?:#|no\\.?|number|id)?\\s*[:#]?\\s*([A-Za-z0-9][A-Za-z0-9-]{3,})`, "gi"))].map((m) => m[1]!).find((id) => /\d/.test(id));
+  const invoice = idAfter("order") ?? idAfter("invoice|receipt|confirmation");
   if (invoice) out.invoiceNo = invoice;
 
   const total = readTotal(lines);
