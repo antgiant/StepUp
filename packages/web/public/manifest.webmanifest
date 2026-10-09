@@ -1,6 +1,6 @@
 {
   "name": "Step Up Helper",
-  "short_name": "Step Up",
+  "short_name": "Step Up Helper",
   "description": "Enter and track Step Up For Students reimbursements.",
   "start_url": "./",
   "scope": "./",
