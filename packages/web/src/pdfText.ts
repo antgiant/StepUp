@@ -1,3 +1,4 @@
+import "./streamPolyfill.js";
 import { ocrCanvas } from "./ocr.js";
 import { buildImagePdf, positionedLines, type ImagePage, type PositionedLine, type RedactionPlan, type TextItem } from "@step-up/shared/web";
 
