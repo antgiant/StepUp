@@ -51,8 +51,8 @@ details.menu { position: relative; background: none; border: 0; padding: 0; marg
 details.menu > summary { list-style: none; font-weight: 400; }
 details.menu > summary::-webkit-details-marker { display: none; }
 details.menu > summary::after { content: " \25BE"; }
-.menu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 190px; display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
-.menu-panel > * { text-align: left; width: 100%; }
+.menu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 190px; display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); max-height: 65vh; max-height: 65dvh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.menu-panel > * { text-align: left; width: 100%; flex: none; }
 
 .queue { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .q, .queue > li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }

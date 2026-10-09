@@ -873,16 +873,15 @@ function queueView(): string {
   const looseList = loose.length ? `<details><summary>Unattached files (${loose.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : "";
 
   // One row per purchase: receipts with no items, and purchases with items that cannot be filed yet.
-  const byPurchase = new Map<string, { title: string; reasons: string[]; needsItems: boolean }>();
+  const byPurchase = new Map<string, { title: string; reasons: string[] }>();
   for (const e of all) {
     if (e.kind === "unattached-document" || !e.purchaseId) continue;
-    const row = byPurchase.get(e.purchaseId) ?? { title: purchaseLabel(e.purchaseId), reasons: [], needsItems: false };
-    if (e.kind === "purchase-needs-items") row.needsItems = true;
+    const row = byPurchase.get(e.purchaseId) ?? { title: purchaseLabel(e.purchaseId), reasons: [] };
     for (const r of e.kind === "item-blocked" ? e.reasons.map((x) => `${e.title}: ${x}`) : e.reasons) if (!row.reasons.includes(r)) row.reasons.push(r);
     byPurchase.set(e.purchaseId, row);
   }
   if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${looseList}${archivedList}`;
-  const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><div><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></div><div class="actions"><button data-open="${esc(id)}">Open</button>${r.needsItems ? `<button data-archive="${esc(id)}">Archive</button>` : ""}</div></li>`);
+  const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><div><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></div><div class="actions"><button data-open="${esc(id)}">Open</button></div></li>`);
   return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${looseList}${archivedList}`;
 }
 

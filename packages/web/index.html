@@ -4,9 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://*.files.1drv.com https://*.microsoftpersonalcontent.com https://*.sharepoint.com; frame-src https://login.microsoftonline.com blob:" />
+    <!-- Safari ignores SVG tab icons and does not always fall back, so the bitmap icons come first and the SVG last. -->
+    <link rel="icon" href="./favicon.ico" sizes="any" type="image/x-icon">
+    <link rel="icon" href="./favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="icon" href="./favicon-16.png" sizes="16x16" type="image/png">
     <link rel="icon" href="./icon.svg" type="image/svg+xml">
-    <link rel="icon" href="./favicon.ico" sizes="48x48 32x32 16x16">
-    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
     <link rel="manifest" href="./manifest.webmanifest">
     <meta name="theme-color" content="#3b5bdb">
     <title>Step Up Helper</title>
