@@ -1862,6 +1862,9 @@ let updateReady = false;
 
 let authReady = false;
 
+/** On every screen, including the one before anyone has chosen where their data lives. */
+const footer = (): string => `<footer class="site-footer"><a href="./privacy.html">Privacy policy</a> &middot; <a href="./terms.html">Terms of use</a></footer>`;
+
 /** Shown instead of the whole app until the person says where their data lives. */
 function chooserView(): string {
   return `<main class="gate"><section class="card gate-card">
@@ -1872,7 +1875,7 @@ function chooserView(): string {
       <button id="sign-in" class="primary big">Sign in with Microsoft<small>Stored in your OneDrive</small></button>
       <button id="use-local" class="big">Local only<small>Stays in this browser; no account</small></button>
     </div>
-  </section></main>`;
+  </section></main>${footer()}`;
 }
 
 function render(): void {
@@ -1887,12 +1890,12 @@ function render(): void {
     const v = view.name === "statement" ? "statements" : view.name;
     const read = ctx();
     const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : v === "reports" ? legacyReportsView(l, read) : legacyQueueView(l);
-    root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page;
+    root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page + footer();
     filterLegacyList(true);
     return;
   }
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" || view.name === "reports" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
-  root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body;
+  root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body + footer();
   filterLegacyList(true);
   scheduleClaimPoll();
 }
