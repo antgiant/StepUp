@@ -11,9 +11,29 @@ const msal = new PublicClientApplication({
     authority: "https://login.microsoftonline.com/common",
     redirectUri: location.origin + "/",
   },
-  // Tokens stay in this tab's session storage rather than long-lived local storage.
-  cache: { cacheLocation: "sessionStorage" },
+  // Local storage, so the sign-in survives closing the installed app (session storage is cleared every time a phone
+  // closes it, which meant signing in on every launch). Microsoft still expires a browser app's refresh token after
+  // about a day, so an occasional sign-in remains.
+  cache: { cacheLocation: "localStorage" },
 });
+
+/** Who signed in last, so the next sign-in goes straight to that account instead of asking which one. */
+const HINT_KEY = "stepup.lastAccount";
+const readHint = (): string | undefined => {
+  try {
+    return localStorage.getItem(HINT_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+const writeHint = (username: string | undefined): void => {
+  try {
+    if (username) localStorage.setItem(HINT_KEY, username);
+    else localStorage.removeItem(HINT_KEY);
+  } catch {
+    /* storage blocked: the account picker just shows again */
+  }
+};
 
 let account: AccountInfo | null = null;
 
@@ -24,6 +44,7 @@ export async function initAuth(): Promise<AccountInfo | null> {
   account = result?.account ?? msal.getAllAccounts()[0] ?? null;
   if (account) {
     msal.setActiveAccount(account);
+    writeHint(account.username);
     setTokenProvider(async () => {
       try {
         return (await msal.acquireTokenSilent({ scopes: SCOPES, account: account! })).accessToken;
@@ -36,5 +57,11 @@ export async function initAuth(): Promise<AccountInfo | null> {
   return account;
 }
 
-export const signIn = () => msal.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
-export const signOut = () => msal.logoutRedirect({ account: account ?? undefined });
+export const signIn = () => {
+  const hint = readHint();
+  return msal.loginRedirect(hint ? { scopes: SCOPES, loginHint: hint } : { scopes: SCOPES, prompt: "select_account" });
+};
+export const signOut = () => {
+  writeHint(undefined); // signing out is how a different account is chosen next time
+  return msal.logoutRedirect({ account: account ?? undefined });
+};
