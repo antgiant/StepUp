@@ -297,6 +297,8 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
         benefitMessage: str(v["Benefit Message"]),
         itemUrl: str(v["Item/Service URL"]),
         ...overrides,
+        // In the old workbook a person set this status by hand, so it carries over as their decision.
+        readyToSubmit: status === UNFILED_READY ? true : undefined,
         hold,
         holdNote: hold ? notes.slice(0, 300) : undefined,
         preAuthId: str(v["Pre-Auth #"]),

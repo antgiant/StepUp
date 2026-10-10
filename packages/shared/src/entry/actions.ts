@@ -80,6 +80,12 @@ export function updateItem(ledger: Ledger, itemId: string, input: NewItemInput):
   if (Object.keys(fields).length) ledger.set("item", itemId, fields, { label: "item.edited" });
 }
 
+/** A person's decision that an item is ready to submit (or, with `ready = false`, that it is not). Never set by the app on its own. */
+export function setReadyToSubmit(ledger: Ledger, itemId: string, ready = true): void {
+  if (!ledger.state.items[itemId]) return;
+  ledger.set("item", itemId, { readyToSubmit: ready }, { label: ready ? "item.markedReady" : "item.unmarkedReady" });
+}
+
 /** Hides a purchase and its items everywhere (queue, plan, budget) without losing anything; `archived = false` brings it back. */
 export function setPurchaseArchived(ledger: Ledger, purchaseId: string, archived = true): void {
   const label = archived ? "purchase.archived" : "purchase.unarchived";
@@ -122,7 +128,7 @@ export function suggestNextItem(state: LedgerState, purchaseId: string): Pick<Ne
 export function duplicateItem(ledger: Ledger, itemId: string): string | undefined {
   const src = ledger.state.items[itemId];
   if (!src?.purchaseId) return undefined;
-  const { id: _id, submissionId: _s, lineNumber: _l, stepUpStatus: _st, approvedCents: _a, paidCents: _p, hold: _h, holdNote: _hn, statusOverride: _so, ...rest } = src;
+  const { id: _id, submissionId: _s, lineNumber: _l, stepUpStatus: _st, approvedCents: _a, paidCents: _p, hold: _h, holdNote: _hn, statusOverride: _so, readyToSubmit: _r, ...rest } = src;
   const copy = newId("item");
   ledger.set("item", copy, clean(rest as Fields), { label: "item.duplicated" });
   return copy;

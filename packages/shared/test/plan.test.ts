@@ -7,7 +7,7 @@ const categories: Record<string, CategoryInfo> = {
 const ctx: RulesContext = { category: (id) => categories[id], today: "2026-10-07" };
 
 const item = (id: string, childId: string, lineNumber: number, extra = {}) => ({
-  id, purchaseId: "p1", childId, lineNumber, description: id, amountCents: 1000, categoryId: "books", benefitMessage: "Used for math.", ...extra,
+  id, purchaseId: "p1", childId, lineNumber, description: id, amountCents: 1000, categoryId: "books", benefitMessage: "Used for math.", readyToSubmit: true, ...extra,
 });
 
 function state(): LedgerState {

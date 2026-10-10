@@ -19,8 +19,10 @@ import {
   updateItem,
   moveReceiptToAdditional,
   buildQueue,
+  awaitingReview,
   duplicateItem,
   evaluateItem,
+  setReadyToSubmit,
   fileNameHints,
   formatCents,
   itemsOf,
@@ -1289,14 +1291,21 @@ function purchaseView(id: string, draft = false): string {
     if (mine) return `<span class="badge filing">Being filed by ${esc(mine.actor)}</span>`;
     const label = displayStatus(i, ev, ctx(), state.settings["year"]?.submissionDeadline);
     if (i.stepUpStatus || i.submissionId) return `<span class="ok">${esc(label)}</span>`;
+    if (awaitingReview(ev)) return `<small class="warn">Has what it needs. Check whether it needs anything more, then mark it ready.</small>`;
     return ev.readiness === "ready" ? `<span class="ok">Ready to file</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`;
+  };
+  // Marking ready is always a person's call: it is offered once the minimum is there, and can be taken back.
+  const markButton = (i: (typeof items)[number], ev: ReturnType<typeof evaluateItem>): string => {
+    if (i.stepUpStatus || i.submissionId || filing[i.id]) return "";
+    if (i.readyToSubmit) return `<button data-unready="${esc(i.id)}">Not ready</button> `;
+    return awaitingReview(ev) ? `<button data-ready="${esc(i.id)}" class="primary">Mark ready to submit</button> ` : "";
   };
   const rows = items.map((i) => {
     const ev = evaluateItem(state, i.id, ctx());
     return `<tr><td>${esc(state.children[i.childId ?? ""]?.name ?? "?")}</td><td>${esc(i.description)}</td><td class="num">${formatCents(i.amountCents)}</td>
       <td class="num">${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " <small>est.</small>" : ""}</td><td>${esc(categoryLabel(i))}</td>
       <td>${statusCell(i, ev)}</td>
-      <td><button data-dup="${esc(i.id)}">Duplicate</button></td></tr>`;
+      <td>${markButton(i, ev)}<button data-dup="${esc(i.id)}">Duplicate</button></td></tr>`;
   });
   if (draft) {
     return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
@@ -1952,6 +1961,9 @@ root.addEventListener("click", async (ev) => {
     }
   } else if (d["unarchive"]) {
     setPurchaseArchived(ledger, d["unarchive"], false);
+    await save();
+  } else if (d["ready"] || d["unready"]) {
+    setReadyToSubmit(ledger, (d["ready"] ?? d["unready"])!, Boolean(d["ready"]));
     await save();
   } else if (d["dup"]) {
     duplicateItem(ledger, d["dup"]);

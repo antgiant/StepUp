@@ -26,7 +26,7 @@ function baseState(): LedgerState {
     paymentMethods: {},
     purchases: { p1: { id: "p1", vendor: "Shop", date: "2026-09-01", receiptDocumentId: "d1", orderTotalCents: 5000 } },
     items: {
-      i1: { id: "i1", purchaseId: "p1", childId: "c1", description: "Workbook", amountCents: 2000, taxShippingCents: 140, categoryId: "books", benefitMessage: "Used for math." },
+      i1: { id: "i1", purchaseId: "p1", childId: "c1", description: "Workbook", amountCents: 2000, taxShippingCents: 140, categoryId: "books", benefitMessage: "Used for math.", readyToSubmit: true },
     },
     documents: { d1: { id: "d1", filename: "receipt.pdf", sizeBytes: 100_000, paymentEvidenceConfidence: 0.95 } },
     additionalDocs: {},
@@ -40,8 +40,23 @@ function baseState(): LedgerState {
 const codes = (s: LedgerState, id = "i1") => evaluateItem(s, id, ctx).reasons.map((r) => r.code);
 
 describe("evaluateItem", () => {
-  it("is ready when everything is present and the receipt shows payment", () => {
+  it("is ready when everything is present, the receipt shows payment and a person marked it ready", () => {
     expect(evaluateItem(baseState(), "i1", ctx)).toEqual({ readiness: "ready", reasons: [] });
+  });
+
+  it("is never ready on its own: meeting the minimum still waits for a person to mark it", () => {
+    const s = baseState();
+    delete s.items["i1"]!.readyToSubmit;
+    const ev = evaluateItem(s, "i1", ctx);
+    expect(ev.readiness).toBe("blocked");
+    expect(ev.reasons.map((r) => r.code)).toEqual(["not-marked-ready"]);
+    expect(displayStatus(s.items["i1"]!, ev, ctx)).toBe("Unfiled (Needs Review)");
+  });
+
+  it("marking ready does not override a missing requirement", () => {
+    const s = baseState();
+    s.documents["d1"]!.paymentEvidenceConfidence = 0;
+    expect(codes(s)).toEqual(["awaiting-proof"]);
   });
 
   it("requires proof of payment: weak receipt evidence blocks until a statement is attached", () => {

@@ -14,6 +14,7 @@ import {
   copyChildren,
   copyYearSetup,
   setPurchaseArchived,
+  setReadyToSubmit,
   createPurchase,
   detachAdditional,
   detachReceipt,
@@ -65,6 +66,15 @@ describe("allocateProportionally", () => {
 });
 
 describe("one receipt, many StepUp entries", () => {
+  it("does not carry a person's ready mark over to a duplicated item", () => {
+    const p = createPurchase(ledger, { vendor: "Acme", date: "2026-09-01" });
+    const a = addItem(ledger, p, { childId: "c1", description: "Book", amountCents: 1000 });
+    setReadyToSubmit(ledger, a);
+    const copy = duplicateItem(ledger, a)!;
+    expect(ledger.state.items[copy]).toBeTruthy();
+    expect(ledger.state.items[copy]).not.toHaveProperty("readyToSubmit");
+  });
+
   it("itemizes a receipt without re-entering vendor, date, invoice # or payment method", () => {
     ledger.set("document", "d1", { filename: "Acme order 12345.pdf", paymentEvidenceConfidence: 0.95, sizeBytes: 1000 });
     const p = startPurchaseFromDocument(ledger, "d1", { vendor: "Acme", date: "2026-09-01", invoiceNo: "12345", orderTotalCents: 10_700, taxShippingTotalCents: 700 });
@@ -77,8 +87,15 @@ describe("one receipt, many StepUp entries", () => {
 
     // Vendor/date/invoice live on the purchase once; each item inherits them.
     for (const id of [first, second]) expect(ledger.state.items[id]).not.toHaveProperty("vendor");
+    // Having everything is not enough: a person has to decide each one is ready.
+    expect(evaluateItem(ledger.state, first, ctx).reasons.map((r) => r.code)).toEqual(["not-marked-ready"]);
+    setReadyToSubmit(ledger, first);
+    setReadyToSubmit(ledger, second);
     expect(evaluateItem(ledger.state, first, ctx).readiness).toBe("ready");
     expect(evaluateItem(ledger.state, second, ctx).readiness).toBe("ready");
+    setReadyToSubmit(ledger, second, false);
+    expect(evaluateItem(ledger.state, second, ctx).readiness).toBe("blocked");
+    setReadyToSubmit(ledger, second);
     expect(evaluateItem(ledger.state, third, ctx).reasons.map((r) => r.code)).toContain("missing-amount");
 
     // Real tax total replaces the estimates and sums exactly.
@@ -181,6 +198,8 @@ describe("loose files: need data, or belong to something already entered", () =>
     expect(top!.why).toContain("items are waiting for proof of payment");
 
     expect(attachAdditional(ledger, top!.target, docId, "payment-proof")).toEqual({ ok: true });
+    expect(evaluateItem(ledger.state, item, ctx).reasons.map((r) => r.code)).toEqual(["not-marked-ready"]);
+    setReadyToSubmit(ledger, item);
     expect(evaluateItem(ledger.state, item, ctx).readiness).toBe("ready");
 
     detachAdditional(ledger, top!.target, docId);

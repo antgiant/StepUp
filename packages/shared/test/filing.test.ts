@@ -5,6 +5,7 @@ import {
   MemoryBackend,
   MemoryEventStore,
   addItem,
+  setReadyToSubmit,
   applyStepUpStatuses,
   createPurchase,
   filingGroups,
@@ -31,6 +32,8 @@ function setup() {
   const common = { childId: "kid", categoryId: "books", benefitMessage: "learning" };
   const i1 = addItem(l, p, { ...common, description: "Workbook", amountCents: 1500, taxShippingCents: 105 });
   const i2 = addItem(l, p, { ...common, description: "Reader", amountCents: 1500, taxShippingCents: 95 });
+  setReadyToSubmit(l, i1);
+  setReadyToSubmit(l, i2);
   return { l, p, i1, i2 };
 }
 

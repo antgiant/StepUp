@@ -79,6 +79,8 @@ export interface LineItem {
   /** Set by a person or by the submission flow when something outside the data blocks filing (e.g. "needs-split"). Cleared by removing it. */
   hold?: string;
   holdNote?: string;
+  /** A person's decision that this item is ready to submit. The minimum documentation being present never implies it: some items need more, so this stays a human choice. */
+  readyToSubmit?: boolean;
   /** Human override with a reason; wins over every derived status. */
   statusOverride?: string;
   notes?: string;

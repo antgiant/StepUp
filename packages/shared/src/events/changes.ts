@@ -14,6 +14,7 @@ const WORDS: Record<string, (n: number) => string> = {
   "item.needsAttention": (n) => `flagged ${n} item(s) as needing attention`,
   "item.statusObserved": (n) => `updated the StepUp status of ${n} item(s)`,
   "item.created": (n) => `added ${n} item(s)`,
+  "item.markedReady": (n) => `marked ${n} item(s) ready to submit`,
   "item.duplicated": (n) => `added ${n} item(s)`,
   "purchase.created": (n) => `added ${n} purchase(s)`,
   "purchase.archived": (n) => `archived ${n} purchase(s)`,

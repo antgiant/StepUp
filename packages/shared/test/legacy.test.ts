@@ -99,14 +99,14 @@ describe("buildLegacyImport", () => {
     const rows = [
       row(1, { "Payment File": "statement-sep.pdf" }), // complete -> ready, agrees
       row(2, { "Benefit Message": "" }, ["receipt.pdf"]), // legacy says ready but benefit message missing
-      row(3, { Status: "Unfiled (Missing Things)", "Payment File": "statement-sep.pdf" }), // legacy says missing but looks complete
+      row(3, { Status: "Unfiled (Missing Things)", "Payment File": "statement-sep.pdf" }), // legacy says missing, looks complete: still not ready, since a person has not marked it
     ];
     const { report } = buildLegacyImport(input(rows));
     const byId = Object.fromEntries(report.readinessMismatches.map((m) => [m.itemId, m]));
     expect(byId["legacy-1"]).toBeUndefined();
     expect(byId["legacy-2"]).toMatchObject({ legacy: "Unfiled (Ready to Submit)", computed: "Unfiled (Missing Things)" });
     expect(byId["legacy-2"]!.reasons).toContain("missing-benefit-message");
-    expect(byId["legacy-3"]).toMatchObject({ computed: "Unfiled (Ready to Submit)" });
+    expect(byId["legacy-3"]).toBeUndefined();
   });
 
   it("is deterministic and idempotent, and later human edits beat imported values", async () => {

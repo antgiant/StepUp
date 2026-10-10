@@ -16,6 +16,7 @@ export interface MirrorOptions {
 
 const STATUS_FILL: Record<string, string> = {
   "Unfiled (Ready to Submit)": "FFD9EAD3",
+  "Unfiled (Needs Review)": "FFFFE699",
   "Unfiled (Missing Things)": "FFFFF2CC",
   Submitted: "FFDDEBF7",
   Approved: "FFC6E0B4",

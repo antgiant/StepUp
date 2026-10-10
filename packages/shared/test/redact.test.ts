@@ -117,7 +117,7 @@ describe("redacted copies in the submission plan", () => {
     l.set("document", "rcpt", { filename: "Acme.pdf", contentKind: "receipt-like", sizeBytes: 10 });
     l.set("document", "stmt", { filename: "Statement.pdf", contentKind: "statement", sizeBytes: 10 });
     const p = createPurchase(l, { vendor: "Acme", date: "2026-10-01", receiptDocumentId: "rcpt", orderTotalCents: 1000 });
-    l.set("item", "i1", { purchaseId: p, childId: "kid", description: "Book", amountCents: 1000, taxShippingCents: 0, categoryId: "c", benefitMessage: "x" });
+    l.set("item", "i1", { purchaseId: p, childId: "kid", description: "Book", amountCents: 1000, taxShippingCents: 0, categoryId: "c", benefitMessage: "x", readyToSubmit: true });
     l.set("additionalDoc", "proof", { ownerKind: "purchase", ownerId: p, documentId: "stmt", kind: "payment-proof", transactionId: "t" });
 
     let group = planSubmissions(l.state, ctx).groups[0]!;

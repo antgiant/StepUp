@@ -39,7 +39,10 @@ export type ReasonCode =
   | "receipt-too-large"
   | "awaiting-proof"
   | "items-exceed-receipt-total"
-  | "on-hold";
+  | "on-hold"
+  | "not-marked-ready";
+
+export const NOT_MARKED_READY_MESSAGE = "Has what it needs; check whether it needs anything more, then mark it ready to submit";
 
 export interface Reason {
   code: ReasonCode;
@@ -139,6 +142,9 @@ export function evaluateItem(state: LedgerState, itemId: string, ctx: RulesConte
     }
   }
 
+  // Meeting every requirement is necessary, not sufficient: a person must also decide the item is ready.
+  if (reasons.length === 0 && !item.readyToSubmit) add("not-marked-ready", NOT_MARKED_READY_MESSAGE);
+
   return { readiness: reasons.length === 0 ? "ready" : "blocked", reasons };
 }
 
@@ -147,6 +153,11 @@ function norm(s: string): string {
 }
 
 const SUBMITTED_LIKE = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Denied (Initial)", "Denied (Final)"]);
+
+/** True when the only thing standing between this item and "ready" is a person marking it so. */
+export function awaitingReview(evaluation: Evaluation): boolean {
+  return evaluation.readiness === "blocked" && evaluation.reasons.length === 1 && evaluation.reasons[0]!.code === "not-marked-ready";
+}
 
 export function isFiled(item: LineItem): boolean {
   return Boolean(item.submissionId) || SUBMITTED_LIKE.has(item.stepUpStatus ?? "");
@@ -158,7 +169,8 @@ export function displayStatus(item: LineItem, evaluation: Evaluation, ctx: Rules
   if (item.stepUpStatus) return item.stepUpStatus;
   if (item.submissionId) return "Submitted";
   if (submissionDeadline && ctx.today > submissionDeadline) return "Forfeited";
-  return evaluation.readiness === "ready" ? "Unfiled (Ready to Submit)" : "Unfiled (Missing Things)";
+  if (evaluation.readiness === "ready") return "Unfiled (Ready to Submit)";
+  return awaitingReview(evaluation) ? "Unfiled (Needs Review)" : "Unfiled (Missing Things)";
 }
 
 /** Tax/shipping estimate: used only while no receipt value is known. */
