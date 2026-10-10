@@ -170,6 +170,8 @@ function purchaseTotal(state: LedgerState, id: string): number {
   return itemsOf(state, id).reduce((sum, i) => sum + requestedCents(i), 0);
 }
 
+/** The status filter's value for purchases whose receipt the sheet leaves unclear (main.ts matches it against data-unclear). */
+export const UNCLEAR_FILTER = "__receipt_unclear__";
 const statusOf = (i: { statusOverride?: string; stepUpStatus?: string }) => i.statusOverride ?? i.stepUpStatus ?? "(no status)";
 
 /** Every purchase, newest first, with a search box and a status filter (both filter in place; see main.ts). */
@@ -193,7 +195,7 @@ export function legacyQueueView(l: LegacyState): string {
     const summary = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
     const note = unclear.has(x.p.id) ? ` <span class="badge warn">Receipt unclear</span>` : "";
     const text = `${name} ${x.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
-    return `<li class="q" data-text="${esc(text)}" data-statuses="${esc(x.statuses.join("|"))}"><button class="row-button" data-open="${esc(x.p.id)}"><span><strong>${esc(name)}</strong>${note}<br><small>${esc(x.date)}${x.date ? " · " : ""}${money(purchaseTotal(state, x.p.id))} · ${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
+    return `<li class="q" data-text="${esc(text)}" data-statuses="${esc(x.statuses.join("|"))}"${unclear.has(x.p.id) ? " data-unclear" : ""}><button class="row-button" data-open="${esc(x.p.id)}"><span><strong>${esc(name)}</strong>${note}<br><small>${esc(x.date)}${x.date ? " · " : ""}${money(purchaseTotal(state, x.p.id))} · ${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   };
   const unclearRows = purchases.filter((x) => unclear.has(x.p.id));
   const children = Object.values(state.children);
@@ -207,7 +209,7 @@ export function legacyQueueView(l: LegacyState): string {
   return `<h2>Purchases (${purchases.length})</h2>
     <p class="note">${children.length ? `Students: ${esc(children.map((c) => c.name).join(", "))}. ` : ""}Open a purchase to see its items and files.</p>
     ${unclearRows.length ? `<p class="note warn">${unclearRows.length} purchase(s) list several files and the sheet does not say which is the receipt. They are shown with every file as additional documentation until you pick one; the answer is kept beside the workbook.</p>` : ""}
-    <p class="row"><input id="legacy-search" type="search" placeholder="Search purchases, items, students" aria-label="Search purchases"><select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
+    <p class="row"><input id="legacy-search" type="search" placeholder="Search purchases, items, students" aria-label="Search purchases"><select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${unclearRows.length ? `<option value="${UNCLEAR_FILTER}">Receipt unclear (${unclearRows.length})</option>` : ""}${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
     <ul class="queue" id="legacy-list">${purchases.map(row).join("") || "<li>The workbook has no purchases.</li>"}</ul>${unlinkedList}`;
 }
 

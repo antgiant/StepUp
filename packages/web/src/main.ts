@@ -1565,7 +1565,7 @@ function filterLegacyList(): void {
   const status = root.querySelector<HTMLSelectElement>("#legacy-status")?.value ?? "";
   for (const li of root.querySelectorAll<HTMLElement>("#legacy-list > li[data-text]")) {
     const text = li.dataset["text"] ?? "";
-    const has = (li.dataset["statuses"] ?? "").split("|").includes(status);
+    const has = status === UNCLEAR_FILTER ? li.dataset["unclear"] !== undefined : (li.dataset["statuses"] ?? "").split("|").includes(status);
     li.hidden = !(q.every((w) => text.includes(w)) && (!status || has));
   }
 }
