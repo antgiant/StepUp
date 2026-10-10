@@ -82,7 +82,7 @@ import {
   type MapTarget,
   type RulesContext,
 } from "@step-up/shared/web";
-import { initAuth, signIn, signOut } from "./auth.js";
+import { autoSignIn, canAutoSignIn, initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
@@ -2208,6 +2208,13 @@ await guarded(async () => {
   note("Completing Microsoft sign-in…");
   account = await initAuth();
   authReady = true;
+  if (!account && !localChosen && canAutoSignIn()) {
+    // Signed in here before: go straight back to that account rather than asking again.
+    note("Signing in to Microsoft…");
+    showBusy("Signing in to Microsoft…");
+    await autoSignIn();
+    await new Promise<void>(() => {}); // the page is navigating away; keep the busy screen up
+  }
   if (!account) render();
   if (account) note("Finding your saved folder…");
   const pointer = account ? await loadPointer() : undefined;

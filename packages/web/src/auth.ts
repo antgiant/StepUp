@@ -35,6 +35,24 @@ const writeHint = (username: string | undefined): void => {
   }
 };
 
+/** Set just before an automatic sign-in redirect and cleared once signed in, so a sign-in that fails shows the buttons instead of looping. */
+const AUTO_KEY = "stepup.autoSignInTried";
+const autoTried = (): boolean => {
+  try {
+    return sessionStorage.getItem(AUTO_KEY) === "1";
+  } catch {
+    return true; // cannot guard against a loop, so never start one
+  }
+};
+const setAutoTried = (on: boolean): void => {
+  try {
+    if (on) sessionStorage.setItem(AUTO_KEY, "1");
+    else sessionStorage.removeItem(AUTO_KEY);
+  } catch {
+    /* storage blocked: automatic sign-in is already disabled by autoTried */
+  }
+};
+
 let account: AccountInfo | null = null;
 
 /** Completes a sign-in redirect if one just happened and, if signed in, hooks Graph up to this account's tokens. */
@@ -45,6 +63,7 @@ export async function initAuth(): Promise<AccountInfo | null> {
   if (account) {
     msal.setActiveAccount(account);
     writeHint(account.username);
+    setAutoTried(false);
     setTokenProvider(async () => {
       try {
         return (await msal.acquireTokenSilent({ scopes: SCOPES, account: account! })).accessToken;
@@ -60,6 +79,13 @@ export async function initAuth(): Promise<AccountInfo | null> {
 export const signIn = () => {
   const hint = readHint();
   return msal.loginRedirect(hint ? { scopes: SCOPES, loginHint: hint } : { scopes: SCOPES, prompt: "select_account" });
+};
+/** True when a previous sign-in left an account to go straight back to and an automatic attempt has not already failed. */
+export const canAutoSignIn = (): boolean => readHint() !== undefined && !autoTried();
+/** Signs in again as the remembered account without waiting for a button press. */
+export const autoSignIn = () => {
+  setAutoTried(true);
+  return signIn();
 };
 export const signOut = () => {
   writeHint(undefined); // signing out is how a different account is chosen next time
