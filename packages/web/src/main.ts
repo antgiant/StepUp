@@ -86,7 +86,7 @@ import { autoSignIn, canAutoSignIn, initAuth, signIn, signOut } from "./auth.js"
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { chooseReceipt, legacyBanner, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
