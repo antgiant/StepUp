@@ -1592,6 +1592,8 @@ function closeCombo(input: HTMLInputElement): void {
 
 /** The purchases list narrows and re-sorts in place, so typing never loses its focus to a re-render. */
 let legacyFilter = { search: "", status: "", child: "", vendor: "", sort: "" };
+/** Every option a filter dropdown was drawn with, so ones taken out for showing nothing can come back. */
+const allOptions = new WeakMap<HTMLSelectElement, HTMLOptionElement[]>();
 
 /** `restore` puts the remembered filters and sort back into freshly drawn controls (coming back to the list); otherwise the controls are the source and are remembered. */
 function filterLegacyList(restore = false): void {
@@ -1628,11 +1630,23 @@ function filterLegacyList(restore = false): void {
   }
   // Each option says how many purchases it would show given the search and the other dropdowns, so combined filters stay honest.
   for (const k of ["status", "child", "vendor"] as const) {
-    for (const o of controls[k]?.options ?? []) {
+    const sel = controls[k];
+    if (!sel) continue;
+    // Options are taken out of the dropdown (not just hidden, which Safari ignores) when they would show nothing, and put back when they would show something again.
+    const all = (allOptions.get(sel) ?? [...sel.options]);
+    allOptions.set(sel, all);
+    const keep: HTMLOptionElement[] = [];
+    for (const o of all) {
       o.dataset["label"] ??= o.textContent ?? "";
       const label = (o.dataset["label"] ?? "").replace(/ \(\d+\)$/, "");
-      o.textContent = `${label} (${rows.filter((li) => passes(li, { [k]: o.value })).length})`;
+      if (o.value === "") { keep.push(o); continue; }
+      const n = rows.filter((li) => passes(li, { [k]: o.value })).length;
+      o.textContent = `${label} (${n})`;
+      if (n > 0 || o.value === legacyFilter[k]) keep.push(o);
     }
+    const value = sel.value;
+    sel.replaceChildren(...keep);
+    sel.value = value;
   }
   const num = (li: HTMLElement, k: string) => Number(li.dataset[k] ?? 0);
   const str = (li: HTMLElement, k: string) => li.dataset[k] ?? "";
