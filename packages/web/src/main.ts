@@ -1766,25 +1766,30 @@ function render(): void {
 }
 
 // Each screen is a history entry, so the phone's swipe-back / back button returns to the previous screen instead of leaving the app.
-function remember(push: boolean): void {
+function remember(push: boolean, from?: View): void {
   try {
+    // Leaving a screen keeps how far it was scrolled, so coming back drops you where you were.
+    if (push && from) history.replaceState({ view: from, scroll: window.scrollY }, "");
     if (push) history.pushState({ view }, "");
-    else history.replaceState({ view }, "");
+    else history.replaceState({ view, scroll: (history.state as { scroll?: number } | null)?.scroll }, "");
   } catch { /* history unavailable: back simply leaves the app */ }
 }
 remember(false);
 window.addEventListener("popstate", (ev) => {
-  const back = (ev.state as { view?: View } | null)?.view;
+  const saved = ev.state as { view?: View; scroll?: number } | null;
+  const back = saved?.view;
   view = back && typeof back.name === "string" ? back : { name: "queue" };
   replacingReceipt = undefined;
   itemEdit = undefined;
   preview = undefined;
   render();
+  window.scrollTo({ top: saved?.scroll ?? 0 });
 });
 
 function go(next: View): void {
+  const from = view;
   view = next;
-  remember(true);
+  remember(true, from);
   replacingReceipt = undefined;
   itemEdit = undefined;
   render();
@@ -1970,8 +1975,9 @@ root.addEventListener("click", async (ev) => {
     attachToPurchase(d["purchase"]!, d["useDoc"], d["role"] === "additional" ? "additional" : "receipt");
     await save();
   } else if (d["statement"]) {
+    const from = view;
     view = { name: "statement", id: d["statement"] };
-    remember(true);
+    remember(true, from);
     render();
     window.scrollTo({ top: 0 });
     if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
