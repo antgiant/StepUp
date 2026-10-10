@@ -87,7 +87,7 @@ import { autoSignIn, canAutoSignIn, initAuth, signIn, signOut } from "./auth.js"
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, legacyBanner, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -959,16 +959,19 @@ function purchaseListing(): string {
   }).sort((a, b) => b.date.localeCompare(a.date) || a.p.id.localeCompare(b.p.id));
   if (!rows.length) return "";
   const allStatuses = [...new Set(rows.flatMap((r) => r.labels))].sort();
-  const items = rows.map((r) => {
+  const items = rows.map((r, n) => {
     const counts = new Map<string, number>();
     for (const l of r.labels) counts.set(l, (counts.get(l) ?? 0) + 1);
     const summary = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
     const total = purchaseTotalCents(state, r.p);
-    const text = `${purchaseName(r.p)} ${r.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
-    return `<li class="q" data-text="${esc(text)}" data-statuses="${esc([...new Set(r.labels)].join("|"))}"><button class="row-button" data-open="${esc(r.p.id)}"><span><strong>${esc(purchaseName(r.p))}</strong><br><small>${esc(r.date)}${r.date ? " · " : ""}${total !== undefined ? formatCents(total) + " · " : ""}${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
+    const vendor = r.p.vendor ?? r.items.map((i) => i.vendor).find(Boolean) ?? "";
+    const text = `${purchaseName(r.p)} ${vendor} ${r.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
+    const attrs = listRowAttrs({ order: n, text, statuses: [...new Set(r.labels)], childIds: [...new Set(r.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name: purchaseName(r.p), date: r.date, totalCents: total ?? 0 });
+    return `<li class="q" ${attrs}><button class="row-button" data-open="${esc(r.p.id)}"><span><strong>${esc(purchaseName(r.p))}</strong><br><small>${esc(r.date)}${r.date ? " · " : ""}${total !== undefined ? formatCents(total) + " · " : ""}${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   });
-  return `<h2>All purchases (${rows.length})</h2>
-    <p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}<select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
+  const vendors = rows.map((r) => r.p.vendor ?? r.items.map((i) => i.vendor).find(Boolean) ?? "");
+  return `<h2>All purchases ${listCount(rows.length)}</h2>
+    ${listControls({ statuses: allStatuses, children: Object.values(state.children), vendors })}
     <ul class="queue" id="legacy-list">${items.join("")}</ul>`;
 }
 
@@ -1586,26 +1589,53 @@ function closeCombo(input: HTMLInputElement): void {
   input.setAttribute("aria-expanded", "false");
 }
 
-/** The purchases list in a year viewed from Excel narrows in place, so typing never loses its focus to a re-render. */
-let legacyFilter = { search: "", status: "" };
+/** The purchases list narrows and re-sorts in place, so typing never loses its focus to a re-render. */
+let legacyFilter = { search: "", status: "", child: "", vendor: "", sort: "" };
 
-
-/** `restore` puts the remembered search and status back into freshly drawn controls (coming back to the list); otherwise the controls are the source and are remembered. */
+/** `restore` puts the remembered filters and sort back into freshly drawn controls (coming back to the list); otherwise the controls are the source and are remembered. */
 function filterLegacyList(restore = false): void {
-  const searchBox = root.querySelector<HTMLInputElement>("#legacy-search");
-  const statusBox = root.querySelector<HTMLSelectElement>("#legacy-status");
-  if (restore) {
-    if (searchBox) searchBox.value = legacyFilter.search;
-    if (statusBox) statusBox.value = legacyFilter.status;
+  const controls = {
+    search: root.querySelector<HTMLInputElement>("#legacy-search"),
+    status: root.querySelector<HTMLSelectElement>("#legacy-status"),
+    child: root.querySelector<HTMLSelectElement>("#legacy-child"),
+    vendor: root.querySelector<HTMLSelectElement>("#legacy-vendor"),
+    sort: root.querySelector<HTMLSelectElement>("#legacy-sort"),
+  };
+  for (const k of Object.keys(controls) as Array<keyof typeof controls>) {
+    const c = controls[k];
+    if (!c) continue;
+    if (restore) c.value = legacyFilter[k];
+    legacyFilter[k] = c.value;
   }
-  if (searchBox) legacyFilter.search = searchBox.value;
-  if (statusBox) legacyFilter.status = statusBox.value;
-  const q = (searchBox?.value ?? "").toLowerCase().split(/\s+/).filter(Boolean);
-  const status = statusBox?.value ?? "";
-  for (const li of root.querySelectorAll<HTMLElement>("#legacy-list > li[data-text]")) {
-    const text = li.dataset["text"] ?? "";
-    const has = status === UNCLEAR_FILTER ? li.dataset["unclear"] !== undefined : (li.dataset["statuses"] ?? "").split("|").includes(status);
-    li.hidden = !(q.every((w) => text.includes(w)) && (!status || has));
+  const q = legacyFilter.search.toLowerCase().split(/\s+/).filter(Boolean);
+  const { status, child, vendor, sort } = legacyFilter;
+  const list = root.querySelector<HTMLElement>("#legacy-list");
+  if (!list) return;
+  const rows = [...list.querySelectorAll<HTMLElement>(":scope > li[data-text]")];
+  let shown = 0;
+  for (const li of rows) {
+    const d = li.dataset;
+    const has = status === UNCLEAR_FILTER ? d["unclear"] !== undefined : (d["statuses"] ?? "").split("|").includes(status);
+    const ok = q.every((w) => (d["text"] ?? "").includes(w)) && (!status || has) && (!child || (d["children"] ?? "").split("|").includes(child)) && (!vendor || d["vendor"] === vendor);
+    li.hidden = !ok;
+    if (ok) shown++;
+  }
+  const num = (li: HTMLElement, k: string) => Number(li.dataset[k] ?? 0);
+  const str = (li: HTMLElement, k: string) => li.dataset[k] ?? "";
+  const byOrder = (a: HTMLElement, b: HTMLElement) => num(a, "order") - num(b, "order");
+  const compare: Record<string, (a: HTMLElement, b: HTMLElement) => number> = {
+    "": byOrder,
+    oldest: (a, b) => str(a, "date").localeCompare(str(b, "date")) || byOrder(a, b),
+    name: (a, b) => str(a, "name").localeCompare(str(b, "name")) || byOrder(a, b),
+    vendor: (a, b) => (!str(a, "vendor") !== !str(b, "vendor") ? (str(a, "vendor") ? -1 : 1) : str(a, "vendor").localeCompare(str(b, "vendor"))) || byOrder(a, b),
+    high: (a, b) => num(b, "total") - num(a, "total") || byOrder(a, b),
+    low: (a, b) => num(a, "total") - num(b, "total") || byOrder(a, b),
+  };
+  for (const li of [...rows].sort(compare[sort] ?? byOrder)) list.appendChild(li);
+  const count = root.querySelector<HTMLElement>("#legacy-count");
+  if (count) {
+    const total = Number(count.dataset["total"] ?? rows.length);
+    count.textContent = shown === total ? String(total) : `${shown} of ${total}`;
   }
 }
 
@@ -2240,7 +2270,7 @@ root.addEventListener("submit", async (ev) => {
 
 root.addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;
-  if (input.id === "legacy-status") {
+  if (["legacy-status", "legacy-child", "legacy-vendor", "legacy-sort"].includes(input.id)) {
     filterLegacyList();
     return;
   }

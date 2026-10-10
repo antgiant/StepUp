@@ -175,6 +175,27 @@ export function clearableSearch(id: string, placeholder: string): string {
   return `<span class="clearable"><input id="${id}" type="search" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}"><button type="button" class="clear-x" data-clear="${id}" aria-label="Clear">&times;</button></span>`;
 }
 
+/** What a purchase list row needs so main.ts can filter and sort it in place (see filterLegacyList). */
+export interface ListRowFacts { order: number; text: string; statuses: string[]; childIds: string[]; vendor: string; name: string; date: string; totalCents: number }
+export const vendorKey = (v: string | undefined): string => (v ?? "").trim().toLowerCase();
+
+export function listRowAttrs(f: ListRowFacts): string {
+  return `data-order="${f.order}" data-text="${esc(f.text)}" data-statuses="${esc(f.statuses.join("|"))}" data-children="${esc(f.childIds.join("|"))}" data-vendor="${esc(vendorKey(f.vendor))}" data-name="${esc(f.name.toLowerCase())}" data-date="${esc(f.date)}" data-total="${f.totalCents}"`;
+}
+
+/** The search box and dropdowns above a purchase list: status, student (only when there are several), vendor, and sort. */
+export function listControls(o: { statuses: string[]; unclearCount?: number; children: Array<{ id: string; name?: string }>; vendors: string[] }): string {
+  const vendors = new Map<string, string>();
+  for (const v of o.vendors) if (v.trim() && !vendors.has(vendorKey(v))) vendors.set(vendorKey(v), v.trim());
+  const opt = (v: string, label: string) => `<option value="${esc(v)}">${esc(label)}</option>`;
+  const sel = (id: string, label: string, first: string, options: string) => `<select id="${id}" aria-label="${label}" style="width:auto"><option value="">${first}</option>${options}</select>`;
+  return `<p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}</p>
+    <p class="row">${sel("legacy-status", "Status", "All statuses", `${o.unclearCount ? `<option value="${UNCLEAR_FILTER}">Receipt unclear (${o.unclearCount})</option>` : ""}${o.statuses.map((s) => `<option>${esc(s)}</option>`).join("")}`)}${o.children.length > 1 ? sel("legacy-child", "Student", "All students", o.children.map((c) => opt(c.id, c.name ?? c.id)).join("")) : ""}${vendors.size ? sel("legacy-vendor", "Vendor", "All vendors", [...vendors.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([k, v]) => opt(k, v)).join("")) : ""}<select id="legacy-sort" aria-label="Sort by" style="width:auto"><option value="">Sort: newest first</option><option value="oldest">Sort: oldest first</option><option value="name">Sort: name A–Z</option><option value="vendor">Sort: vendor A–Z</option><option value="high">Sort: amount, high to low</option><option value="low">Sort: amount, low to high</option></select></p>`;
+}
+
+/** The "(n)" after a list's heading; filterLegacyList rewrites it to "(shown of n)" while a filter hides some. */
+export const listCount = (n: number): string => `(<span id="legacy-count" data-total="${n}">${n}</span>)`;
+
 /** The status filter's value for purchases whose receipt the sheet leaves unclear (main.ts matches it against data-unclear). */
 export const UNCLEAR_FILTER = "__receipt_unclear__";
 const statusOf = (i: { statusOverride?: string; stepUpStatus?: string }) => i.statusOverride ?? i.stepUpStatus ?? "(no status)";
@@ -192,6 +213,7 @@ export function legacyQueueView(l: LegacyState): string {
       return { p, items, statuses, date: dates[dates.length - 1] ?? p.date ?? "" };
     })
     .sort((a, b) => b.date.localeCompare(a.date) || a.p.id.localeCompare(b.p.id));
+  const orderOf = new Map(purchases.map((x, n) => [x.p.id, n]));
   const allStatuses = [...new Set(purchases.flatMap((x) => x.statuses))].sort();
   const row = (x: (typeof purchases)[number]) => {
     const name = purchaseName(state, x.p);
@@ -200,7 +222,9 @@ export function legacyQueueView(l: LegacyState): string {
     const summary = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
     const note = unclear.has(x.p.id) ? ` <span class="badge warn">Receipt unclear</span>` : "";
     const text = `${name} ${x.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
-    return `<li class="q" data-text="${esc(text)}" data-statuses="${esc(x.statuses.join("|"))}"${unclear.has(x.p.id) ? " data-unclear" : ""}><button class="row-button" data-open="${esc(x.p.id)}"><span><strong>${esc(name)}</strong>${note}<br><small>${esc(x.date)}${x.date ? " · " : ""}${money(purchaseTotal(state, x.p.id))} · ${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
+    const vendor = x.p.vendor ?? x.items.map((i) => i.vendor).find(Boolean) ?? "";
+    const attrs = listRowAttrs({ order: orderOf.get(x.p.id) ?? 0, text: `${text} ${vendor}`.toLowerCase(), statuses: x.statuses, childIds: [...new Set(x.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name, date: x.date, totalCents: purchaseTotal(state, x.p.id) });
+    return `<li class="q" ${attrs}${unclear.has(x.p.id) ? " data-unclear" : ""}><button class="row-button" data-open="${esc(x.p.id)}"><span><strong>${esc(name)}</strong>${note}<br><small>${esc(x.date)}${x.date ? " · " : ""}${money(purchaseTotal(state, x.p.id))} · ${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   };
   const unclearRows = purchases.filter((x) => unclear.has(x.p.id));
   const children = Object.values(state.children);
@@ -211,10 +235,10 @@ export function legacyQueueView(l: LegacyState): string {
     ? `<details><summary>Files not linked to a purchase (${unlinked.length})</summary><ul class="queue">${unlinked.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}</span></li>`).join("")}</ul>
         <p class="note">Nothing in the workbook points to these. Some may be receipts the sheet does not name.</p></details>`
     : "";
-  return `<h2>Purchases (${purchases.length})</h2>
+  return `<h2>Purchases ${listCount(purchases.length)}</h2>
     <p class="note">${children.length ? `Students: ${esc(children.map((c) => c.name).join(", "))}. ` : ""}Open a purchase to see its items and files.</p>
     ${unclearRows.length ? `<p class="note warn">${unclearRows.length} purchase(s) list several files and the sheet does not say which is the receipt. They are shown with every file as additional documentation until you pick one; the answer is kept beside the workbook.</p>` : ""}
-    <p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}<select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${unclearRows.length ? `<option value="${UNCLEAR_FILTER}">Receipt unclear (${unclearRows.length})</option>` : ""}${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
+    ${listControls({ statuses: allStatuses, unclearCount: unclearRows.length, children, vendors: purchases.map((x) => x.p.vendor ?? x.items.map((i) => i.vendor).find(Boolean) ?? "") })}
     <ul class="queue" id="legacy-list">${purchases.map(row).join("") || "<li>The workbook has no purchases.</li>"}</ul>${unlinkedList}`;
 }
 
