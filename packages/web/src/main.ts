@@ -1613,13 +1613,26 @@ function filterLegacyList(restore = false): void {
   const list = root.querySelector<HTMLElement>("#legacy-list");
   if (!list) return;
   const rows = [...list.querySelectorAll<HTMLElement>(":scope > li[data-text]")];
+  /** Whether a row passes every filter, with `over` standing in for the current choices (used to count what each option would show). */
+  const passes = (li: HTMLElement, over: Partial<typeof legacyFilter> = {}): boolean => {
+    const d = li.dataset;
+    const f = { status, child, vendor, ...over };
+    const has = f.status === UNCLEAR_FILTER ? d["unclear"] !== undefined : (d["statuses"] ?? "").split("|").includes(f.status);
+    return q.every((w) => (d["text"] ?? "").includes(w)) && (!f.status || has) && (!f.child || (d["children"] ?? "").split("|").includes(f.child)) && (!f.vendor || d["vendor"] === f.vendor);
+  };
   let shown = 0;
   for (const li of rows) {
-    const d = li.dataset;
-    const has = status === UNCLEAR_FILTER ? d["unclear"] !== undefined : (d["statuses"] ?? "").split("|").includes(status);
-    const ok = q.every((w) => (d["text"] ?? "").includes(w)) && (!status || has) && (!child || (d["children"] ?? "").split("|").includes(child)) && (!vendor || d["vendor"] === vendor);
+    const ok = passes(li);
     li.hidden = !ok;
     if (ok) shown++;
+  }
+  // Each option says how many purchases it would show given the search and the other dropdowns, so combined filters stay honest.
+  for (const k of ["status", "child", "vendor"] as const) {
+    for (const o of controls[k]?.options ?? []) {
+      o.dataset["label"] ??= o.textContent ?? "";
+      const label = (o.dataset["label"] ?? "").replace(/ \(\d+\)$/, "");
+      o.textContent = `${label} (${rows.filter((li) => passes(li, { [k]: o.value })).length})`;
+    }
   }
   const num = (li: HTMLElement, k: string) => Number(li.dataset[k] ?? 0);
   const str = (li: HTMLElement, k: string) => li.dataset[k] ?? "";
