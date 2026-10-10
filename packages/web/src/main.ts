@@ -94,7 +94,10 @@ import { cacheDocument, clearCachedDocuments, getCachedDocument } from "./docCac
 import { addScanPage, buildScanPdf, type ScanPage } from "./scan.js";
 import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
+import { enablePullToRefresh } from "./pullRefresh.js";
 import "./style.css";
+
+enablePullToRefresh();
 
 /** Where shared category fixes are sent (an issue on this project). */
 const REPO = "antgiant/StepUp";
