@@ -41,6 +41,7 @@ label { display: flex; flex-direction: column; gap: 3px; font-size: .82rem; colo
 
 body > header + p.note, header ~ p.note { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 header ~ p.note select { width: auto; }
+input.filtering, select.filtering { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent); font-weight: 600; }
 header ~ ol.note { background: var(--accent-soft); border-radius: var(--radius); padding: 12px 12px 12px 34px; }
 
 details { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 12px 0; }

@@ -1648,6 +1648,8 @@ function filterLegacyList(restore = false): void {
     sel.replaceChildren(...keep);
     sel.value = value;
   }
+  // A control that is narrowing the list is tinted, so it is clear why some purchases are missing.
+  for (const k of ["search", "status", "child", "vendor"] as const) controls[k]?.classList.toggle("filtering", legacyFilter[k].trim() !== "");
   const num = (li: HTMLElement, k: string) => Number(li.dataset[k] ?? 0);
   const str = (li: HTMLElement, k: string) => li.dataset[k] ?? "";
   const byOrder = (a: HTMLElement, b: HTMLElement) => num(a, "order") - num(b, "order");
