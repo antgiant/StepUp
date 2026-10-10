@@ -10,7 +10,9 @@ export const LEDGER_SUBDIRS = ["events", "documents", "inbox", "reports"] as con
  */
 export const LEGACY_CHOICES_FILE = "Step Up Helper - receipt choices.json";
 export const YEAR_FOLDER_RE = /^\d{4}-\d{4}$/;
-const TRACKING_WORKBOOK_RE = /tracking.*\.xlsx$/i;
+/** The old tracking workbooks: "... FES UA Tracking Spreadsheet ...xlsx", and the first year'"'"'s "Home School - Gardiner Scholarship ...xlsx". */
+const TRACKING_WORKBOOK_RE = /(tracking|gardiner).*\.xlsx$/i;
+const OFFICE_LOCK_RE = /^~\$/;
 
 export type YearKind = "ledger" | "legacy-excel" | "empty";
 
@@ -20,7 +22,11 @@ export interface YearInfo {
   kind: YearKind;
   /** Files directly in the year folder (the old way of dropping receipts); candidates for ingestion. */
   looseFileCount: number;
+  /** The tracking workbook the year is read from: of several copies, the most recently edited one. */
   workbookName?: string;
+  workbookModified?: string;
+  /** How many tracking workbook copies the folder holds (the others are ignored). */
+  workbookCopies?: number;
 }
 
 export interface YearFolders {
@@ -33,13 +39,13 @@ export interface YearFolders {
 }
 
 interface ChildrenPage {
-  value: Array<{ id: string; name: string; folder?: unknown }>;
+  value: Array<{ id: string; name: string; folder?: unknown; lastModifiedDateTime?: string }>;
   "@odata.nextLink"?: string;
 }
 
 async function listChildren(driveId: string, folderId: string) {
   const out: ChildrenPage["value"] = [];
-  let url: string | undefined = `/drives/${driveId}/items/${folderId}/children?$select=id,name,folder&$top=200`;
+  let url: string | undefined = `/drives/${driveId}/items/${folderId}/children?$select=id,name,folder,lastModifiedDateTime&$top=200`;
   while (url) {
     const page: ChildrenPage = await graphJson<ChildrenPage>(url);
     out.push(...page.value);
@@ -63,7 +69,9 @@ export async function listYears(driveId: string, rootId: string): Promise<YearIn
     if (!child.folder || !YEAR_FOLDER_RE.test(child.name)) continue;
     const inside = await listChildren(driveId, child.id);
     const files = inside.filter((c) => !c.folder && c.name !== LEGACY_CHOICES_FILE);
-    const workbook = files.find((f) => TRACKING_WORKBOOK_RE.test(f.name));
+    // Several copies are common (Excel "(1)", dated saves): the most recently edited one is the authoritative one.
+    const copies = files.filter((f) => TRACKING_WORKBOOK_RE.test(f.name) && !OFFICE_LOCK_RE.test(f.name));
+    const workbook = [...copies].sort((a, b) => (b.lastModifiedDateTime ?? "").localeCompare(a.lastModifiedDateTime ?? "") || a.name.localeCompare(b.name))[0];
     const hasLedger = inside.some((c) => c.folder && c.name === LEDGER_DIR);
     years.push({
       label: child.name,
@@ -71,6 +79,8 @@ export async function listYears(driveId: string, rootId: string): Promise<YearIn
       kind: hasLedger ? "ledger" : workbook ? "legacy-excel" : "empty",
       looseFileCount: files.length,
       workbookName: workbook?.name,
+      ...(workbook?.lastModifiedDateTime ? { workbookModified: workbook.lastModifiedDateTime } : {}),
+      ...(copies.length ? { workbookCopies: copies.length } : {}),
     });
   }
   return years.sort((a, b) => a.label.localeCompare(b.label));

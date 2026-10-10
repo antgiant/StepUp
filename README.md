@@ -114,6 +114,10 @@ Opening it reads the workbook and the receipts folder through OneDrive each time
 the authority and edits made there appear on the next open or **Refresh from Excel**. It has its own read-only
 Purchases, Proof of payment, Summary and Reports pages, and a spreadsheet download built on your device; nothing in it can be
 changed and nothing is written to OneDrive except one small file, `Step Up Helper - receipt choices.json`, in the year folder.
+A year folder may hold several copies of the workbook; the most recently edited one is used (the banner says which). Three
+layouts are understood: the 2025-2026 sheet (files named in "Documentation File" columns), the 2024-2025 sheet, and the
+2023-2024 Gardiner sheet, whose rows have no file columns, so a file is attached to a row only when its name's date and
+vendor agree. Receipts are looked for in the year folder and its sub-folders; files nothing points to are listed apart.
 It remembers which file you said is the receipt when the sheet lists several and none is clearly it (until you pick, every
 file shows as additional documentation). The code is isolated in `packages/shared/src/legacy/` and
 `packages/web/src/legacyYear.ts`, and can be removed once the year is settled.

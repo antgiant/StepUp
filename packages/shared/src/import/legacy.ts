@@ -195,7 +195,10 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
     if (files.length === 1) main = files[0];
     else if (files.length > 1) {
       const keyword = files.filter((f) => RECEIPT_KEYWORDS.some((k) => f.toLowerCase().includes(k)));
+      // The old habit: "7 - Receipt Hats.jpeg" is row 7's own file, while "6,7,8 - Citi Ending August.pdf" is shared proof.
+      const own = viewing ? files.filter((f) => new RegExp(`^\\s*${legacyId.replace(/\W/g, "")}\\s*-\\s`).test(f)) : [];
       if (keyword.length === 1) main = keyword[0];
+      else if (own.length === 1) main = own[0];
       else {
         const remembered = choices[[...files].sort().join(" ")];
         const known = remembered && files.includes(remembered) ? remembered : undefined;
@@ -329,6 +332,9 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
     );
     report.itemsImported += 1;
   });
+
+  // A read-only view also lists every other file in the folder, so none is hidden just because no row names it.
+  if (viewing) for (const f of input.files) if (!/\.xlsx?$/i.test(f.name)) ensureDoc(f.name);
 
   report.purchases = purchases.size;
   report.submissions = submissionsSeen.size;

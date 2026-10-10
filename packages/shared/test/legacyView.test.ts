@@ -5,6 +5,11 @@ import {
   ReadOnlyYearError,
   configureGraph,
   deriveLegacyYear,
+  detectLayout,
+  filesByIdPrefix,
+  filesByNameHints,
+  gardinerRow,
+  readReceiptFiles,
   listLooseFiles,
   listYears,
   readReceiptChoices,
@@ -107,5 +112,88 @@ describe("the receipt choices file beside the workbook", () => {
     const year = g.add(g.rootId, "2025-2026", true);
     g.add(year.id, LEGACY_CHOICES_FILE, false, new TextEncoder().encode("not json"));
     expect(await readReceiptChoices("d", year.id)).toEqual({});
+  });
+});
+
+describe("older workbook layouts", () => {
+  it("tells the three layouts apart", () => {
+    expect(detectLayout(["Table1", "Table2"], true)).toBe("step-up-2025");
+    expect(detectLayout(["Table1", "Table2"], false)).toBe("step-up-2024");
+    expect(detectLayout(["Step_Up", "Table2", "Table4"], false)).toBe("gardiner");
+    expect(detectLayout(["Table1", "Step_Up"], true)).toBe("step-up-2025");
+  });
+
+  it("matches a row's files by the ID in their names, and not by a longer number that ends the same", () => {
+    const files = [{ name: "7 - Hats.jpeg" }, { name: "6,7,8 - Citi August.pdf" }, { name: "17 - Other.pdf" }, { name: "70 - Other.pdf" }];
+    expect(filesByIdPrefix("7", files)).toEqual(["7 - Hats.jpeg", "6,7,8 - Citi August.pdf"]);
+    expect(filesByIdPrefix("", files)).toEqual([]);
+  });
+
+  it("takes a row's own numbered file as the receipt and the shared one as proof, instead of calling it unclear", () => {
+    const rows = [row(7, {}, ["6,7,8 - Citi August.pdf", "7 - Hats.jpeg"])];
+    const files = ["6,7,8 - Citi August.pdf", "7 - Hats.jpeg"].map((name, n) => ({ name, id: `f${n}`, size: 1 }));
+    const year = deriveLegacyYear({ ...base(rows), files }, {});
+    expect(year.unclear).toEqual([]);
+    const p = Object.values(year.result.state.purchases)[0]!;
+    expect(year.result.state.documents[p.receiptDocumentId!]!.filename).toBe("7 - Hats.jpeg");
+  });
+
+  it("links a Gardiner-year file only when its date and vendor agree and it names no other student", () => {
+    const files = [
+      { name: "Amazon 01 05 24 took kit (Jeslyn).pdf" },
+      { name: "Amazon 01 05 24 hose (Brook).pdf" },
+      { name: "Abeka 01 05 24 order.pdf" },
+      { name: "EBF 01 05 2024 Jeslyn Amazon thing.docx" },
+    ];
+    const students = ["Jeslyn", "Brook"];
+    const r = { Child: "Jeslyn", Item: "Tool kit", Date: 45296, Vendor: "Amazon", Cost: 25, Status: "Approved", "Aprvl Amnt": 20 };
+    const out = gardinerRow(r, 3, files, students);
+    expect(out.docFiles).toEqual(["Amazon 01 05 24 took kit (Jeslyn).pdf"]);
+    expect(out.values).toMatchObject({ ID: 3, Amount: 25, "Reimbursed Amount": 20, Status: "Approved" });
+    expect(filesByNameHints({ date: undefined, vendor: "Amazon", child: "Jeslyn" }, files, students)).toEqual([]);
+  });
+
+  it("keeps denial reasons and what was collected visible in the notes", () => {
+    const out = gardinerRow({ Child: "Brook", Item: "x", Cost: 5, "Denial Reason": "Ticket 1", "Documentation Collected": "True: Citi", Notes: "n" }, 1, [], []);
+    expect(out.values["Notes"]).toBe("n\nDenial reason: Ticket 1\nDocumentation: True: Citi");
+  });
+});
+
+describe("year folders with several workbook copies", () => {
+  let g: FakeGraph;
+  beforeEach(() => {
+    g = new FakeGraph();
+    setTokenProvider(async () => "t");
+    configureGraph({ fetch: g.fetch as typeof fetch, sleep: async () => {}, maxRetries: 1 });
+  });
+  afterEach(() => configureGraph());
+
+  it("uses the most recently edited copy, ignoring Office lock files", async () => {
+    const root = g.add(g.rootId, "Docs", true).id;
+    const y = g.add(root, "2024-2025", true);
+    g.add(y.id, "2024-2025 - FES UA Tracking Spreadsheet (2) 1.xlsx", false).modified = "2025-07-21T00:00:00Z";
+    g.add(y.id, "2024-2025 - FES UA Tracking Spreadsheet.xlsx", false).modified = "2026-08-07T00:00:00Z";
+    g.add(y.id, "2024-2025 - FES UA Tracking Spreadsheet (2).xlsx", false).modified = "2026-05-13T00:00:00Z";
+    g.add(y.id, "~$2024-2025 - FES UA Tracking Spreadsheet.xlsx", false).modified = "2026-09-01T00:00:00Z";
+    const g2 = g.add(root, "2023-2024", true);
+    g.add(g2.id, "Home School - Gardiner Scholarship (2023-2024).xlsx", false);
+    const years = await listYears("d", root);
+    expect(years.find((x) => x.label === "2024-2025")).toMatchObject({ kind: "legacy-excel", workbookName: "2024-2025 - FES UA Tracking Spreadsheet.xlsx", workbookCopies: 3 });
+    expect(years.find((x) => x.label === "2023-2024")).toMatchObject({ kind: "legacy-excel", workbookCopies: 1 });
+  });
+
+  it("lists receipts in sub-folders too, shallowest copy first, and skips the ledger and the choices file", async () => {
+    const y = g.add(g.rootId, "2023-2024", true);
+    g.add(y.id, "top.pdf", false);
+    g.add(y.id, "same.pdf", false);
+    const sub = g.add(y.id, "Gardiner", true);
+    g.add(sub.id, "deep.pdf", false);
+    g.add(sub.id, "same.pdf", false);
+    g.add(g.add(sub.id, "Citi", true).id, "statement.pdf", false);
+    g.add(g.add(y.id, "_ledger", true).id, "events.jsonl", false);
+    g.add(y.id, LEGACY_CHOICES_FILE, false);
+    const files = await readReceiptFiles({ driveId: "d", itemId: y.id, name: "", isFolder: true });
+    expect(files.map((f) => f.name).sort()).toEqual(["deep.pdf", "same.pdf", "statement.pdf", "top.pdf"]);
+    expect(files.find((f) => f.name === "same.pdf")!.id).toBe(g.child(y.id, "same.pdf")!.id);
   });
 });

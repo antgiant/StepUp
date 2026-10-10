@@ -74,13 +74,18 @@ export async function refreshLegacy(ws: OpenWorkspace): Promise<boolean> {
   const l = ws.legacy;
   if (!l) return false;
   const { driveId } = ws;
+  // A copy saved more recently since the last look takes over as the authoritative one.
+  const latest = ws.years.find((y) => y.label === ws.year.label);
+  if (latest) ws.year = latest;
+  const wantName = latest?.workbookName ?? l.workbook.name;
   const [book, choices, files] = await Promise.all([
-    findChild(driveId, ws.year.folderId, l.workbook.name),
+    findChild(driveId, ws.year.folderId, wantName),
     readReceiptChoices(driveId, ws.year.folderId),
     readReceiptFiles(l.folder),
   ]);
-  if (!book) throw new Error(`${l.workbook.name} was not found.`);
-  const unchanged = book.eTag !== undefined && book.eTag === l.workbook.eTag;
+  if (!book) throw new Error(`${wantName} was not found.`);
+  const unchanged = book.eTag !== undefined && book.eTag === l.workbook.eTag && book.id === l.workbook.itemId;
+  if (!unchanged) l.workbook = { ...l.workbook, itemId: book.id, name: book.name };
   const input = unchanged ? { ...l.year.input, files } : await readLegacyWorkbook(l.workbook, l.folder, ws.year.label);
   const derived = deriveLegacyYear(input, choices);
   const before = JSON.stringify(l.year.result.events);
@@ -122,7 +127,9 @@ export function legacyTabs(current: string): string {
 export function legacyBanner(ws: OpenWorkspace): string {
   const l = ws.legacy!;
   const at = new Date(l.readAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return `<p class="note banner">Showing <strong>${esc(ws.year.label)}</strong> from its Excel workbook, read-only. Excel is the source of truth: this page reads it again whenever you open it.
+  const copies = (ws.year.workbookCopies ?? 1) > 1 ? `, the most recently edited of ${ws.year.workbookCopies} copies` : "";
+  const edited = ws.year.workbookModified ? ` (edited ${esc(new Date(ws.year.workbookModified).toLocaleDateString())})` : "";
+  return `<p class="note banner">Showing <strong>${esc(ws.year.label)}</strong> from its Excel workbook, read-only: <em>${esc(l.workbook.name)}</em>${edited}${copies}. Excel is the source of truth: this page reads it again whenever you open it.
     Last read ${esc(at)}. <button id="legacy-refresh">Refresh from Excel</button>${l.workbook.webUrl ? ` <a href="${esc(l.workbook.webUrl)}" target="_blank" rel="noopener">Open in Excel</a>` : ""}</p>`;
 }
 
@@ -162,11 +169,18 @@ export function legacyQueueView(l: LegacyState): string {
   };
   const unclearRows = purchases.filter((x) => unclear.has(x.p.id));
   const children = Object.values(state.children);
+  // Files in the folder that no purchase uses (receipts the sheet never names, forms, letters): never hidden, just kept apart.
+  const used = new Set<string>([...Object.values(state.purchases).flatMap((p) => (p.receiptDocumentId ? [p.receiptDocumentId] : [])), ...Object.values(state.additionalDocs).flatMap((a) => (a.documentId ? [a.documentId] : []))]);
+  const unlinked = Object.values(state.documents).filter((d) => !used.has(d.id) && d.contentKind !== "statement").sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const unlinkedList = unlinked.length
+    ? `<details><summary>Files not linked to a purchase (${unlinked.length})</summary><ul class="queue">${unlinked.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}</span></li>`).join("")}</ul>
+        <p class="note">Nothing in the workbook points to these. Some may be receipts the sheet does not name.</p></details>`
+    : "";
   return `<h2>Purchases (${purchases.length})</h2>
     <p class="note">${children.length ? `Students: ${esc(children.map((c) => c.name).join(", "))}. ` : ""}Open a purchase to see its items and files.</p>
     ${unclearRows.length ? `<p class="note warn">${unclearRows.length} purchase(s) list several files and the sheet does not say which is the receipt. They are shown with every file as additional documentation until you pick one; the answer is kept beside the workbook.</p>` : ""}
     <p class="row"><input id="legacy-search" type="search" placeholder="Search purchases, items, students" aria-label="Search purchases"><select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
-    <ul class="queue" id="legacy-list">${purchases.map(row).join("") || "<li>The workbook has no purchases.</li>"}</ul>`;
+    <ul class="queue" id="legacy-list">${purchases.map(row).join("") || "<li>The workbook has no purchases.</li>"}</ul>${unlinkedList}`;
 }
 
 export function legacyPurchaseView(l: LegacyState, id: string, ctx: RulesContext): string {
@@ -240,7 +254,7 @@ export function legacySummaryView(l: LegacyState, ctx: RulesContext): string {
     return `<tr><td><strong>${esc(c.name ?? c.id)}</strong><br><small>${esc(c.scholarship)}</small></td>
       <td class="num">${b.capCents ? money(b.capCents) : "&ndash;"}<div class="bar" title="${width}% used"><span style="width:${width}%"></span></div></td>
       <td class="num">${money(b.paidCents)}</td><td class="num">${money(b.approvedCents)}</td><td class="num">${money(b.pendingCents)}</td>
-      <td class="num ${b.remainingCents < 0 ? "warn" : "ok"}">${money(b.remainingCents)}</td><td class="num">${money(b.unfiledCents)}</td></tr>`;
+      <td class="num ${b.capCents && b.remainingCents < 0 ? "warn" : "ok"}">${b.capCents ? money(b.remainingCents) : "&ndash;"}</td><td class="num">${money(b.unfiledCents)}</td></tr>`;
   });
   const counts = Object.entries(s.statusCounts).sort(([a], [b]) => a.localeCompare(b));
   return `<h2>Summary</h2>

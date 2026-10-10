@@ -6,6 +6,8 @@ interface Node {
   isFolder: boolean;
   content: Uint8Array<ArrayBufferLike>;
   version: number;
+  /** Fixed last-modified time (ISO); otherwise the fake server's clock. */
+  modified?: string;
 }
 
 export class FakeGraph {
@@ -42,7 +44,7 @@ export class FakeGraph {
   }
 
   private meta(n: Node) {
-    return { id: n.id, name: n.name, eTag: `"${n.id}-${n.version}"`, size: n.content.byteLength, webUrl: `https://fake/${n.id}`, lastModifiedDateTime: new Date(Date.now() + this.clockOffsetMs).toISOString(), parentReference: { id: n.parent }, ...(n.isFolder ? { folder: {} } : {}) };
+    return { id: n.id, name: n.name, eTag: `"${n.id}-${n.version}"`, size: n.content.byteLength, webUrl: `https://fake/${n.id}`, lastModifiedDateTime: n.modified ?? new Date(Date.now() + this.clockOffsetMs).toISOString(), parentReference: { id: n.parent }, ...(n.isFolder ? { folder: {} } : {}) };
   }
 
   fetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
