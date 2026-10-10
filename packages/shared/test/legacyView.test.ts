@@ -57,6 +57,30 @@ describe("a year viewed from Excel", () => {
     expect(names).toEqual(["a.pdf", "b.pdf"]);
   });
 
+  it("keeps related rows together when their file lists differ a little, as the command line does", () => {
+    // Rows 10-11 list three files, row 12 only two of them; none is clearly the receipt.
+    const rows = [row(1, {}, ["a.pdf", "b.pdf", "c.pdf"]), row(2, {}, ["a.pdf", "b.pdf", "c.pdf"]), row(3, {}, ["a.pdf", "b.pdf"])];
+    const year = deriveLegacyYear({ ...base(rows), files: ["a.pdf", "b.pdf", "c.pdf"].map((name, n) => ({ name, id: `o${n}`, size: 1 })) }, {});
+    const purchases = Object.values(year.result.state.purchases);
+    expect(purchases).toHaveLength(1);
+    expect(purchases[0]!.receiptDocumentId).toBeUndefined();
+    expect(year.unclear).toHaveLength(1);
+  });
+
+  it("settles a sibling with a shorter file list once the first list is picked", () => {
+    const rows = [row(1, {}, ["a.pdf", "b.pdf", "c.pdf"]), row(2, {}, ["a.pdf", "b.pdf"])];
+    const year = deriveLegacyYear({ ...base(rows), files: ["a.pdf", "b.pdf", "c.pdf"].map((name, n) => ({ name, id: `o${n}`, size: 1 })) }, { "a.pdf b.pdf c.pdf": "b.pdf" });
+    const purchases = Object.values(year.result.state.purchases);
+    expect(purchases).toHaveLength(1);
+    expect(year.result.state.documents[purchases[0]!.receiptDocumentId!]!.filename).toBe("b.pdf");
+    expect(year.unclear).toEqual([]);
+  });
+
+  it("does not tie rows of different vendors together", () => {
+    const rows = [row(1, { Vendor: "Shop" }, ["a.pdf", "b.pdf"]), row(2, { Vendor: "Other" }, ["a.pdf", "b.pdf"])];
+    expect(Object.values(deriveLegacyYear(base(rows), {}).result.state.purchases)).toHaveLength(2);
+  });
+
   it("uses a remembered pick, and the pick survives when the key is built from the same files", () => {
     const year = deriveLegacyYear(base([row(1, {}, ["a.pdf", "b.pdf"])]), { "a.pdf b.pdf": "b.pdf" });
     expect(year.unclear).toEqual([]);

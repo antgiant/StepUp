@@ -176,6 +176,85 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
   const requiresServiceDate = new Set<string>();
   const choices = input.receiptChoices ?? {};
 
+  /** Settles, for every row, which of its files is the receipt (if it can be told) before any purchase is built. */
+  interface ReceiptPick {
+    files: string[];
+    main?: string;
+    /** A read-only view found several candidates and nothing to choose between them. */
+    unclear: boolean;
+    /** The row listed several files and the keywords did not settle it. */
+    ambiguous: boolean;
+    /** Taken from a remembered answer rather than read off the row. */
+    fromChoice: boolean;
+    /** For an unclear row: the name its purchase is keyed by, shared by every row tied to it (see below). */
+    cluster?: string;
+  }
+  const rowId = (row: LegacyRow) => str(row.values["ID"]);
+  const vendorOf = (row: LegacyRow) => (str(row.values["Service Provider"]) || str(row.values["Vendor"])).toLowerCase();
+  const picks: Array<ReceiptPick | undefined> = input.rows.map((row) => {
+    const legacyId = rowId(row);
+    if (!legacyId || (!str(row.values["Item"]) && !str(row.values["Amount"]))) return undefined;
+    const files = [...new Set(row.docFiles)];
+    if (files.length === 1) return { files, main: files[0], unclear: false, ambiguous: false, fromChoice: false };
+    if (files.length === 0) return { files, unclear: false, ambiguous: false, fromChoice: false };
+    const keyword = files.filter((f) => RECEIPT_KEYWORDS.some((k) => f.toLowerCase().includes(k)));
+    // The old habit: "7 - Receipt Hats.jpeg" is row 7's own file, while "6,7,8 - Citi Ending August.pdf" is shared proof.
+    const own = viewing ? files.filter((f) => new RegExp(`^\\s*${legacyId.replace(/\W/g, "")}\\s*-\\s`).test(f)) : [];
+    if (keyword.length === 1) return { files, main: keyword[0], unclear: false, ambiguous: false, fromChoice: false };
+    if (own.length === 1) return { files, main: own[0], unclear: false, ambiguous: false, fromChoice: false };
+    const remembered = choices[[...files].sort().join(" ")];
+    const known = remembered && files.includes(remembered) ? remembered : undefined;
+    return { files, main: known ?? (viewing ? undefined : files[0]), unclear: viewing && !known, ambiguous: true, fromChoice: Boolean(known) };
+  });
+  if (viewing) {
+    // A file that is only ever proof of payment is never taken as a receipt on a sibling's say-so.
+    const proof = new Set<string>([...methodFile.values(), ...input.rows.map((r) => str(r.values["Payment File"])).filter(Boolean)]);
+    const settled = new Map<string, Set<string>>();
+    input.rows.forEach((row, i) => {
+      const main = picks[i]?.main;
+      if (!main || proof.has(main)) return;
+      const set = settled.get(vendorOf(row)) ?? new Set<string>();
+      set.add(main);
+      settled.set(vendorOf(row), set);
+    });
+    // An unclear row that lists exactly one receipt a same-vendor sibling already settled is that sibling's purchase: no
+    // second pick is needed, and a pick made for one row's list covers a row with a shorter or longer list.
+    input.rows.forEach((row, i) => {
+      const pick = picks[i];
+      if (!pick?.unclear) return;
+      const hits = pick.files.filter((f) => settled.get(vendorOf(row))?.has(f));
+      if (hits.length === 1) {
+        pick.main = hits[0];
+        pick.unclear = false;
+      }
+    });
+    // The rest stay together the way the command line groups them (by the receipt file): rows of one vendor are one purchase
+    // when they list the same files in any order, or start with the same file. Nothing is chosen, only tied together.
+    const parent = new Map<string, string>();
+    const find = (x: string): string => {
+      let r = x;
+      while (parent.get(r) !== undefined && parent.get(r) !== r) r = parent.get(r)!;
+      parent.set(x, r);
+      return r;
+    };
+    const tie = (a: string, b: string) => {
+      if (!parent.has(a)) parent.set(a, a);
+      if (!parent.has(b)) parent.set(b, b);
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(ra < rb ? rb : ra, ra < rb ? ra : rb);
+    };
+    const nodes = (row: LegacyRow, files: string[]) => [`set::${[...files].sort().join("|")}::${vendorOf(row)}`, `first::${files[0]}::${vendorOf(row)}`];
+    input.rows.forEach((row, i) => {
+      const pick = picks[i];
+      if (pick?.unclear) tie(...(nodes(row, pick.files) as [string, string]));
+    });
+    input.rows.forEach((row, i) => {
+      const pick = picks[i];
+      if (pick?.unclear) pick.cluster = find(nodes(row, pick.files)[0]!);
+    });
+  }
+
   input.rows.forEach((row, index) => {
     const v = row.values;
     const legacyId = str(v["ID"]);
@@ -189,32 +268,18 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
     report.statusCounts[status || "(blank)"] = (report.statusCounts[status || "(blank)"] ?? 0) + 1;
 
     // ---- which document is the receipt?
-    const files = [...new Set(row.docFiles)];
-    let main: string | undefined;
-    let unclear = false;
-    if (files.length === 1) main = files[0];
-    else if (files.length > 1) {
-      const keyword = files.filter((f) => RECEIPT_KEYWORDS.some((k) => f.toLowerCase().includes(k)));
-      // The old habit: "7 - Receipt Hats.jpeg" is row 7's own file, while "6,7,8 - Citi Ending August.pdf" is shared proof.
-      const own = viewing ? files.filter((f) => new RegExp(`^\\s*${legacyId.replace(/\W/g, "")}\\s*-\\s`).test(f)) : [];
-      if (keyword.length === 1) main = keyword[0];
-      else if (own.length === 1) main = own[0];
-      else {
-        const remembered = choices[[...files].sort().join(" ")];
-        const known = remembered && files.includes(remembered) ? remembered : undefined;
-        unclear = viewing && !known;
-        main = known ?? (viewing ? undefined : files[0]);
-        report.ambiguousReceipts.push({ itemId, candidates: files, chosen: main ?? "", resolvedFromCache: Boolean(known) });
-      }
-    } else {
-      report.itemsWithoutDocuments.push(itemId);
-    }
+    const { files, unclear, ambiguous, cluster } = picks[index]!;
+    const main = picks[index]!.main;
+    if (ambiguous) report.ambiguousReceipts.push({ itemId, candidates: files, chosen: main ?? "", resolvedFromCache: picks[index]!.fromChoice });
+    if (files.length === 0) report.itemsWithoutDocuments.push(itemId);
 
     const vendor = str(v["Vendor"]);
     const provider = str(v["Service Provider"]);
     const vendorKey = (provider || vendor).toLowerCase();
-    // Rows that share the same unclear set of files are still one purchase, so a later pick settles them together.
-    const purchaseKey = main ? `${main}::${vendorKey}` : unclear ? `unclear::${[...files].sort().join("|")}::${vendorKey}` : `no-receipt::${legacyId}`;
+    // Rows that share the same unclear set of files are still one purchase, so a later pick settles them together. Like the
+    // command line's grouping, rows also tie together by their first file, not only by the whole list: a row that lists some
+    // of its siblings' files (or adds its own statement) is still the same purchase.
+    const purchaseKey = main ? `${main}::${vendorKey}` : unclear ? `unclear::${cluster}` : `no-receipt::${legacyId}`;
     const date = toIsoDate(v["Date"]);
     const invoice = str(v["Invoice #"]);
     const methodLabel = str(v["Payment Method"]);
