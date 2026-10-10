@@ -91,7 +91,7 @@ import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, l
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
-import { cacheDocument, clearCachedDocuments, getCachedDocument } from "./docCache.js";
+import { cacheDocument, clearCachedDocuments, getCachedDocument, hasSharedFiles, takeSharedFiles } from "./docCache.js";
 import { addScanPage, buildScanPdf, type ScanPage } from "./scan.js";
 import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
@@ -2374,6 +2374,13 @@ await guarded(async () => {
   } else if (account) await pickerTop();
 }, "Connecting to OneDrive…");
 if (workspace?.fromCache) void refreshInBackground(workspace);
+// Files shared to the installed app from another app go to the unattached files. If we are not connected yet they wait on this device.
+if (new URLSearchParams(location.search).has("shared")) history.replaceState(null, "", location.pathname);
+if (workspace && (await hasSharedFiles())) await uploadFiles(await takeSharedFiles(), false);
+else if (await hasSharedFiles()) {
+  status = "Files you shared are waiting on this device. Sign in and connect your folder to add them.";
+  render();
+}
 void loadProviders().then((byCategory) => {
   publishedProviders = byCategory;
 });

@@ -34,3 +34,33 @@ export async function clearCachedDocuments(): Promise<void> {
     /* nothing to clear */
   }
 }
+
+const SHARED = "https://shared.local/";
+
+/** Files other apps shared to this one (parked by the service worker), removed from the cache as they are taken. */
+export async function takeSharedFiles(): Promise<File[]> {
+  try {
+    const cache = await caches.open(NAME);
+    const files: File[] = [];
+    for (const req of await cache.keys()) {
+      if (!req.url.startsWith(SHARED)) continue;
+      const hit = await cache.match(req);
+      if (!hit) continue;
+      const blob = await hit.blob();
+      const name = decodeURIComponent(hit.headers.get("X-File-Name") ?? "Shared file");
+      files.push(new File([blob], name, { type: blob.type }));
+      await cache.delete(req);
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+export async function hasSharedFiles(): Promise<boolean> {
+  try {
+    return (await (await caches.open(NAME)).keys()).some((r) => r.url.startsWith(SHARED));
+  } catch {
+    return false;
+  }
+}
