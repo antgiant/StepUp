@@ -1757,6 +1757,8 @@ function go(next: View): void {
   replacingReceipt = undefined;
   itemEdit = undefined;
   render();
+  // A new page opens at its top, not wherever the previous one was scrolled to.
+  window.scrollTo({ top: 0 });
 }
 
 root.addEventListener("click", async (ev) => {
@@ -1939,6 +1941,7 @@ root.addEventListener("click", async (ev) => {
   } else if (d["statement"]) {
     view = { name: "statement", id: d["statement"] };
     render();
+    window.scrollTo({ top: 0 });
     if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
   } else if (t.id === "start-scan") {
     const now = new Date();
