@@ -29,6 +29,7 @@ import {
   type RulesContext,
   type YearInfo,
 } from "@step-up/shared/web";
+import type { WorkspaceCache } from "./cache.js";
 import type { OpenWorkspace } from "./workspace.js";
 
 export interface LegacyState {
@@ -66,6 +67,26 @@ export async function openLegacyWorkspace(pointer: Pointer, years: YearInfo[], y
     eventsId: "",
     carried: { children: 0, paymentMethods: 0 },
     legacy: { year: derived, ledger, ...r, readAt: Date.now() },
+  };
+}
+
+/** Builds the read-only workspace from what was last read out of Excel (no network). Call `revalidate` next. */
+export function openLegacyFromCache(pointer: Pointer, years: YearInfo[], year: YearInfo, clientId: string, rec: NonNullable<WorkspaceCache["legacy"]>): OpenWorkspace {
+  const { driveId } = pointer;
+  const r = refs(driveId, year, { id: rec.workbook.itemId, name: rec.workbook.name, eTag: rec.workbook.eTag, webUrl: rec.workbook.webUrl });
+  const derived = deriveLegacyYear(rec.input, rec.choices);
+  const ledger = new LegacyLedger(derived.result.events);
+  return {
+    pointer: { ...pointer, year: year.label },
+    years,
+    year,
+    driveId,
+    ledger,
+    store: new OneDriveEventStore(driveId, "", clientId),
+    eventsId: "",
+    fromCache: true,
+    carried: { children: 0, paymentMethods: 0 },
+    legacy: { year: derived, ledger, ...r, readAt: rec.readAt },
   };
 }
 

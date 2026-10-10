@@ -23,7 +23,7 @@ import {
 } from "@step-up/shared/web";
 
 import type { WorkspaceCache } from "./cache.js";
-import { openLegacyWorkspace, refreshLegacy, type LegacyState } from "./legacyYear.js";
+import { openLegacyFromCache, openLegacyWorkspace, refreshLegacy, type LegacyState } from "./legacyYear.js";
 
 const KEY = "stepup.workspace.v1";
 
@@ -223,21 +223,24 @@ export async function copyFromPreviousYear(ws: OpenWorkspace, clientId: string):
 export const hasEarlierYear = (ws: OpenWorkspace): boolean => ws.years.some((y) => y.kind !== "empty" && y.label < ws.year.label);
 
 /** Builds the workspace from what this browser remembered: no network, so the first paint is instant. Call `revalidate` next. */
-export function openFromCache(pointer: Pointer, clientId: string, rec: WorkspaceCache): OpenWorkspace | undefined {
-  const year = rec.years.find((y) => y.label === rec.yearLabel);
+export function openFromCache(pointer: Pointer, clientId: string, rec: WorkspaceCache, years: YearInfo[] = rec.years): OpenWorkspace | undefined {
+  const year = years.find((y) => y.label === rec.yearLabel);
   if (!year) return undefined;
+  if (rec.legacy) return openLegacyFromCache(pointer, years, year, clientId, rec.legacy);
   const store = new OneDriveEventStore(pointer.driveId, rec.eventsId, clientId);
   store.seedCache(rec.logs);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   ledger.loadKnown(store.cachedEvents());
-  return { pointer: { ...pointer, year: year.label }, years: rec.years, year, driveId: pointer.driveId, ledger, store, eventsId: rec.eventsId, fromCache: true, carried: { children: 0, paymentMethods: 0 } };
+  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: rec.eventsId, fromCache: true, carried: { children: 0, paymentMethods: 0 } };
 }
 
 /** Brings a cache-built workspace up to date: re-lists the years and downloads only the logs whose ETag changed. Returns whether anything changed. */
 export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
   if (ws.legacy) {
     ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
-    return refreshLegacy(ws);
+    const changed = await refreshLegacy(ws);
+    ws.fromCache = false;
+    return changed;
   }
   const before = JSON.stringify([ws.ledger.state, ws.years]);
   ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
@@ -250,6 +253,12 @@ export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
 }
 
 export function snapshotFor(ws: OpenWorkspace, reference?: CategoryReference): WorkspaceCache {
+  const l = ws.legacy;
+  if (l) {
+    const { itemId, name, eTag, webUrl } = l.workbook;
+    const workbook = { itemId, name, ...(eTag ? { eTag } : {}), ...(webUrl ? { webUrl } : {}) };
+    return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: "", logs: [], legacy: { input: l.year.input, choices: l.year.choices, workbook, readAt: l.readAt }, savedAt: Date.now() };
+  }
   return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: ws.eventsId, logs: ws.store.exportCache(), ...(reference ? { snapshot: reference } : {}), savedAt: Date.now() };
 }
 

@@ -185,7 +185,7 @@ function referenceUpdate(): { added: number; changed: number; removed: number } 
 
 async function updateYearReference(): Promise<void> {
   const ws = workspace;
-  if (!ws || !publishedRef || !yearSnapshot || !ledgerFolderId) return;
+  if (!ws || !publishedRef || !yearSnapshot || !ledgerFolderId || ledgerFolderId.yearFolderId !== ws.year.folderId) return;
   const d = diffReference(yearSnapshot, publishedRef);
   const ok = confirm(
     `Update this year's category list to version ${publishedRef.version}?\n\n${d.added.length} new, ${d.changed.length} changed${d.removed.length ? `, ${d.removed.length} no longer published (kept, marked inactive)` : ""}.\nItems already filed keep their category; your own category fixes stay on top.`
@@ -556,10 +556,38 @@ function clearPreviews(): void {
   downloaded.clear();
 }
 
+/**
+ * Opens another year at once from what this browser remembers of it (a ledger year's events, or the last reading of an
+ * Excel year), then lets the slow refresh from OneDrive catch up and tidy the screen and the cache when it finishes.
+ * A year never opened here before has nothing remembered, so it is read from OneDrive.
+ */
+async function switchYear(from: Pointer, label: string): Promise<void> {
+  const pointer = { ...from, year: label };
+  const cached = account ? await readCache(keyOf(pointer)) : undefined;
+  const quick = cached ? openFromCache(pointer, store.clientId, cached, workspace?.years) : undefined;
+  if (!quick) {
+    attach(await openWorkspace(from, store.clientId, label));
+    return;
+  }
+  attach(quick);
+  if (cached?.snapshot && !quick.legacy) {
+    yearSnapshot = cached.snapshot;
+    referenceBase = cached.snapshot;
+  }
+  void refreshInBackground(quick);
+}
+
 /** Browser cache of the open workspace (see cache.ts). Best effort: failures just mean a slower next visit. */
 const keyOf = (p: Pointer) => cacheKey(account?.homeAccountId ?? "", p.driveId, p.rootId, p.year ?? "");
 function persist(): void {
-  if (account && workspace && !workspace.legacy) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace, yearSnapshot));
+  if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace, yearSnapshot));
+}
+/** Saves a refreshed year the person has already switched away from, keeping the category list its record already had. */
+async function persistOther(ws: OpenWorkspace): Promise<void> {
+  if (!account) return;
+  const key = keyOf(ws.pointer);
+  const old = await readCache(key);
+  await writeCache(key, snapshotFor(ws, old?.snapshot));
 }
 function forgetCache(): void {
   if (account && workspace) {
@@ -595,7 +623,10 @@ async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
   try {
     const changed = await revalidate(ws);
     lastRefresh = Date.now();
-    if (workspace !== ws) return;
+    if (workspace !== ws) {
+      void persistOther(ws); // switched to another year meanwhile: still leave this one's cache up to date
+      return;
+    }
     if (ws.carried.children) {
       status = `Added ${ws.carried.children} student(s) from last year.`;
       await ledger.flush();
@@ -1733,7 +1764,7 @@ root.addEventListener("click", async (ev) => {
   if (workspace?.legacy) {
     // A year viewed from Excel: only looking around, picking a receipt, and the connection controls do anything.
     const legacy = workspace;
-    if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); status = "Read the workbook again."; }, "Reading the Excel workbook…");
+    if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); persist(); status = "Read the workbook again."; }, "Reading the Excel workbook…");
     else if (t.id === "legacy-download") {
       await guarded(async () => {
         const file = await legacySpreadsheet(legacy);
@@ -1746,7 +1777,7 @@ root.addEventListener("click", async (ev) => {
       const un = legacy.legacy!.year.unclear.find((u) => u.purchaseId === id);
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
-      if (candidates) await guarded(() => chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined), "Saving your answer…");
+      if (candidates) await guarded(async () => { await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined); persist(); }, "Saving your answer…");
     } else if (d["go"] || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app") {
       // fall through to the shared handlers below
     } else return;
@@ -2132,7 +2163,7 @@ root.addEventListener("change", async (ev) => {
   if (workspace?.legacy && input.id !== "year-pick") return;
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
-    await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);
+    await guarded(() => switchYear(pointer, input.value), `Opening ${input.value}…`);
     return;
   }
   if (input.dataset["childScholarship"]) {
