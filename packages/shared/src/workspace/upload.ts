@@ -1,6 +1,5 @@
 import type { Ledger } from "../events/ledger.js";
-import { GraphError } from "../graph/client.js";
-import { writeFile } from "../graph/files.js";
+import { isStorageError, type StorageProvider } from "../storage/types.js";
 import { documentIdFor, guessContentKind } from "./ingest.js";
 
 export interface UploadInput {
@@ -24,7 +23,7 @@ const withSuffix = (name: string, n: number) => {
  * in the entry queue. A file whose SHA-256 is already registered is not uploaded again. A name clash never overwrites
  * an existing file: the new one becomes "name (2).ext". The caller flushes the ledger.
  */
-export async function uploadReceipt(ledger: Ledger, driveId: string, yearFolderId: string, input: UploadInput): Promise<UploadResult> {
+export async function uploadReceipt(ledger: Ledger, storage: StorageProvider, driveId: string, yearFolderId: string, input: UploadInput): Promise<UploadResult> {
   if (input.sha256) {
     const same = Object.values(ledger.state.documents).find((d) => d.sha256 === input.sha256);
     if (same) return { status: "duplicate", documentId: same.id, name: same.filename ?? input.name };
@@ -32,7 +31,7 @@ export async function uploadReceipt(ledger: Ledger, driveId: string, yearFolderI
   for (let n = 1; n <= 50; n++) {
     const name = n === 1 ? input.name : withSuffix(input.name, n);
     try {
-      const stored = await writeFile(driveId, yearFolderId, name, input.body, { createOnly: true });
+      const stored = await storage.write(driveId, yearFolderId, name, input.body, { createOnly: true });
       const documentId = documentIdFor(stored.id);
       ledger.set(
         "document",
@@ -50,7 +49,7 @@ export async function uploadReceipt(ledger: Ledger, driveId: string, yearFolderI
       );
       return { status: "uploaded", documentId, name: stored.name };
     } catch (err) {
-      if (err instanceof GraphError && err.status === 409) continue;
+      if (isStorageError(err, "exists")) continue;
       throw err;
     }
   }

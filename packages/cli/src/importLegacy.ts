@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildLegacyImport, buildMirror, readLegacyWorkbook, renderMirrorXlsx, type LegacyInput } from "@step-up/shared";
+import { OneDriveProvider, buildLegacyImport, buildMirror, readLegacyWorkbook, renderMirrorXlsx, type LegacyInput } from "@step-up/shared";
 import { resolveShareLink } from "./graph/onedrive.js";
+import { cliAuth } from "./graph/auth.js";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -22,7 +23,7 @@ async function main() {
   const year = yearArg ?? /(\d{4}-\d{4})/.exec(excelRef.name)?.[1] ?? "legacy";
   console.log(`Reading "${excelRef.name}" as year ${year} (read-only)...`);
 
-  const read = await readLegacyWorkbook(excelRef, folderRef, year);
+  const read = await readLegacyWorkbook(new OneDriveProvider(cliAuth), excelRef, folderRef, year);
   const receiptChoices = await readFile(path.resolve(process.cwd(), ".cache", "receipt-choice-cache.json"), "utf-8").then(JSON.parse).catch(() => ({}));
 
   const input: LegacyInput = { ...read, receiptChoices };

@@ -1,5 +1,4 @@
-import { GraphError } from "../graph/client.js";
-import { findChild, readTextFile, writeFile } from "../graph/files.js";
+import { isStorageError, type StorageProvider } from "../storage/types.js";
 import { REFERENCE_SCHEMA_VERSION, referenceHash, validateCategoryReference, type CategoryReference, type ReferenceNode } from "./categories.js";
 
 /**
@@ -9,11 +8,11 @@ import { REFERENCE_SCHEMA_VERSION, referenceHash, validateCategoryReference, typ
 export const SNAPSHOT_FILE = "reference.snapshot.json";
 
 /** The year's frozen category list, if it has one (and it is valid). */
-export async function readYearSnapshot(driveId: string, ledgerFolderId: string): Promise<CategoryReference | undefined> {
-  const file = await findChild(driveId, ledgerFolderId, SNAPSHOT_FILE);
+export async function readYearSnapshot(storage: StorageProvider, driveId: string, ledgerFolderId: string): Promise<CategoryReference | undefined> {
+  const file = await storage.find(driveId, ledgerFolderId, SNAPSHOT_FILE);
   if (!file) return undefined;
   try {
-    const data: unknown = JSON.parse((await readTextFile(driveId, file.id)).text);
+    const data: unknown = JSON.parse((await storage.readText(driveId, file.id)).text);
     return validateCategoryReference(data).length === 0 ? (data as CategoryReference) : undefined;
   } catch {
     return undefined;
@@ -21,11 +20,11 @@ export async function readYearSnapshot(driveId: string, ledgerFolderId: string):
 }
 
 /** Freezes a copy for the year. Never overwrites an existing snapshot (create-only), so two devices starting at once agree. */
-export async function writeYearSnapshot(driveId: string, ledgerFolderId: string, ref: CategoryReference, replace = false): Promise<void> {
+export async function writeYearSnapshot(storage: StorageProvider, driveId: string, ledgerFolderId: string, ref: CategoryReference, replace = false): Promise<void> {
   try {
-    await writeFile(driveId, ledgerFolderId, SNAPSHOT_FILE, JSON.stringify(ref), replace ? {} : { createOnly: true });
+    await storage.write(driveId, ledgerFolderId, SNAPSHOT_FILE, JSON.stringify(ref), replace ? {} : { createOnly: true });
   } catch (err) {
-    if (!replace && err instanceof GraphError && err.status === 409) return; // someone else just made it
+    if (!replace && isStorageError(err, "exists")) return; // someone else just made it
     throw err;
   }
 }

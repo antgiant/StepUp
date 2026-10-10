@@ -1,10 +1,9 @@
 import ExcelJS from "exceljs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
+import { OneDriveProvider,
   MAIN_SHEET,
   buildMirror,
   configureGraph,
-  ensureFolder,
   publishMirror,
   renderMirrorXlsx,
   setTokenProvider,
@@ -14,7 +13,9 @@ import {
   type LedgerState,
   type RulesContext,
 } from "../src/index.js";
-import { FakeGraph } from "./fakeGraph.js";
+
+const storage = new OneDriveProvider(testAuth);
+import { FakeGraph, testAuth } from "./fakeGraph.js";
 
 const categories: Record<string, CategoryInfo> = {
   books: { id: "books", path: ["Curriculum", "Workbooks"], requiresServiceDate: false, eligibleScholarships: ["FES-UA"], isActive: true },
@@ -148,23 +149,23 @@ describe("publishMirror", () => {
   afterEach(() => configureGraph());
 
   it("writes once, skips when the state is unchanged, rewrites when it changes", async () => {
-    const reports = await ensureFolder("d", g.rootId, "reports");
+    const reports = await storage.ensureFolder("d", g.rootId, "reports");
     const model = buildMirror(state(), ctx, opts);
-    expect((await publishMirror("d", reports, "mirror.xlsx", model)).status).toBe("written");
-    expect((await publishMirror("d", reports, "mirror.xlsx", model)).status).toBe("unchanged");
+    expect((await publishMirror(storage, "d", reports, "mirror.xlsx", model)).status).toBe("written");
+    expect((await publishMirror(storage, "d", reports, "mirror.xlsx", model)).status).toBe("unchanged");
     const s2 = state();
     s2.items["i2"]!.description = "Changed";
-    expect((await publishMirror("d", reports, "mirror.xlsx", buildMirror(s2, ctx, opts))).status).toBe("written");
+    expect((await publishMirror(storage, "d", reports, "mirror.xlsx", buildMirror(s2, ctx, opts))).status).toBe("written");
   });
 
   it("reports a locked workbook (open in Excel) instead of throwing", async () => {
-    const reports = await ensureFolder("d", g.rootId, "reports");
+    const reports = await storage.ensureFolder("d", g.rootId, "reports");
     configureGraph({
       fetch: (async (u: RequestInfo | URL, i?: RequestInit) =>
         String(u).includes(".xlsx:/content") && i?.method === "PUT" ? new Response("locked", { status: 423 }) : g.fetch(u, i)) as typeof fetch,
       sleep: async () => {},
     });
-    expect((await publishMirror("d", reports, "mirror.xlsx", buildMirror(state(), ctx, opts))).status).toBe("locked");
+    expect((await publishMirror(storage, "d", reports, "mirror.xlsx", buildMirror(state(), ctx, opts))).status).toBe("locked");
   });
 });
 

@@ -1,20 +1,11 @@
 import { GraphError, graphFetch, graphJson, noteServerTime, trackActivity } from "./client.js";
+import { bodyBytes, bodySize, type FileBody, type StoredFile, type WriteOptions } from "../storage/types.js";
 import { sendUploadChunk } from "./uploadTransport.js";
 
 /** Simple PUT upload is limited to ~4 MB by Graph; anything larger needs an upload session. */
 export const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024;
 /** Upload-session chunks must be a multiple of 320 KiB. */
 export const UPLOAD_CHUNK = 320 * 1024 * 10;
-
-export type FileBody = string | Uint8Array | Blob;
-
-export interface StoredFile {
-  id: string;
-  name: string;
-  eTag?: string;
-  size?: number;
-  webUrl?: string;
-}
 
 interface DriveItemJson {
   id: string;
@@ -27,11 +18,6 @@ interface DriveItemJson {
 }
 
 const encodeName = (name: string) => encodeURIComponent(name);
-
-function sizeOf(body: FileBody): number {
-  if (typeof body === "string") return new TextEncoder().encode(body).byteLength;
-  return body instanceof Blob ? body.size : body.byteLength;
-}
 
 /** Finds a direct child by name; undefined when it does not exist. */
 export async function findChild(driveId: string, parentId: string, name: string): Promise<(StoredFile & { isFolder: boolean }) | undefined> {
@@ -85,24 +71,18 @@ export async function readTextFile(driveId: string, itemId: string): Promise<{ t
   return { text: await response.text(), eTag: meta.eTag };
 }
 
-export interface FileWriteOptions {
-  /** Replace only if the file's current ETag matches (optimistic concurrency); a mismatch throws GraphError 412. */
-  ifMatch?: string;
-  /** Fail instead of overwriting when a file with this name already exists. */
-  createOnly?: boolean;
-}
 
 /**
  * Creates or replaces `name` inside the folder. Up to ~4 MB uses one PUT; larger bodies use an upload session
  * with sequential chunks.
  */
-export async function writeFile(driveId: string, parentId: string, name: string, body: FileBody, opts: FileWriteOptions = {}): Promise<StoredFile> {
+export async function writeFile(driveId: string, parentId: string, name: string, body: FileBody, opts: WriteOptions = {}): Promise<StoredFile> {
   const conflict = opts.createOnly ? "fail" : "replace";
   const base = `/drives/${driveId}/items/${parentId}:/${encodeName(name)}`;
   const headers: Record<string, string> = {};
   if (opts.ifMatch) headers["If-Match"] = opts.ifMatch;
 
-  if (sizeOf(body) <= SIMPLE_UPLOAD_LIMIT) {
+  if (bodySize(body) <= SIMPLE_UPLOAD_LIMIT) {
     const item = await graphJson<DriveItemJson>(`${base}:/content?@microsoft.graph.conflictBehavior=${conflict}`, {
       method: "PUT",
       headers,
@@ -118,7 +98,7 @@ export async function writeFile(driveId: string, parentId: string, name: string,
     headers,
     body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": conflict } }),
   });
-  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : body;
+  const bytes = await bodyBytes(body);
   let last: DriveItemJson | undefined;
   await trackActivity(`Uploading ${name}…`, async (update) => {
     for (let start = 0; start < bytes.byteLength; start += UPLOAD_CHUNK) {

@@ -1,27 +1,10 @@
 import "dotenv/config";
 import { mkdir, writeFile as writeLocal } from "node:fs/promises";
 import path from "node:path";
-import { graphJson, openLedgerFolders, sha256OfBytes } from "@step-up/shared";
+import { openLedgerFolders, sha256OfBytes } from "@step-up/shared";
 import { readFile } from "node:fs/promises";
-import { downloadItem } from "./graph/onedrive.js";
 import { openYearLedger } from "./ledgerYear.js";
-
-interface Child {
-  id: string;
-  name: string;
-  folder?: unknown;
-}
-
-async function children(driveId: string, folderId: string): Promise<Child[]> {
-  const out: Child[] = [];
-  let url: string | undefined = `/drives/${driveId}/items/${folderId}/children?$select=id,name,folder&$top=200`;
-  while (url) {
-    const page: { value: Child[]; "@odata.nextLink"?: string } = await graphJson(url);
-    out.push(...page.value);
-    url = page["@odata.nextLink"];
-  }
-  return out;
-}
+import { downloadTo } from "./storage/index.js";
 
 /**
  * npm run backup -- 2026-2027 --to ~/Backups/stepup [--documents]
@@ -37,7 +20,7 @@ async function main() {
   if (!label || !to) throw new Error("Usage: npm run backup -- <year> --to <folder> [--documents]");
 
   const opened = await openYearLedger(label);
-  const folders = await openLedgerFolders(opened.driveId, opened.year.folderId);
+  const folders = await openLedgerFolders(opened.storage, opened.driveId, opened.year.folderId);
   if (!folders) throw new Error(`${label} has no ledger folders.`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const dest = path.resolve(to.replace(/^~/, process.env["HOME"] ?? "~"), `${label}-${stamp}`);
@@ -46,16 +29,16 @@ async function main() {
   const grab = async (itemId: string, rel: string) => {
     const file = path.join(dest, rel);
     await mkdir(path.dirname(file), { recursive: true });
-    await downloadItem(opened.driveId, itemId, file);
+    await downloadTo(opened.storage, opened.driveId, itemId, file);
     const bytes = await readFile(file);
     manifest.push({ path: rel, bytes: bytes.byteLength, sha256: await sha256OfBytes(bytes) });
   };
 
   console.log(`Backing up ${label} to ${dest}`);
-  for (const f of (await children(opened.driveId, folders.eventsId)).filter((c) => !c.folder)) await grab(f.id, `events/${f.name}`);
-  const ledgerKids = await children(opened.driveId, folders.ledgerId);
-  for (const f of ledgerKids.filter((c) => !c.folder && c.name.endsWith(".json"))) await grab(f.id, f.name); // reference.snapshot.json
-  for (const f of (await children(opened.driveId, folders.reportsId)).filter((c) => !c.folder && c.name.endsWith(".xlsx"))) await grab(f.id, `reports/${f.name}`);
+  for (const f of (await opened.storage.list(opened.driveId, folders.eventsId)).filter((c) => !c.isFolder)) await grab(f.id, `events/${f.name}`);
+  const ledgerKids = await opened.storage.list(opened.driveId, folders.ledgerId);
+  for (const f of ledgerKids.filter((c) => !c.isFolder && c.name.endsWith(".json"))) await grab(f.id, f.name); // reference.snapshot.json
+  for (const f of (await opened.storage.list(opened.driveId, folders.reportsId)).filter((c) => !c.isFolder && c.name.endsWith(".xlsx"))) await grab(f.id, `reports/${f.name}`);
 
   let docs = 0;
   if (args.includes("--documents")) {

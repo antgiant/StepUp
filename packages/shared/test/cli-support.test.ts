@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
+import { OneDriveProvider, StorageEventStore,
   HlcClock,
   Ledger,
   LockHeldError,
   LockLostError,
   MemoryBackend,
   MemoryEventStore,
-  OneDriveEventStore,
   SessionLock,
   applyObservedCategories,
   categorySyncEdits,
   configureGraph,
-  ensureFolder,
   publishYearMirror,
   referenceHash,
   resolveReference,
@@ -20,7 +18,9 @@ import {
   type ReferenceNode,
   type RulesContext,
 } from "../src/index.js";
-import { FakeGraph } from "./fakeGraph.js";
+
+const storage = new OneDriveProvider(testAuth);
+import { FakeGraph, testAuth } from "./fakeGraph.js";
 
 let g: FakeGraph;
 beforeEach(() => {
@@ -36,38 +36,38 @@ const bob = { actor: "bob@example.com", clientId: "cli-b", machine: "BOB-PC" };
 describe("SessionLock", () => {
   it("lets one person in and tells the other who is using StepUp", async () => {
     const root = g.rootId;
-    const lockA = await SessionLock.acquire("d", root, alice);
-    const err = await SessionLock.acquire("d", root, bob).catch((e) => e);
+    const lockA = await SessionLock.acquire(storage, "d", root, alice);
+    const err = await SessionLock.acquire(storage, "d", root, bob).catch((e) => e);
     expect(err).toBeInstanceOf(LockHeldError);
     expect(err.message).toMatch(/alice@example.com is using StepUp from ALICE-MAC/);
     await lockA.release();
-    const lockB = await SessionLock.acquire("d", root, bob); // free again
+    const lockB = await SessionLock.acquire(storage, "d", root, bob); // free again
     await lockB.release();
   });
 
   it("an abandoned lock (no heartbeat past its time-out) can be taken over, and the old holder finds out", async () => {
     let t = 1_000_000;
     const now = () => t;
-    const a = await SessionLock.acquire("d", g.rootId, alice, { ttlMs: 60_000, now });
+    const a = await SessionLock.acquire(storage, "d", g.rootId, alice, { ttlMs: 60_000, now });
     t += 30_000;
     await a.heartbeat(); // still alive
-    await expect(SessionLock.acquire("d", g.rootId, bob, { ttlMs: 60_000, now })).rejects.toBeInstanceOf(LockHeldError);
+    await expect(SessionLock.acquire(storage, "d", g.rootId, bob, { ttlMs: 60_000, now })).rejects.toBeInstanceOf(LockHeldError);
     t += 61_000; // alice's laptop slept
-    const b = await SessionLock.acquire("d", g.rootId, bob, { ttlMs: 60_000, now });
+    const b = await SessionLock.acquire(storage, "d", g.rootId, bob, { ttlMs: 60_000, now });
     await expect(a.heartbeat()).rejects.toBeInstanceOf(LockLostError);
     await a.release(); // does not remove bob's lock
-    await expect(SessionLock.acquire("d", g.rootId, alice, { now })).rejects.toBeInstanceOf(LockHeldError);
+    await expect(SessionLock.acquire(storage, "d", g.rootId, alice, { now })).rejects.toBeInstanceOf(LockHeldError);
     await b.release();
   });
 
   it("--force-unlock takes a live lock; your own leftover lock needs no force", async () => {
-    const a = await SessionLock.acquire("d", g.rootId, alice);
-    const forced = await SessionLock.acquire("d", g.rootId, bob, { force: true });
+    const a = await SessionLock.acquire(storage, "d", g.rootId, alice);
+    const forced = await SessionLock.acquire(storage, "d", g.rootId, bob, { force: true });
     await expect(a.heartbeat()).rejects.toBeInstanceOf(LockLostError);
     await forced.release();
 
-    await SessionLock.acquire("d", g.rootId, alice); // crashed without releasing
-    const again = await SessionLock.acquire("d", g.rootId, alice); // same install restarts
+    await SessionLock.acquire(storage, "d", g.rootId, alice); // crashed without releasing
+    const again = await SessionLock.acquire(storage, "d", g.rootId, alice); // same install restarts
     await again.release();
   });
 });
@@ -103,15 +103,15 @@ describe("category sync into the ledger", () => {
 describe("publishYearMirror", () => {
   const ctx: RulesContext = { today: "2026-10-20", category: () => undefined };
   it("writes the same file name the web uses, skips when unchanged, and respects the off switch", async () => {
-    const year = await ensureFolder("d", g.rootId, "2026-2027");
-    const ledger_ = await ensureFolder("d", year, "_ledger");
-    const events = await ensureFolder("d", ledger_, "events");
-    const reports = await ensureFolder("d", ledger_, "reports");
-    await ensureFolder("d", ledger_, "documents");
-    await ensureFolder("d", ledger_, "inbox");
-    const l = new Ledger(new OneDriveEventStore("d", events, "dev"), new HlcClock("dev"), "t");
+    const year = await storage.ensureFolder("d", g.rootId, "2026-2027");
+    const ledger_ = await storage.ensureFolder("d", year, "_ledger");
+    const events = await storage.ensureFolder("d", ledger_, "events");
+    const reports = await storage.ensureFolder("d", ledger_, "reports");
+    await storage.ensureFolder("d", ledger_, "documents");
+    await storage.ensureFolder("d", ledger_, "inbox");
+    const l = new Ledger(new StorageEventStore(storage, "d", events, "dev"), new HlcClock("dev"), "t");
     l.set("child", "kid", { name: "Kid" });
-    const opts = { ledger: l, ctx, driveId: "d", yearFolderId: year, yearLabel: "2026-2027", appVersion: "test" };
+    const opts = { ledger: l, storage, ctx, driveId: "d", yearFolderId: year, yearLabel: "2026-2027", appVersion: "test" };
 
     const first = await publishYearMirror(opts);
     expect(first.status).toBe("written");
@@ -122,18 +122,18 @@ describe("publishYearMirror", () => {
   });
 });
 
-import { clockLooksWrong, noteServerTime, serverClockSkewMs, writeFile } from "../src/index.js";
+import { clockLooksWrong, noteServerTime, serverClockSkewMs } from "../src/index.js";
 
 describe("clock skew", () => {
   it("compares OneDrive's idea of the time (a file's modified time after a write) with this device's", async () => {
     noteServerTime(new Date(Date.now()).toISOString());
     expect(clockLooksWrong()).toBe(false);
     g.clockOffsetMs = 10 * 60_000; // the server is ten minutes ahead of this machine
-    await writeFile("d", g.rootId, "probe.txt", "x");
+    await storage.write("d", g.rootId, "probe.txt", "x");
     expect(serverClockSkewMs()!).toBeGreaterThan(9 * 60_000);
     expect(clockLooksWrong()).toBe(true);
     g.clockOffsetMs = 0;
-    await writeFile("d", g.rootId, "probe.txt", "y");
+    await storage.write("d", g.rootId, "probe.txt", "y");
     expect(clockLooksWrong()).toBe(false);
   });
 

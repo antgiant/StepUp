@@ -5,7 +5,7 @@ import type { EventStore } from "../events/store.js";
 import type { LedgerEvent } from "../events/types.js";
 import { buildLegacyImport, type LegacyImportResult, type LegacyInput } from "../import/legacy.js";
 import { LEGACY_CHOICES_FILE } from "../workspace/workspace.js";
-import { findChild, readTextFile, writeFile } from "../graph/files.js";
+import type { StorageProvider } from "../storage/types.js";
 
 
 /** Thrown by anything that tries to change a year that Excel still owns. */
@@ -97,18 +97,18 @@ export function deriveLegacyYear(input: Omit<LegacyInput, "mode" | "receiptChoic
 }
 
 /** The remembered answers beside the workbook (in the year folder). Missing or unreadable means none. */
-export async function readReceiptChoices(driveId: string, yearFolderId: string): Promise<ReceiptChoices> {
-  const file = await findChild(driveId, yearFolderId, LEGACY_CHOICES_FILE);
+export async function readReceiptChoices(storage: StorageProvider, driveId: string, yearFolderId: string): Promise<ReceiptChoices> {
+  const file = await storage.find(driveId, yearFolderId, LEGACY_CHOICES_FILE);
   if (!file) return {};
   try {
-    const parsed = JSON.parse((await readTextFile(driveId, file.id)).text) as { receiptChoices?: ReceiptChoices };
+    const parsed = JSON.parse((await storage.readText(driveId, file.id)).text) as { receiptChoices?: ReceiptChoices };
     return parsed.receiptChoices && typeof parsed.receiptChoices === "object" ? parsed.receiptChoices : {};
   } catch {
     return {};
   }
 }
 
-export async function writeReceiptChoices(driveId: string, yearFolderId: string, choices: ReceiptChoices): Promise<void> {
+export async function writeReceiptChoices(storage: StorageProvider, driveId: string, yearFolderId: string, choices: ReceiptChoices): Promise<void> {
   const body = { note: "Answers to 'which file is the receipt?' for a year viewed from its Excel workbook. Safe to delete.", receiptChoices: choices };
-  await writeFile(driveId, yearFolderId, LEGACY_CHOICES_FILE, JSON.stringify(body, null, 1));
+  await storage.write(driveId, yearFolderId, LEGACY_CHOICES_FILE, JSON.stringify(body, null, 1));
 }

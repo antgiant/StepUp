@@ -1,16 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
+import { OneDriveProvider,
   LEDGER_DIR,
   configureGraph,
   ensureLedgerFolders,
   listYears,
   newClientId,
   openLedgerFolders,
-  parentOf,
   planLedgerFolders,
   setTokenProvider,
 } from "../src/index.js";
-import { FakeGraph } from "./fakeGraph.js";
+
+const storage = new OneDriveProvider(testAuth);
+import { FakeGraph, testAuth } from "./fakeGraph.js";
 
 let g: FakeGraph;
 let root: string;
@@ -33,7 +34,7 @@ afterEach(() => configureGraph());
 
 describe("workspace years", () => {
   it("discovers year folders by name and classifies them", async () => {
-    const years = await listYears("d", root);
+    const years = await listYears(storage, "d", root);
     expect(years.map((y) => [y.label, y.kind, y.looseFileCount])).toEqual([
       ["2024-2025", "empty", 0],
       ["2025-2026", "legacy-excel", 2],
@@ -43,26 +44,26 @@ describe("workspace years", () => {
   });
 
   it("plans setup without creating anything, then creates it idempotently without touching existing files", async () => {
-    const next = (await listYears("d", root)).find((y) => y.label === "2026-2027")!;
+    const next = (await listYears(storage, "d", root)).find((y) => y.label === "2026-2027")!;
     const before = g.nodes.size;
-    expect(await planLedgerFolders("d", next.folderId)).toEqual([LEDGER_DIR, "_ledger/events", "_ledger/documents", "_ledger/inbox", "_ledger/reports"]);
+    expect(await planLedgerFolders(storage, "d", next.folderId)).toEqual([LEDGER_DIR, "_ledger/events", "_ledger/documents", "_ledger/inbox", "_ledger/reports"]);
     expect(g.nodes.size).toBe(before);
-    expect(await openLedgerFolders("d", next.folderId)).toBeUndefined();
+    expect(await openLedgerFolders(storage, "d", next.folderId)).toBeUndefined();
 
-    const first = await ensureLedgerFolders("d", next.folderId);
-    const second = await ensureLedgerFolders("d", next.folderId);
+    const first = await ensureLedgerFolders(storage, "d", next.folderId);
+    const second = await ensureLedgerFolders(storage, "d", next.folderId);
     expect(second).toEqual(first);
-    expect(await planLedgerFolders("d", next.folderId)).toEqual([]);
-    expect(await openLedgerFolders("d", next.folderId)).toEqual(first);
+    expect(await planLedgerFolders(storage, "d", next.folderId)).toEqual([]);
+    expect(await openLedgerFolders(storage, "d", next.folderId)).toEqual(first);
     expect(g.child(next.folderId, "loose receipt.pdf")).toBeDefined();
 
-    const after = (await listYears("d", root)).find((y) => y.label === "2026-2027")!;
+    const after = (await listYears(storage, "d", root)).find((y) => y.label === "2026-2027")!;
     expect(after).toMatchObject({ kind: "ledger", looseFileCount: 1 });
   });
 
   it("finds a folder's parent", async () => {
-    const y = (await listYears("d", root))[0]!;
-    expect(await parentOf("d", y.folderId)).toBe(root);
+    const y = (await listYears(storage, "d", root))[0]!;
+    expect(await storage.parentOf("d", y.folderId)).toBe(root);
   });
 });
 

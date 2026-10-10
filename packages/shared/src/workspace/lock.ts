@@ -1,5 +1,4 @@
-import { GraphError } from "../graph/client.js";
-import { deleteItem, findChild, readTextFile, writeFile } from "../graph/files.js";
+import { isStorageError, type StorageProvider } from "../storage/types.js";
 
 /** StepUp does not cope with two people (or two sessions) on one account, so only one CLI may drive it at a time. */
 export const LOCK_FILE = "stepup-session.lock.json";
@@ -55,11 +54,12 @@ const parse = (text: string): LockFile | undefined => {
 
 /**
  * A lock file in the shared workspace folder. Taking it is a create-only upload, so two people starting at once cannot
- * both succeed; a lock whose heartbeat stopped is taken over with an ETag-checked replace. Advisory: the human is still
+ * both succeed; a lock whose heartbeat stopped is taken over with an version-checked replace. Advisory: the human is still
  * the real safeguard, this just stops an accidental second session.
  */
 export class SessionLock {
   private constructor(
+    private readonly storage: StorageProvider,
     private readonly driveId: string,
     private readonly rootId: string,
     private readonly holder: LockHolder,
@@ -70,22 +70,22 @@ export class SessionLock {
     private eTag: string | undefined
   ) {}
 
-  static async acquire(driveId: string, rootId: string, holder: LockHolder, options: LockOptions = {}): Promise<SessionLock> {
+  static async acquire(storage: StorageProvider, driveId: string, rootId: string, holder: LockHolder, options: LockOptions = {}): Promise<SessionLock> {
     const now = options.now ?? Date.now;
     const ttlMs = options.ttlMs ?? 5 * 60_000;
     const startedAt = new Date(now()).toISOString();
     const body = (): string => JSON.stringify({ holder, startedAt, heartbeatAt: new Date(now()).toISOString(), ttlMs } satisfies LockFile);
 
     try {
-      const made = await writeFile(driveId, rootId, LOCK_FILE, body(), { createOnly: true });
-      return new SessionLock(driveId, rootId, holder, startedAt, ttlMs, now, made.id, made.eTag);
+      const made = await storage.write(driveId, rootId, LOCK_FILE, body(), { createOnly: true });
+      return new SessionLock(storage, driveId, rootId, holder, startedAt, ttlMs, now, made.id, made.eTag);
     } catch (err) {
-      if (!(err instanceof GraphError && err.status === 409)) throw err;
+      if (!isStorageError(err, "exists")) throw err;
     }
 
-    const existing = await findChild(driveId, rootId, LOCK_FILE);
-    if (!existing) return SessionLock.acquire(driveId, rootId, holder, options); // released in between: try again
-    const { text, eTag } = await readTextFile(driveId, existing.id);
+    const existing = await storage.find(driveId, rootId, LOCK_FILE);
+    if (!existing) return SessionLock.acquire(storage, driveId, rootId, holder, options); // released in between: try again
+    const { text, eTag } = await storage.readText(driveId, existing.id);
     const current = parse(text);
     const idleMs = current ? now() - Date.parse(current.heartbeatAt) : Infinity;
     const ours = current?.holder.clientId === holder.clientId;
@@ -93,10 +93,10 @@ export class SessionLock {
     if (current && !stale && !ours && !options.force) throw new LockHeldError(current.holder, current.startedAt, current.heartbeatAt, idleMs);
 
     try {
-      const taken = await writeFile(driveId, rootId, LOCK_FILE, body(), { ifMatch: eTag });
-      return new SessionLock(driveId, rootId, holder, startedAt, ttlMs, now, taken.id, taken.eTag);
+      const taken = await storage.write(driveId, rootId, LOCK_FILE, body(), { ifMatch: eTag });
+      return new SessionLock(storage, driveId, rootId, holder, startedAt, ttlMs, now, taken.id, taken.eTag);
     } catch (err) {
-      if (err instanceof GraphError && (err.status === 412 || err.status === 409) && current) throw new LockHeldError(current.holder, current.startedAt, current.heartbeatAt, idleMs);
+      if (isStorageError(err, "changed", "exists") && current) throw new LockHeldError(current.holder, current.startedAt, current.heartbeatAt, idleMs);
       throw err;
     }
   }
@@ -104,11 +104,11 @@ export class SessionLock {
   /** Shows we are still here. Throws `LockLostError` if the lock is no longer ours. */
   async heartbeat(): Promise<void> {
     try {
-      const next = await writeFile(this.driveId, this.rootId, LOCK_FILE, JSON.stringify({ holder: this.holder, startedAt: this.startedAt, heartbeatAt: new Date(this.now()).toISOString(), ttlMs: this.ttlMs } satisfies LockFile), { ifMatch: this.eTag });
+      const next = await this.storage.write(this.driveId, this.rootId, LOCK_FILE, JSON.stringify({ holder: this.holder, startedAt: this.startedAt, heartbeatAt: new Date(this.now()).toISOString(), ttlMs: this.ttlMs } satisfies LockFile), { ifMatch: this.eTag });
       this.eTag = next.eTag;
       this.itemId = next.id;
     } catch (err) {
-      if (err instanceof GraphError && (err.status === 412 || err.status === 409)) throw new LockLostError();
+      if (isStorageError(err, "changed", "exists")) throw new LockLostError();
       throw err;
     }
   }
@@ -116,9 +116,9 @@ export class SessionLock {
   /** Lets go, but only if the lock is still ours. */
   async release(): Promise<void> {
     try {
-      await deleteItem(this.driveId, this.itemId, this.eTag);
+      await this.storage.remove(this.driveId, this.itemId, this.eTag);
     } catch (err) {
-      if (err instanceof GraphError && [404, 412].includes(err.status)) return; // already gone, or no longer ours
+      if (isStorageError(err, "not-found", "changed")) return; // already gone, or no longer ours
       throw err;
     }
   }

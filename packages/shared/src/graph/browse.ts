@@ -1,13 +1,6 @@
+import type { FolderEntry } from "../storage/types.js";
 import { graphJson } from "./client.js";
-import { ensureFolder } from "./files.js";
 import { resolveShareLink } from "./onedrive.js";
-
-/** A folder a person can pick: enough to address it on any drive (including one shared with them). */
-export interface FolderEntry {
-  driveId: string;
-  itemId: string;
-  name: string;
-}
 
 interface Item {
   id: string;
@@ -64,13 +57,6 @@ export async function subfolders(folder: FolderEntry): Promise<FolderEntry[]> {
     else if (i.folder) out.push({ driveId: folder.driveId, itemId: i.id, name: i.name });
   }
   return out.sort(byName);
-}
-
-/** Creates (or returns the existing) subfolder. */
-export async function createSubfolder(parent: FolderEntry, name: string): Promise<FolderEntry> {
-  const clean = name.trim();
-  if (!clean || /[\\/:*?"<>|]/.test(clean)) throw new Error('Folder names cannot be empty or contain \\ / : * ? " < > |');
-  return { driveId: parent.driveId, itemId: await ensureFolder(parent.driveId, parent.itemId, clean), name: clean };
 }
 
 /**

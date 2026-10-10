@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configureGraph, diffReference, ensureFolder, mergeReference, readYearSnapshot, referenceHash, resolveReference, setTokenProvider, validateCategoryReference, writeYearSnapshot, type CategoryReference, type ReferenceNode } from "../src/index.js";
-import { FakeGraph } from "./fakeGraph.js";
+import { OneDriveProvider, configureGraph, diffReference, mergeReference, readYearSnapshot, referenceHash, resolveReference, setTokenProvider, validateCategoryReference, writeYearSnapshot, type CategoryReference, type ReferenceNode } from "../src/index.js";
+
+const storage = new OneDriveProvider(testAuth);
+import { FakeGraph, testAuth } from "./fakeGraph.js";
 
 const node = (id: string, name: string, extra: Partial<ReferenceNode> = {}): ReferenceNode => ({ id, name, isActive: true, eligibleScholarships: [], requiresServiceDate: false, ...extra });
 const file = (version: number, categories: ReferenceNode[]): CategoryReference => ({ schemaVersion: 1, version, hash: referenceHash(categories), categories });
@@ -40,19 +42,19 @@ describe("year snapshot file", () => {
   afterEach(() => configureGraph());
 
   it("is written once (create-only) and read back; a second device's write does not overwrite it", async () => {
-    const dir = await ensureFolder("d", g.rootId, "_ledger");
-    expect(await readYearSnapshot("d", dir)).toBeUndefined();
+    const dir = await storage.ensureFolder("d", g.rootId, "_ledger");
+    expect(await readYearSnapshot(storage, "d", dir)).toBeUndefined();
     const a = file(1, [node("c1", "Curriculum")]);
-    await writeYearSnapshot("d", dir, a);
-    await writeYearSnapshot("d", dir, file(5, [node("x", "Other")])); // loses quietly
-    expect((await readYearSnapshot("d", dir))?.version).toBe(1);
-    await writeYearSnapshot("d", dir, file(2, [node("c1", "Curriculum")]), true); // an explicit update replaces
-    expect((await readYearSnapshot("d", dir))?.version).toBe(2);
+    await writeYearSnapshot(storage, "d", dir, a);
+    await writeYearSnapshot(storage, "d", dir, file(5, [node("x", "Other")])); // loses quietly
+    expect((await readYearSnapshot(storage, "d", dir))?.version).toBe(1);
+    await writeYearSnapshot(storage, "d", dir, file(2, [node("c1", "Curriculum")]), true); // an explicit update replaces
+    expect((await readYearSnapshot(storage, "d", dir))?.version).toBe(2);
   });
 
   it("an invalid file is ignored rather than trusted", async () => {
-    const dir = await ensureFolder("d", g.rootId, "_ledger");
+    const dir = await storage.ensureFolder("d", g.rootId, "_ledger");
     g.add(dir, "reference.snapshot.json", false, new TextEncoder().encode('{"nope":1}'));
-    expect(await readYearSnapshot("d", dir)).toBeUndefined();
+    expect(await readYearSnapshot(storage, "d", dir)).toBeUndefined();
   });
 });

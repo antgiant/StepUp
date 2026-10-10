@@ -1,3 +1,4 @@
+import type { OneDriveAuth } from "@step-up/shared";
 import { PublicClientApplication, type AccountInfo, type ICachePlugin } from "@azure/msal-node";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -89,3 +90,23 @@ export async function getSignedInName(): Promise<string> {
   const accounts = await getPca().getTokenCache().getAllAccounts();
   return accounts[0]?.username ?? "unknown user";
 }
+
+/** How the command line signs in to OneDrive: the cached account, else a device-code prompt in the terminal. */
+export const cliAuth: OneDriveAuth = {
+  getToken: getAccessToken,
+  async restore() {
+    await getAccessToken();
+    const account = (await getPca().getTokenCache().getAllAccounts())[0];
+    return account ? { id: account.homeAccountId, name: account.username } : undefined;
+  },
+  async signIn() {
+    await getAccessToken();
+  },
+  async signOut() {
+    await fs.rm(CACHE_FILE, { force: true });
+  },
+  canAutoSignIn: () => false,
+  async autoSignIn() {
+    await getAccessToken();
+  },
+};

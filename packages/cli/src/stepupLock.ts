@@ -1,16 +1,9 @@
 import os from "node:os";
-import { LockHeldError, LockLostError, SessionLock, parentOf, resolveShareLink } from "@step-up/shared";
+import { LockHeldError, LockLostError, SessionLock } from "@step-up/shared";
 import { getClientId } from "./clientId.js";
-import { getSignedInName } from "./graph/auth.js";
-import "./graph/client.js"; // registers the Node token provider
+import { locateWorkspace } from "./storage/index.js";
 
 const HEARTBEAT_MS = 60_000;
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required environment variable ${name} (see .env.example).`);
-  return value;
-}
 
 export interface HeldLock {
   /** Gives the lock back. Safe to call more than once. */
@@ -23,14 +16,14 @@ export interface HeldLock {
  * `--force-unlock` takes it over from someone who seems to hold it. Throws (with who and since when) if it is held.
  */
 export async function acquireStepUpLock(): Promise<HeldLock> {
-  const current = await resolveShareLink(requireEnv("ONEDRIVE_FILES_FOLDER_URL"));
-  const rootId = await parentOf(current.driveId, current.itemId);
-  const holder = { actor: await getSignedInName(), clientId: await getClientId(), machine: os.hostname() };
+  const { storage, driveId, rootId } = await locateWorkspace();
+  const actor = (await storage.auth.restore())?.name ?? "unknown user";
+  const holder = { actor, clientId: await getClientId(), machine: os.hostname() };
   const force = process.argv.includes("--force-unlock");
 
   let lock: SessionLock;
   try {
-    lock = await SessionLock.acquire(current.driveId, rootId, holder, { force });
+    lock = await SessionLock.acquire(storage, driveId, rootId, holder, { force });
   } catch (err) {
     if (err instanceof LockHeldError) throw new Error(`StepUp is already in use.\n${err.message}`);
     throw err;

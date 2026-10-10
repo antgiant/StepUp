@@ -1,7 +1,6 @@
-import { GraphError, graphJson } from "../graph/client.js";
-import { findChild, readTextFile, writeFile } from "../graph/files.js";
+import type { StorageProvider } from "../storage/types.js";
 
-/** Which folder a person uses. Stored in their own OneDrive app folder so every device finds it after sign-in. */
+/** Which folder a person uses. Stored in their own app folder in their storage so every device finds it after sign-in. */
 export interface Pointer {
   driveId: string;
   rootId: string;
@@ -9,16 +8,6 @@ export interface Pointer {
 }
 
 export const POINTER_FILE = "pointer.json";
-
-async function approot(): Promise<{ driveId: string; id: string } | undefined> {
-  try {
-    const item = await graphJson<{ id: string; parentReference?: { driveId?: string } }>("/me/drive/special/approot?$select=id,parentReference");
-    return item.parentReference?.driveId ? { driveId: item.parentReference.driveId, id: item.id } : undefined;
-  } catch (err) {
-    if (err instanceof GraphError && (err.status === 404 || err.status === 403)) return undefined;
-    throw err;
-  }
-}
 
 function parse(text: string): Pointer | undefined {
   try {
@@ -30,18 +19,18 @@ function parse(text: string): Pointer | undefined {
 }
 
 /** The pointer saved in this account's app folder, or undefined when none (or the app folder is not available). */
-export async function loadRemotePointer(): Promise<Pointer | undefined> {
-  const root = await approot();
+export async function loadRemotePointer(storage: StorageProvider): Promise<Pointer | undefined> {
+  const root = await storage.appFolder();
   if (!root) return undefined;
-  const file = await findChild(root.driveId, root.id, POINTER_FILE);
+  const file = await storage.find(root.driveId, root.id, POINTER_FILE);
   if (!file || file.isFolder) return undefined;
-  return parse((await readTextFile(root.driveId, file.id)).text);
+  return parse((await storage.readText(root.driveId, file.id)).text);
 }
 
 /** Saves the pointer; `undefined` clears it. Returns false when the app folder is not available. */
-export async function saveRemotePointer(pointer: Pointer | undefined): Promise<boolean> {
-  const root = await approot();
+export async function saveRemotePointer(storage: StorageProvider, pointer: Pointer | undefined): Promise<boolean> {
+  const root = await storage.appFolder();
   if (!root) return false;
-  await writeFile(root.driveId, root.id, POINTER_FILE, JSON.stringify(pointer ?? {}));
+  await storage.write(root.driveId, root.id, POINTER_FILE, JSON.stringify(pointer ?? {}));
   return true;
 }

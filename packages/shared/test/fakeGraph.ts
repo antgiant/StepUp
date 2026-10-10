@@ -1,3 +1,8 @@
+import { noSignIn, type OneDriveAuth } from "../src/index.js";
+
+/** Sign-in for tests: always signed in, with a fixed token. */
+export const testAuth: OneDriveAuth = { ...noSignIn({ id: "test", name: "Test" }), getToken: async () => "token" };
+
 /** Minimal in-memory Microsoft Graph (OneDrive files only), enough to exercise the shared client/store code. */
 interface Node {
   id: string;
@@ -57,7 +62,13 @@ export class FakeGraph {
     const headers = new Headers(init.headers);
     const body = init.body;
     const bytes = async (): Promise<Uint8Array> =>
-      typeof body === "string" ? new TextEncoder().encode(body) : body instanceof Uint8Array ? body : new Uint8Array();
+      typeof body === "string"
+        ? new TextEncoder().encode(body)
+        : body instanceof Uint8Array
+          ? body
+          : body instanceof Blob
+            ? new Uint8Array(await body.arrayBuffer())
+            : new Uint8Array();
 
     if (url.startsWith("https://upload.fake/")) {
       const s = this.sessions.get(url)!;
@@ -107,6 +118,17 @@ export class FakeGraph {
     if ((m = /^\/drives\/[^/]+\/items\/([^/?]+)\/content$/.exec(path))) {
       const n = this.nodes.get(m[1]!);
       return n ? new Response(n.content as BodyInit) : this.json({}, 404);
+    }
+    if ((m = /^\/drives\/[^/]+\/items\/([^/?]+)(\?.*)?$/.exec(path)) && method === "PATCH") {
+      const n = this.nodes.get(m[1]!);
+      if (!n) return this.json({ error: "itemNotFound" }, 404);
+      const spec = JSON.parse(String(body)) as { name?: string };
+      if (spec.name) {
+        const taken = n.parent ? this.child(n.parent, spec.name) : undefined;
+        if (taken && taken.id !== n.id) return this.json({ error: "nameAlreadyExists" }, 409);
+        n.name = spec.name;
+      }
+      return this.json(this.meta(n));
     }
     if ((m = /^\/drives\/[^/]+\/items\/([^/?]+)(\?.*)?$/.exec(path)) && method === "DELETE") {
       const n = this.nodes.get(m[1]!);

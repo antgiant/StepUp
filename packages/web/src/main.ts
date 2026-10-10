@@ -1,14 +1,11 @@
 import {
+  type StorageAccount,
+  type LedgerEvent,
   HlcClock,
   scholarshipNamesMatch,
   Ledger,
   createSubfolder,
-  folderFromLink,
-  inviteToFolder,
   listLooseFiles,
-  myDriveRoot,
-  sharedFolders,
-  subfolders,
   type FolderEntry,
   planIngest,
   registerLooseFiles,
@@ -47,7 +44,6 @@ import {
   checkRedactionOutput,
   summarizeChanges,
   readableFileName,
-  renameItem,
   clockLooksWrong,
   serverClockSkewMs,
   diffReference,
@@ -67,7 +63,6 @@ import {
   type StatementData,
   type TransactionMatch,
   openLedgerFolders,
-  fetchItemContent,
   uploadReceipt,
   setPurchaseArchived,
   remainingToItemize,
@@ -83,7 +78,8 @@ import {
   type MapTarget,
   type RulesContext,
 } from "@step-up/shared/web";
-import { autoSignIn, canAutoSignIn, initAuth, signIn, signOut } from "./auth.js";
+import { storage } from "./storage.js";
+import { switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
@@ -117,7 +113,7 @@ function clientId(): string {
 
 const store = new LocalEventStore(clientId());
 let ledger = new Ledger(store, new HlcClock(store.clientId), "web");
-let account: Awaited<ReturnType<typeof initAuth>> = null;
+let account: StorageAccount | undefined;
 let workspace: OpenWorkspace | undefined;
 let activeStore: EventStore = store;
 let status = "";
@@ -161,14 +157,14 @@ async function loadYearReference(ws: OpenWorkspace): Promise<void> {
   if (ws.legacy) return; // a year Excel owns has no frozen category list of its own
   try {
     if (ledgerFolderId?.yearFolderId !== ws.year.folderId) {
-      const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
+      const folders = await openLedgerFolders(storage, ws.driveId, ws.year.folderId);
       if (!folders) return;
       ledgerFolderId = { yearFolderId: ws.year.folderId, id: folders.ledgerId };
     }
-    let snap = await readYearSnapshot(ws.driveId, ledgerFolderId.id);
+    let snap = await readYearSnapshot(storage, ws.driveId, ledgerFolderId.id);
     if (!snap && publishedRef) {
-      await writeYearSnapshot(ws.driveId, ledgerFolderId.id, publishedRef);
-      snap = (await readYearSnapshot(ws.driveId, ledgerFolderId.id)) ?? publishedRef;
+      await writeYearSnapshot(storage, ws.driveId, ledgerFolderId.id, publishedRef);
+      snap = (await readYearSnapshot(storage, ws.driveId, ledgerFolderId.id)) ?? publishedRef;
     }
     if (workspace !== ws || !snap) return;
     yearSnapshot = snap;
@@ -196,7 +192,7 @@ async function updateYearReference(): Promise<void> {
   );
   if (!ok) return;
   const merged = mergeReference(yearSnapshot, publishedRef);
-  await writeYearSnapshot(ws.driveId, ledgerFolderId.id, merged, true);
+  await writeYearSnapshot(storage, ws.driveId, ledgerFolderId.id, merged, true);
   yearSnapshot = merged;
   referenceBase = merged;
   status = `Updated this year's category list to version ${merged.version}.`;
@@ -230,7 +226,7 @@ const emailTexts = new Map<string, string>();
 /** Downloads a document once per session (documents never change) and keeps it for previews and for reading statements. */
 async function loadDocument(docId: string): Promise<{ url: string; kind: PreviewKind; blob: Blob }> {
   const doc = ledger.state.documents[docId];
-  if (!doc?.driveItemId || !workspace) throw new Error("That file is not in OneDrive.");
+  if (!doc?.driveItemId || !workspace) throw new Error(`That file is not in ${storage.label}.`);
   const filename = doc.filename ?? "file";
   let got = downloaded.get(docId);
   if (!got) {
@@ -238,8 +234,7 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
     // Documents never change: use the copy kept on this device if there is one.
     let raw = await getCachedDocument(wsKey, docId, doc.sizeBytes);
     if (!raw) {
-      const res = await fetchItemContent(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
-      raw = await res.blob();
+      raw = await storage.download(workspace.driveId, doc.driveItemId, `Downloading ${filename}…`);
       void cacheDocument(wsKey, docId, raw);
     }
     const kind = previewKind(filename, raw.type);
@@ -314,7 +309,7 @@ async function saveRedaction(): Promise<void> {
   const body = new Blob([draft.bytes as BlobPart], { type: "application/pdf" });
   const name = `${(original.filename ?? "Statement").replace(/\.pdf$/i, "")} (redacted).pdf`;
   for (const old of Object.values(ledger.state.documents)) if (old.redacted && old.derivedFrom === draft.docId) ledger.set("document", old.id, { redacted: false }, { label: "document.redactionSuperseded" });
-  const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
+  const result = await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
   ledger.set("document", result.documentId, { derivedFrom: draft.docId, redacted: true, contentKind: "statement" }, { label: "document.redacted" });
   await ledger.flush();
   discardRedaction();
@@ -370,7 +365,7 @@ async function uploadOrQueue(file: { name: string; blob: Blob; sha256?: string }
   };
   if (!navigator.onLine) return queue();
   try {
-    const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name: file.name, body: file.blob, sha256: file.sha256 });
+    const result = await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name: file.name, body: file.blob, sha256: file.sha256 });
     await ledger.flush();
     return result;
   } catch (err) {
@@ -397,7 +392,7 @@ async function flushQueuedUploads(): Promise<void> {
     let done = 0;
     try {
       for (const f of waiting) {
-        await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name: f.name, body: f.blob, sha256: f.sha256 });
+        await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name: f.name, body: f.blob, sha256: f.sha256 });
         await ledger.flush();
         await removeQueuedUpload(f.id);
         done++;
@@ -458,7 +453,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
       waiting ? `${waiting} file(s) saved on this device; they will upload when you are back online.` : "",
       dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : "",
     ].filter(Boolean).join(" ");
-  }, "Uploading to OneDrive…");
+  }, `Uploading to ${storage.label}…`);
 }
 
 type View = { name: "queue" } | { name: "summary" } | { name: "reports" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
@@ -582,7 +577,7 @@ async function switchYear(from: Pointer, label: string): Promise<void> {
 }
 
 /** Browser cache of the open workspace (see cache.ts). Best effort: failures just mean a slower next visit. */
-const keyOf = (p: Pointer) => cacheKey(account?.homeAccountId ?? "", p.driveId, p.rootId, p.year ?? "");
+const keyOf = (p: Pointer) => cacheKey(account?.id ?? "", p.driveId, p.rootId, p.year ?? "");
 function persist(): void {
   if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace, yearSnapshot));
 }
@@ -608,7 +603,7 @@ async function useOutbox(ws: OpenWorkspace): Promise<void> {
   ws.ledger.onPendingChange = (pending) => void writeOutbox(key, pending);
   if (left.length === 0 || workspace !== ws) return;
   ws.ledger.restorePending(left);
-  status = `Recovered ${left.length} change(s) that had not been saved to OneDrive; saving them now.`;
+  status = `Recovered ${left.length} change(s) that had not been saved to ${storage.label}; saving them now.`;
   render();
   await save();
 }
@@ -623,7 +618,7 @@ const typing = () => document.activeElement instanceof HTMLElement && root.conta
 
 /** Stale-while-revalidate: the cached view is already on screen; ask OneDrive what changed and update only if something did. */
 async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
-  showBusy("Refreshing from OneDrive…");
+  showBusy(`Refreshing from ${storage.label}…`);
   try {
     const changed = await revalidate(ws);
     lastRefresh = Date.now();
@@ -641,7 +636,7 @@ async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
   } catch (err) {
     if (workspace !== ws) return;
     if (isDeadPointer(err)) await dropWorkspace();
-    else status = `Showing saved data; could not refresh from OneDrive (${err instanceof Error ? err.message : err}).`;
+    else status = `Showing saved data; could not refresh from ${storage.label} (${err instanceof Error ? err.message : err}).`;
     render();
   } finally {
     hideBusy();
@@ -653,7 +648,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /** Runs an action that may hit the network; shows the error instead of leaving the page half-updated. */
-async function guarded(action: () => Promise<void>, label = "Waiting for OneDrive…"): Promise<void> {
+async function guarded(action: () => Promise<void>, label = `Waiting for ${storage.label}…`): Promise<void> {
   status = "";
   showBusy(label);
   try {
@@ -677,7 +672,7 @@ async function save(): Promise<void> {
     const linked = relinkAllStatements(ledger);
     if (linked) status = `Linked ${linked} charge(s) on your statements to purchases.`;
   }
-  await guarded(() => ledger.flush(), "Saving to OneDrive…");
+  await guarded(() => ledger.flush(), `Saving to ${storage.label}…`);
   persist();
   scheduleMirror();
 }
@@ -692,15 +687,28 @@ let reportsFolder: { yearFolderId: string; id: string } | undefined;
 const mirrorOn = () => ledger.state.settings["year"]?.mirror !== false;
 function scheduleMirror(): void {
   clearTimeout(mirrorTimer);
-  if (!workspace || workspace.legacy || !mirrorOn()) return;
+  // On this device nobody can open the file in place, so it is built when asked for (and downloaded) instead of in the background.
+  if (!workspace || workspace.legacy || !mirrorOn() || storage.kind === "browser") return;
   mirrorTimer = setTimeout(() => void guardedQuiet(() => publishMirrorNow()), 60_000);
+}
+/** Saves the year's spreadsheet copy to the person's computer (for storage they cannot open in a file manager). */
+async function downloadMirror(): Promise<void> {
+  const ws = workspace;
+  if (!ws || !reportsFolder) return;
+  const lib = await import("@step-up/shared/mirror");
+  const name = lib.mirrorFileName(ws.year.label);
+  const file = await storage.find(ws.driveId, reportsFolder.id, name);
+  if (!file) return;
+  const url = URL.createObjectURL(await storage.download(ws.driveId, file.id));
+  Object.assign(document.createElement("a"), { href: url, download: name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 async function publishMirrorNow(): Promise<"written" | "unchanged" | "locked"> {
   const ws = workspace;
   if (!ws || ws.legacy) return "unchanged";
   const lib = await import("@step-up/shared/mirror");
   const same = reportsFolder?.yearFolderId === ws.year.folderId;
-  const result = await lib.publishYearMirror({
+  const result = await lib.publishYearMirror({ storage,
     ledger,
     ctx: ctx(),
     driveId: ws.driveId,
@@ -733,6 +741,7 @@ function attach(next: OpenWorkspace | undefined): void {
     void savePointer(next.pointer);
     if (!next.fromCache) persist();
     void useOutbox(next).then(() => flushQueuedUploads());
+    void adoptOldLocalEvents(next).catch(() => undefined);
     checkSince(next);
     // Switching year (or workspace) means a different frozen category list.
     if (yearSnapshot && ledgerFolderId && ledgerFolderId.yearFolderId !== next.year.folderId) {
@@ -749,13 +758,14 @@ function attach(next: OpenWorkspace | undefined): void {
 }
 
 function connectionBar(): string {
-  if (!account) return `<p class="note">Local mode: data stays in this browser. <button id="sign-in">Sign in with Microsoft</button></p>`;
-  const who = esc(account.username);
-  if (!workspace) return `<p class="note">Signed in as ${who}.</p>`;
+  if (!account) return "";
+  const who = esc(account.name);
+  const signedIn = storage.kind === "browser" ? "Stored on this device only." : `Signed in as ${who}.`;
+  if (!workspace) return `<p class="note">${signedIn}</p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel").map((y) => `<option value="${esc(y.label)}"${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}${y.kind === "legacy-excel" ? " (Excel, read-only)" : ""}</option>`).join("");
   const refresh = workspace.legacy ? "" : `<button id="check-files">Refresh data</button>`;
-  return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    ${refresh} <button id="share">Share</button></p>`;
+  return `<p class="note">${signedIn} Year <select id="year-pick" style="width:auto">${options}</select>
+    ${refresh} ${storage.invite ? `<button id="share">Share</button>` : ""}</p>`;
 }
 
 /** The year after the newest one we know ("2025-2026" -> "2026-2027"); with none, the school year that includes today. */
@@ -792,7 +802,7 @@ function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue"><img src="./icon.svg" alt="" class="logo">Step Up Helper</a></h1>
     <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}${queuedUploads ? `<span class="badge warn">${queuedUploads} file(s) waiting to upload</span>` : ""}
-    ${workspace?.legacy ? `<details class="menu"><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button><button id="disconnect" class="danger">Disconnect</button>${account ? `<button id="sign-out">Sign out</button>` : ""}</div></details>` : `<details class="menu"><summary class="btn">Advanced</summary>
+    ${workspace?.legacy ? `<details class="menu"><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button><button id="disconnect" class="danger">Disconnect</button>${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}</div></details>` : `<details class="menu"><summary class="btn">Advanced</summary>
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
@@ -801,10 +811,10 @@ function header(): string {
         ${workspace && hasEarlierYear(workspace) ? `<button id="copy-children" title="Adds anyone who is missing; nothing is overwritten">Copy children from previous year</button>` : ""}
         ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
-        ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
+        ${workspace ? (storage.kind === "browser" ? `<button id="update-mirror">Download spreadsheet</button>` : `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>`) : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
-        ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
-        ${account ? `<button id="sign-out">Sign out</button>` : ""}
+        ${workspace && storage.kind === "onedrive" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
+        ${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}
       </div></details>`}</nav></header>
     ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
@@ -1148,7 +1158,7 @@ async function shrinkReceipt(purchaseId: string): Promise<void> {
   const small = await shrinkToLimit(got.blob, got.kind, MAX_PROOF_BYTES);
   const body = new Blob([small.bytes as BlobPart], { type: small.mime });
   const name = `${(original.filename ?? "Receipt").replace(/\.\w+$/, "")} (smaller).${small.ext}`;
-  const result = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
+  const result = await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
   ledger.set("document", result.documentId, { derivedFrom: original.id, shrunk: true, contentKind: original.contentKind ?? "receipt-like", ...(original.paymentEvidenceConfidence !== undefined ? { paymentEvidenceConfidence: original.paymentEvidenceConfidence } : {}) }, { label: "document.shrunk" });
   ledger.set("purchase", purchaseId, { receiptDocumentId: result.documentId }, { label: "purchase.receiptShrunk" });
   await ledger.flush();
@@ -1237,7 +1247,7 @@ function showSaveState(state: "saving" | "saved" | "local" | "error", detail = "
   el.innerHTML =
     state === "saving" ? `<span class="spinner" aria-hidden="true"></span> Saving…`
     : state === "saved" ? `<span class="tick" aria-hidden="true">&#10003;</span> Saved`
-    : state === "local" ? `<span class="tick" aria-hidden="true">&#10003;</span> Saved on this device; it will sync when OneDrive is reachable`
+    : state === "local" ? `<span class="tick" aria-hidden="true">&#10003;</span> Saved on this device; it will sync when ${storage.label} is reachable`
     : `<span aria-hidden="true">&#9888;</span> ${esc(detail)}`;
   if (state === "saved") saveStateTimer = setTimeout(() => { el.textContent = ""; el.className = "save-state"; }, 2500);
 }
@@ -1279,7 +1289,7 @@ async function autosavePurchaseNow(form: HTMLFormElement, focusNext?: string): P
     showSaveState("saved");
   } catch (err) {
     // The edit is already kept on this device; it is sent again with the next save or refresh.
-    showSaveState(navigator.onLine ? "error" : "local", `Could not reach OneDrive (${err instanceof Error ? err.message : err}). Your change is kept on this device.`);
+    showSaveState(navigator.onLine ? "error" : "local", `Could not reach ${storage.label} (${err instanceof Error ? err.message : err}). Your change is kept on this device.`);
   }
   if (draft) {
     // The purchase now exists, so the full screen (items, documentation) replaces the blank one. Keep the cursor where it was going.
@@ -1337,7 +1347,7 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
     scheduleMirror();
     showSaveState("saved", "", "item-save-state");
   } catch (err) {
-    showSaveState(navigator.onLine ? "error" : "local", `Could not reach OneDrive (${err instanceof Error ? err.message : err}). Your change is kept on this device.`, "item-save-state");
+    showSaveState(navigator.onLine ? "error" : "local", `Could not reach ${storage.label} (${err instanceof Error ? err.message : err}). Your change is kept on this device.`, "item-save-state");
   }
   if (created) {
     // The new item now shows in the list above, so draw the screen again and put the cursor back where it was heading.
@@ -1446,7 +1456,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ? `<p class="row"><label class="btn">Add files<input type="file" id="upload" data-purchase="${esc(purchaseId)}" data-role="${role}" multiple accept="application/pdf,image/*" hidden></label>
         <label class="btn">Take a photo<input type="file" id="photo" data-purchase="${esc(purchaseId)}" data-role="${role}" accept="image/*" capture="environment" hidden></label>
         <button id="start-scan" data-for-purchase="${esc(purchaseId)}" data-role="${role}">Scan (several pages)</button></p>`
-    : `<p class="note">Sign in with Microsoft to add files.</p>`;
+    : `<p class="note">Connect a folder to add files.</p>`;
   const pick = (role: DocRole, label: string) => loose.length
     ? `<details><summary>Use a file you already added (${loose.length})</summary><ul class="queue">${loose.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}" data-role="${role}">${label}</button></span></li>`).join("")}</ul></details>`
     : "";
@@ -1771,7 +1781,7 @@ function onboardingView(): string {
     const start = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
     return `<h2>Set up a school year</h2><p>This folder has no school year yet. Create one here:</p>
       <form id="start-year" class="row"><input name="label" value="${start}-${start + 1}" pattern="\\d{4}-\\d{4}" required><button>Create year</button></form>
-      <p><button id="pick-again">Choose a different folder</button></p>`;
+      ${storage.kind === "browser" ? "" : `<p><button id="pick-again">Choose a different folder</button></p>`}`;
   }
   const open = (list: FolderEntry[]) => list.map((f, i) => `<li><button data-pick="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || "<li><small>No folders here.</small></li>";
   if (picker.path.length === 0) {
@@ -1794,14 +1804,46 @@ function onboardingView(): string {
     <p class="pick-bottom"><button id="pick-use" class="primary big">Use this folder</button></p>`;
 }
 
+/** For storage with no folders to browse (this device), the workspace is simply its top level. */
+async function homePointer(): Promise<Pointer> {
+  const home = await storage.home();
+  return { driveId: home.driveId, rootId: home.itemId };
+}
+
+/**
+ * Local-only mode used to keep its changes in this browser's localStorage, with no files. Once a year exists in this
+ * device's storage those changes are moved into it (the originals are kept under another key as a backup).
+ */
+const OLD_EVENTS_KEY = "stepup.events.v1";
+async function adoptOldLocalEvents(ws: OpenWorkspace): Promise<void> {
+  if (storage.kind !== "browser" || ws.legacy || ws.fromCache) return;
+  let old: LedgerEvent[];
+  try {
+    old = await new LocalEventStore(store.clientId).readAll();
+  } catch {
+    return;
+  }
+  if (old.length === 0) return;
+  await ws.store.appendOwn(old);
+  await ws.ledger.refresh();
+  try {
+    localStorage.setItem(`${OLD_EVENTS_KEY}.moved`, localStorage.getItem(OLD_EVENTS_KEY) ?? "");
+    localStorage.removeItem(OLD_EVENTS_KEY);
+  } catch {
+    /* the copy is harmless: event ids make a second move a no-op */
+  }
+  status = `Moved ${old.length} change(s) from this browser's earlier local mode into ${ws.year.label}.`;
+  render();
+}
+
 async function pickerTop(): Promise<void> {
   pendingYear = undefined;
-  const [mine, shared] = await Promise.all([myDriveRoot(), sharedFolders().catch(() => [] as FolderEntry[])]);
+  const [mine, shared] = await Promise.all([storage.home(), storage.sharedWithMe().catch(() => [] as FolderEntry[])]);
   picker = { path: [], mine, shared, list: [] };
 }
 
 async function pickerOpen(path: FolderEntry[]): Promise<void> {
-  picker = { ...picker, path, list: path.length ? await subfolders(path[path.length - 1]!) : [] };
+  picker = { ...picker, path, list: path.length ? await storage.subfolders(path[path.length - 1]!) : [] };
 }
 
 async function useFolder(folder: FolderEntry): Promise<void> {
@@ -1818,13 +1860,7 @@ async function useFolder(folder: FolderEntry): Promise<void> {
 /** Set when a newer copy of the app has taken over in the background; the banner offers a reload. */
 let updateReady = false;
 
-const MODE_KEY = "stepup.mode";
 let authReady = false;
-let localChosen = (() => { try { return localStorage.getItem(MODE_KEY) === "local"; } catch { return false; } })();
-const setLocalChosen = (on: boolean): void => {
-  localChosen = on;
-  try { if (on) localStorage.setItem(MODE_KEY, "local"); else localStorage.removeItem(MODE_KEY); } catch { /* storage unavailable: the choice lasts for this page only */ }
-};
 
 /** Shown instead of the whole app until the person says where their data lives. */
 function chooserView(): string {
@@ -1834,13 +1870,13 @@ function chooserView(): string {
     <p class="note">Where should your data be stored?</p>
     <div class="gate-choices">
       <button id="sign-in" class="primary big">Sign in with Microsoft<small>Stored in your OneDrive</small></button>
-      <button id="use-local" class="big">Local only<small>Stays in this browser</small></button>
+      <button id="use-local" class="big">Local only<small>Stays in this browser; no account</small></button>
     </div>
   </section></main>`;
 }
 
 function render(): void {
-  if (!account && !localChosen) {
+  if (!account) {
     root.innerHTML = authReady ? chooserView() : "";
     return;
   }
@@ -1938,15 +1974,17 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))), "Opening the folder…");
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
   else if (t.id === "reload-app") location.reload();
-  else if (t.id === "use-local") { setLocalChosen(true); render(); }
+  else if (t.id === "use-local") switchStorage("local");
   else if (t.id === "pick-again") await guarded(pickerTop);
-  else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await signIn(); }
+  else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await storage.auth.signIn(); }
   else if (t.id === "sign-out") {
-    if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you sign out. Sign out anyway?`)) return;
-    setLocalChosen(false); forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy("Signing out of Microsoft…"); await signOut();
+    // Local storage has no account to leave: this just stops using it. Everything stays on this device for next time.
+    if (storage.kind === "browser") { switchStorage(undefined); return; }
+    if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to ${storage.label} and will be lost if you sign out. Sign out anyway?`)) return;
+    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy("Signing out of Microsoft…"); await storage.auth.signOut();
   }
   else if (t.id === "disconnect") {
-    if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to OneDrive and will be lost if you disconnect. Disconnect anyway?`)) return;
+    if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to ${storage.label} and will be lost if you disconnect. Disconnect anyway?`)) return;
     await guarded(async () => {
       forgetCache();
       clearPreviews();
@@ -1964,11 +2002,11 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "check-files" && workspace) {
     await guarded(async () => {
       const ws = workspace!;
-      const loose = planIngest(ledger.state, await listLooseFiles(ws.driveId, ws.year.folderId));
+      const loose = planIngest(ledger.state, await listLooseFiles(storage, ws.driveId, ws.year.folderId));
       registerLooseFiles(ledger, loose.toRegister);
       // The inbox is where emails saved as .eml, print-to-PDF receipts and phone shares can be dropped.
-      const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
-      const inbox = folders ? planIngest(ledger.state, await listLooseFiles(ws.driveId, folders.inboxId)) : { toRegister: [], alreadyKnown: 0 };
+      const folders = await openLedgerFolders(storage, ws.driveId, ws.year.folderId);
+      const inbox = folders ? planIngest(ledger.state, await listLooseFiles(storage, ws.driveId, folders.inboxId)) : { toRegister: [], alreadyKnown: 0 };
       registerLooseFiles(ledger, inbox.toRegister, "inbox");
       const carried = Object.keys(ledger.state.children).length ? undefined : await copyFromPreviousYear(ws, store.clientId);
       await ledger.flush();
@@ -1977,7 +2015,7 @@ root.addEventListener("click", async (ev) => {
         n ? `Registered ${n} new file(s)${inbox.toRegister.length ? ` (${inbox.toRegister.length} from the inbox folder)` : ""}.` : "No new files.",
         carried?.children ? `Added ${carried.children} child(ren) from the previous year.` : carried?.problems?.length ? `Could not find children to copy: ${carried.problems.join("; ")}.` : "",
       ].filter(Boolean).join(" ");
-    }, "Checking OneDrive for new files…");
+    }, `Checking ${storage.label} for new files…`);
   }
   else if (t.id === "export") {
     await guarded(async () => {
@@ -1999,6 +2037,11 @@ root.addEventListener("click", async (ev) => {
   } else if (t.id === "update-mirror") {
     await guarded(async () => {
       const result = await publishMirrorNow();
+      if (storage.kind === "browser" && result !== "locked") {
+        await downloadMirror();
+        status = "Spreadsheet downloaded.";
+        return;
+      }
       status = result === "written" ? "Spreadsheet updated." : result === "unchanged" ? "Spreadsheet is already up to date." : "The spreadsheet is open in Excel; close it and try again.";
     }, "Building the spreadsheet…");
   } else if (t.id === "toggle-detail") {
@@ -2054,7 +2097,7 @@ root.addEventListener("click", async (ev) => {
     const doc = ledger.state.documents[d["start"]];
     const hints = fileNameHints(doc?.filename ?? "");
     const id = startPurchaseFromDocument(ledger, d["start"], { vendor: hints.vendor, date: hints.date });
-    await guarded(() => ledger.flush(), "Saving to OneDrive…");
+    await guarded(() => ledger.flush(), `Saving to ${storage.label}…`);
     go({ name: "purchase", id });
   } else if (d["attach"]) {
     const target: MapTarget = { kind: d["kind"] as "purchase" | "item", id: d["target"]! };
@@ -2116,7 +2159,7 @@ root.addEventListener("click", async (ev) => {
       let added = 0;
       for (const a of found) {
         const body = new Blob([a.bytes as BlobPart], { type: a.contentType });
-        const r = await uploadReceipt(ledger, ws.driveId, ws.year.folderId, { name: a.filename, body, sha256: (await sha256Hex(body)) || undefined });
+        const r = await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name: a.filename, body, sha256: (await sha256Hex(body)) || undefined });
         if (r.status === "uploaded") added++;
       }
       await ledger.flush();
@@ -2129,11 +2172,11 @@ root.addEventListener("click", async (ev) => {
       const doc = p?.receiptDocumentId ? ledger.state.documents[p.receiptDocumentId] : undefined;
       if (!p || !doc?.driveItemId) return;
       const name = readableFileName(doc, p);
-      await renameItem(workspace!.driveId, doc.driveItemId, name);
-      ledger.set("document", doc.id, { filename: name }, { label: "document.renamed" });
+      const itemId = await storage.rename(workspace!.driveId, doc.driveItemId, name);
+      ledger.set("document", doc.id, { filename: name, ...(itemId !== doc.driveItemId ? { driveItemId: itemId } : {}) }, { label: "document.renamed" });
       await ledger.flush();
       downloaded.delete(doc.id);
-      status = `Renamed the file in OneDrive to "${name}".`;
+      status = `Renamed the file in ${storage.label} to "${name}".`;
     }, "Renaming the file…");
     persist();
   } else if (d["shrink"]) {
@@ -2217,12 +2260,12 @@ root.addEventListener("submit", async (ev) => {
     return;
   }
   if (form.id === "pick-link") {
-    await guarded(async () => useFolder(await folderFromLink(val(form, "link"))), "Opening the shared link…");
+    await guarded(async () => useFolder(await storage.folderFromLink!(val(form, "link"))), "Opening the shared link…");
     return;
   }
   if (form.id === "new-folder") {
     await guarded(async () => {
-      const made = await createSubfolder(picker.path[picker.path.length - 1]!, val(form, "name"));
+      const made = await createSubfolder(storage, picker.path[picker.path.length - 1]!, val(form, "name"));
       await pickerOpen(picker.path);
       status = `Created "${made.name}".`;
     }, "Creating the folder…");
@@ -2232,7 +2275,7 @@ root.addEventListener("submit", async (ev) => {
     await guarded(async () => {
       const email = val(form, "email");
       const folder = await workspaceFolder(workspace!.pointer);
-      await inviteToFolder(folder, email, `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
+      await storage.invite!(folder, email, `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
       status = `Invited ${email}. If they do not get an email, share the folder with them in OneDrive instead.`;
       sharing = false;
     }, "Inviting them to the folder…");
@@ -2353,19 +2396,20 @@ root.addEventListener("change", async (ev) => {
 await ledger.refresh();
 render();
 await guarded(async () => {
-  note("Completing Microsoft sign-in…");
-  account = await initAuth();
+  note(storage.kind === "onedrive" ? "Completing Microsoft sign-in…" : "Opening your files…");
+  account = await storage.auth.restore();
   authReady = true;
-  if (!account && !localChosen && canAutoSignIn()) {
+  if (!account && storage.auth.canAutoSignIn()) {
     // Signed in here before: go straight back to that account rather than asking again.
     note("Signing in to Microsoft…");
     showBusy("Signing in to Microsoft…");
-    await autoSignIn();
+    await storage.auth.autoSignIn();
     await new Promise<void>(() => {}); // the page is navigating away; keep the busy screen up
   }
   if (!account) render();
   if (account) note("Finding your saved folder…");
-  const pointer = account ? await loadPointer() : undefined;
+  // Storage inside this browser has no folders to browse: the workspace is simply its top.
+  const pointer = account ? (await loadPointer()) ?? (storage.kind === "browser" ? await homePointer() : undefined) : undefined;
   if (account && pointer) {
     try {
       // Cache first: show the last-known ledger at once, then refresh in the background.
@@ -2395,7 +2439,7 @@ await guarded(async () => {
       }
     }
   } else if (account) await pickerTop();
-}, "Connecting to OneDrive…");
+}, `Connecting to ${storage.label}…`);
 if (workspace?.fromCache) void refreshInBackground(workspace);
 // Files shared to the installed app from another app go to the unattached files. If we are not connected yet they wait on this device.
 if (new URLSearchParams(location.search).has("shared")) history.replaceState(null, "", location.pathname);

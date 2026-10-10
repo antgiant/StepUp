@@ -28,7 +28,8 @@ import {
   type ResolvedReference,
   type RulesContext,
 } from "@step-up/shared";
-import { downloadItem, type FolderChild } from "../graph/onedrive.js";
+import type { FolderChild } from "../graph/onedrive.js";
+import { downloadTo } from "../storage/index.js";
 import type { DraftRecord } from "../draftTracker.js";
 import type { OpenedYear } from "../ledgerYear.js";
 import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
@@ -98,8 +99,8 @@ export class LedgerStore implements FilingStore {
 
   private async loadSnapshot(): Promise<void> {
     try {
-      const folders = await openLedgerFolders(this.drive, this.opened.year.folderId);
-      if (folders) this.snapshot = await readYearSnapshot(this.drive, folders.ledgerId);
+      const folders = await openLedgerFolders(this.opened.storage, this.drive, this.opened.year.folderId);
+      if (folders) this.snapshot = await readYearSnapshot(this.opened.storage, this.drive, folders.ledgerId);
     } catch {
       /* fall back to the published list */
     }
@@ -174,7 +175,7 @@ export class LedgerStore implements FilingStore {
   }
 
   download(fileId: string, destPath: string): Promise<void> {
-    return downloadItem(this.drive, fileId, destPath);
+    return downloadTo(this.opened.storage, this.drive, fileId, destPath);
   }
 
   async childScholarships(): Promise<Map<string, string>> {
@@ -248,6 +249,7 @@ export class LedgerStore implements FilingStore {
   async rebuildMirror(): Promise<void> {
     try {
       const { status } = await publishYearMirror({
+        storage: this.opened.storage,
         ledger: this.ledger,
         ctx: this.rules(),
         driveId: this.drive,

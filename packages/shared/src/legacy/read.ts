@@ -1,5 +1,6 @@
 import { CATEGORIES_TABLE, CHILDREN_TABLE, DOC_FILE_COLUMNS, TABLE1, WORKSHEET } from "../rules.js";
-import { getTableHeaderRow, getTableRows, getUsedRange, listFolderChildren, listTables, type DriveItemRef } from "../graph/onedrive.js";
+import { getTableHeaderRow, getTableRows, getUsedRange, listTables, type DriveItemRef } from "../graph/onedrive.js";
+import type { StorageProvider } from "../storage/types.js";
 import { LEDGER_DIR, LEGACY_CHOICES_FILE } from "../workspace/workspace.js";
 import { toIsoDate, type LegacyInput, type LegacyRow } from "../import/legacy.js";
 import { fileNameHints } from "../workspace/ingest.js";
@@ -19,18 +20,18 @@ async function tableAsObjects(book: DriveItemRef, table: string): Promise<Array<
  * receipts in a "Gardiner" folder). Shallowest wins when two files share a name, so a "Probably Duplicate" folder does not
  * make every receipt ambiguous. This system's own folder and file are left out.
  */
-export async function readReceiptFiles(folder: DriveItemRef, maxDepth = 3): Promise<LegacyInput["files"]> {
+export async function readReceiptFiles(storage: StorageProvider, folder: DriveItemRef, maxDepth = 3): Promise<LegacyInput["files"]> {
   const found = new Map<string, LegacyInput["files"][number]>();
   let level: DriveItemRef[] = [folder];
   for (let depth = 0; depth <= maxDepth && level.length; depth++) {
-    const listings = await Promise.all(level.map((f) => listFolderChildren(f)));
+    const listings = await Promise.all(level.map((f) => storage.list(f.driveId, f.itemId)));
     const next: DriveItemRef[] = [];
     for (const children of listings) {
       for (const c of children) {
         if (c.isFolder) {
           if (c.name !== LEDGER_DIR && depth < maxDepth) next.push({ driveId: folder.driveId, itemId: c.id, name: c.name, isFolder: true });
         } else if (c.name !== LEGACY_CHOICES_FILE && !found.has(c.name.toLowerCase())) {
-          found.set(c.name.toLowerCase(), { name: c.name, id: c.id, webUrl: c.webUrl, size: c.size });
+          found.set(c.name.toLowerCase(), { name: c.name, id: c.id, webUrl: c.webUrl, size: c.size ?? 0 });
         }
       }
     }
@@ -116,8 +117,8 @@ export function gardinerRow(r: Record<string, unknown>, n: number, files: Readon
  * Reads an old tracking workbook (read-only: only GETs) and the receipts folder into the importer's input, whichever of
  * the three layouts it uses. Used by the command line's dry run and by the web app's read-only view of a year Excel owns.
  */
-export async function readLegacyWorkbook(book: DriveItemRef, folder: DriveItemRef, yearLabel: string): Promise<LegacyInput> {
-  const [tables, files] = await Promise.all([listTables(book), readReceiptFiles(folder)]);
+export async function readLegacyWorkbook(storage: StorageProvider, book: DriveItemRef, folder: DriveItemRef, yearLabel: string): Promise<LegacyInput> {
+  const [tables, files] = await Promise.all([listTables(book), readReceiptFiles(storage, folder)]);
   const names = tables.map((t) => t.name);
 
   if (detectLayout(names, true) === "gardiner") {

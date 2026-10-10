@@ -1,31 +1,31 @@
 import {
+  StorageEventStore,
   HlcClock,
   Ledger,
-  OneDriveEventStore,
   copyYearSetup,
   copyLegacyChildren,
   CHILDREN_TABLE,
-  findChild,
   YEAR_FOLDER_RE,
   GraphError,
-  ensureFolder,
   graphJson,
+  isStorageError,
   ensureLedgerFolders,
   type FolderEntry,
   listYears,
   openLedgerFolders,
   loadRemotePointer,
-  parentOf,
   saveRemotePointer,
   type CategoryReference,
   type Pointer,
   type YearInfo,
 } from "@step-up/shared/web";
+import { storage } from "./storage.js";
 
 import type { WorkspaceCache } from "./cache.js";
 import { openLegacyFromCache, openLegacyWorkspace, refreshLegacy, type LegacyState } from "./legacyYear.js";
 
-const KEY = "stepup.workspace.v1";
+// Each kind of storage remembers its own folder choice (the OneDrive key is the original, so existing users keep theirs).
+const KEY = storage.kind === "onedrive" ? "stepup.workspace.v1" : `stepup.workspace.${storage.kind}.v1`;
 
 export type { Pointer };
 
@@ -51,7 +51,7 @@ export async function loadPointer(): Promise<Pointer | undefined> {
   const local = readLocal();
   if (local) {
     // Don't wait on OneDrive for a choice we already have; pick up a change made on another device next visit.
-    void loadRemotePointer()
+    void loadRemotePointer(storage)
       .then((remote) => {
         const still = readLocal();
         const sameFolder = still && still.driveId === local.driveId && still.rootId === local.rootId;
@@ -60,7 +60,7 @@ export async function loadPointer(): Promise<Pointer | undefined> {
       .catch(() => undefined);
     return local;
   }
-  const remote = await loadRemotePointer().catch(() => undefined);
+  const remote = await loadRemotePointer(storage).catch(() => undefined);
   if (remote) writeLocal(remote);
   return remote;
 }
@@ -68,7 +68,7 @@ export async function loadPointer(): Promise<Pointer | undefined> {
 /** Remembers the choice on this browser and, best effort, in the account. `undefined` forgets it everywhere. */
 export async function savePointer(p: Pointer | undefined): Promise<void> {
   writeLocal(p);
-  await saveRemotePointer(p).catch(() => false);
+  await saveRemotePointer(storage, p).catch(() => false);
 }
 
 /** Forgets only this browser's copy (used on sign-out so the account keeps its choice). */
@@ -76,7 +76,7 @@ export const forgetLocalPointer = () => writeLocal(undefined);
 
 /** A picked folder is either the workspace root (holding year folders) or one of its year folders. */
 export async function pointerFromFolder(folder: FolderEntry): Promise<Pointer> {
-  if (YEAR_FOLDER_RE.test(folder.name)) return { driveId: folder.driveId, rootId: await parentOf(folder.driveId, folder.itemId), year: folder.name };
+  if (YEAR_FOLDER_RE.test(folder.name)) return { driveId: folder.driveId, rootId: await storage.parentOf(folder.driveId, folder.itemId), year: folder.name };
   return { driveId: folder.driveId, rootId: folder.itemId };
 }
 
@@ -90,8 +90,8 @@ export class NoLedgerYearError extends Error {
 /** Creates `<root>/<label>/` (if needed) with its ledger folders. */
 export async function startYear(pointer: Pointer, label: string): Promise<Pointer> {
   if (!YEAR_FOLDER_RE.test(label)) throw new Error("Use the form 2026-2027.");
-  const yearId = await ensureFolder(pointer.driveId, pointer.rootId, label);
-  await ensureLedgerFolders(pointer.driveId, yearId);
+  const yearId = await storage.ensureFolder(pointer.driveId, pointer.rootId, label);
+  await ensureLedgerFolders(storage, pointer.driveId, yearId);
   return { ...pointer, year: label };
 }
 
@@ -101,7 +101,7 @@ export interface OpenWorkspace {
   year: YearInfo;
   driveId: string;
   ledger: Ledger;
-  store: OneDriveEventStore;
+  store: StorageEventStore;
   eventsId: string;
   /** True when this was built from the browser's cache and still needs `revalidate`. */
   fromCache?: boolean;
@@ -113,7 +113,7 @@ export interface OpenWorkspace {
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
 export async function openWorkspace(pointer: Pointer, clientId: string, yearLabel?: string): Promise<OpenWorkspace> {
-  const years = await listYears(pointer.driveId, pointer.rootId);
+  const years = await listYears(storage, pointer.driveId, pointer.rootId);
   const ledgerYears = years.filter((y) => y.kind === "ledger");
   const want = yearLabel ?? pointer.year;
   // A year still kept in Excel is viewed from the workbook, read-only; it is never opened as a ledger.
@@ -121,8 +121,8 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   if (excelYear) return openLegacyWorkspace(pointer, years, excelYear, clientId);
   const year = ledgerYears.find((y) => y.label === want) ?? ledgerYears[ledgerYears.length - 1];
   if (!year) throw new NoLedgerYearError(pointer);
-  const folders = (await openLedgerFolders(pointer.driveId, year.folderId))!;
-  const store = new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId);
+  const folders = (await openLedgerFolders(storage, pointer.driveId, year.folderId))!;
+  const store = new StorageEventStore(storage, pointer.driveId, folders.eventsId, clientId);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   await ledger.refresh();
   const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, years.filter((y) => y.kind !== "empty"), year.label, clientId);
@@ -141,7 +141,7 @@ type TableJson = { values: unknown[][] };
 /** Reads the students (name and program) from an old year's tracking workbook, read-only, through OneDrive's Excel service. */
 async function readLegacyChildren(driveId: string, year: YearInfo): Promise<Array<{ name: string; scholarship?: string }>> {
   if (!year.workbookName) return [];
-  const book = await findChild(driveId, year.folderId, year.workbookName);
+  const book = await storage.find(driveId, year.folderId, year.workbookName);
   if (!book) throw new Error(`${year.workbookName} was not found`);
   const tables = `/drives/${driveId}/items/${book.id}/workbook/tables`;
   // The children table is normally "Table2"; if it was renamed, any table with a "Children" column will do.
@@ -177,9 +177,9 @@ async function carryOver(pointer: Pointer, ledger: Ledger, years: YearInfo[], cu
   for (const y of earlier) {
     if (y.kind === "ledger") {
       try {
-        const folders = await openLedgerFolders(pointer.driveId, y.folderId);
+        const folders = await openLedgerFolders(storage, pointer.driveId, y.folderId);
         if (folders) {
-          const past = new Ledger(new OneDriveEventStore(pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
+          const past = new Ledger(new StorageEventStore(storage, pointer.driveId, folders.eventsId, clientId), new HlcClock(clientId), "web");
           await past.refresh();
           if (Object.keys(past.state.children).length) {
             const copied = copyYearSetup(ledger, past.state);
@@ -227,7 +227,7 @@ export function openFromCache(pointer: Pointer, clientId: string, rec: Workspace
   const year = years.find((y) => y.label === rec.yearLabel);
   if (!year) return undefined;
   if (rec.legacy) return openLegacyFromCache(pointer, years, year, clientId, rec.legacy);
-  const store = new OneDriveEventStore(pointer.driveId, rec.eventsId, clientId);
+  const store = new StorageEventStore(storage, pointer.driveId, rec.eventsId, clientId);
   store.seedCache(rec.logs);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   ledger.loadKnown(store.cachedEvents());
@@ -237,13 +237,13 @@ export function openFromCache(pointer: Pointer, clientId: string, rec: Workspace
 /** Brings a cache-built workspace up to date: re-lists the years and downloads only the logs whose ETag changed. Returns whether anything changed. */
 export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
   if (ws.legacy) {
-    ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
+    ws.years = await listYears(storage, ws.pointer.driveId, ws.pointer.rootId);
     const changed = await refreshLegacy(ws);
     ws.fromCache = false;
     return changed;
   }
   const before = JSON.stringify([ws.ledger.state, ws.years]);
-  ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
+  ws.years = await listYears(storage, ws.pointer.driveId, ws.pointer.rootId);
   await ws.ledger.refresh();
   ws.fromCache = false;
   // Opening from the cache skips the carry-over done on a fresh open, so a new year would stay without its students.
@@ -264,11 +264,11 @@ export function snapshotFor(ws: OpenWorkspace, reference?: CategoryReference): W
 
 /** The workspace root as a shareable folder entry. */
 export async function workspaceFolder(pointer: Pointer): Promise<FolderEntry> {
-  const item = await graphJson<{ name: string }>(`/drives/${pointer.driveId}/items/${pointer.rootId}?$select=name`);
+  const item = await storage.stat(pointer.driveId, pointer.rootId);
   return { driveId: pointer.driveId, itemId: pointer.rootId, name: item.name };
 }
 
 /** The saved folder no longer exists or this account can no longer reach it (deleted, moved out of reach, or access removed). */
 export function isDeadPointer(err: unknown): boolean {
-  return err instanceof GraphError && [400, 403, 404, 410].includes(err.status);
+  return isStorageError(err, "not-found", "forbidden", "invalid");
 }

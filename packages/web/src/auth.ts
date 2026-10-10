@@ -1,5 +1,5 @@
 import { PublicClientApplication, type AccountInfo } from "@azure/msal-browser";
-import { setTokenProvider } from "@step-up/shared/web";
+import type { OneDriveAuth, StorageAccount } from "@step-up/shared/web";
 
 /** Public identifier of the app registration (a single-page-application platform on it allows this site's URL). Not a secret. */
 export const CLIENT_ID = "1b28096c-568a-4299-ae55-fe69f14423b5";
@@ -55,39 +55,46 @@ const setAutoTried = (on: boolean): void => {
 
 let account: AccountInfo | null = null;
 
-/** Completes a sign-in redirect if one just happened and, if signed in, hooks Graph up to this account's tokens. */
-export async function initAuth(): Promise<AccountInfo | null> {
-  await msal.initialize();
-  const result = await msal.handleRedirectPromise();
-  account = result?.account ?? msal.getAllAccounts()[0] ?? null;
-  if (account) {
+/** Microsoft sign-in for OneDrive in the browser (MSAL.js, redirect flow). The OneDrive provider takes its tokens from here. */
+export const microsoftAuth: OneDriveAuth = {
+  /** Completes a sign-in redirect if one just happened and, if signed in, remembers the account. */
+  async restore(): Promise<StorageAccount | undefined> {
+    await msal.initialize();
+    const result = await msal.handleRedirectPromise();
+    account = result?.account ?? msal.getAllAccounts()[0] ?? null;
+    if (!account) return undefined;
     msal.setActiveAccount(account);
     writeHint(account.username);
     setAutoTried(false);
-    setTokenProvider(async () => {
-      try {
-        return (await msal.acquireTokenSilent({ scopes: SCOPES, account: account! })).accessToken;
-      } catch {
-        await msal.acquireTokenRedirect({ scopes: SCOPES, account: account! });
-        return new Promise<string>(() => {}); // the page is navigating away
-      }
-    });
-  }
-  return account;
-}
+    return { id: account.homeAccountId, name: account.username };
+  },
 
-export const signIn = () => {
-  const hint = readHint();
-  return msal.loginRedirect(hint ? { scopes: SCOPES, loginHint: hint } : { scopes: SCOPES, prompt: "select_account" });
-};
-/** True when a previous sign-in left an account to go straight back to and an automatic attempt has not already failed. */
-export const canAutoSignIn = (): boolean => readHint() !== undefined && !autoTried();
-/** Signs in again as the remembered account without waiting for a button press. */
-export const autoSignIn = () => {
-  setAutoTried(true);
-  return signIn();
-};
-export const signOut = () => {
-  writeHint(undefined); // signing out is how a different account is chosen next time
-  return msal.logoutRedirect({ account: account ?? undefined });
+  async getToken(): Promise<string> {
+    if (!account) throw new Error("Not signed in to Microsoft.");
+    try {
+      return (await msal.acquireTokenSilent({ scopes: SCOPES, account })).accessToken;
+    } catch {
+      await msal.acquireTokenRedirect({ scopes: SCOPES, account });
+      return new Promise<string>(() => {}); // the page is navigating away
+    }
+  },
+
+  signIn() {
+    const hint = readHint();
+    return msal.loginRedirect(hint ? { scopes: SCOPES, loginHint: hint } : { scopes: SCOPES, prompt: "select_account" });
+  },
+
+  /** True when a previous sign-in left an account to go straight back to and an automatic attempt has not already failed. */
+  canAutoSignIn: () => readHint() !== undefined && !autoTried(),
+
+  /** Signs in again as the remembered account without waiting for a button press. */
+  autoSignIn() {
+    setAutoTried(true);
+    return microsoftAuth.signIn();
+  },
+
+  signOut() {
+    writeHint(undefined); // signing out is how a different account is chosen next time
+    return msal.logoutRedirect({ account: account ?? undefined });
+  },
 };

@@ -1,3 +1,5 @@
+import { StorageError, type StorageErrorKind } from "../storage/types.js";
+
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 export type TokenProvider = () => Promise<string>;
@@ -115,9 +117,13 @@ export const serverClockSkewMs = (): number | undefined => skewMs;
 /** True when the clocks differ enough to scramble the order of edits made on different devices. */
 export const clockLooksWrong = (maxMs = 2 * 60_000): boolean => skewMs !== undefined && Math.abs(skewMs) > maxMs;
 
-export class GraphError extends Error {
+const kindOf = (status: number): StorageErrorKind =>
+  status === 404 || status === 410 ? "not-found" : status === 409 ? "exists" : status === 412 ? "changed" : status === 423 ? "locked" : status === 401 || status === 403 ? "forbidden" : status === 400 ? "invalid" : "other";
+
+/** A failed Graph request. It is a `StorageError` too, so code above the storage layer can ignore that it was Graph. */
+export class GraphError extends StorageError {
   constructor(public status: number, public body: string, method: string, url: string) {
-    super(`Graph API ${method} ${url} failed with ${status}: ${body}`);
+    super(kindOf(status), `Graph API ${method} ${url} failed with ${status}: ${body}`);
   }
 }
 

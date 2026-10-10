@@ -11,10 +11,10 @@ import { getClientId } from "./clientId.js";
 async function main() {
   const [label, ...flags] = process.argv.slice(2);
   if (!label) throw new Error("Usage: npm run ingest -- <year> [--apply]");
-  const { driveId, year, ledger } = await openYearLedger(label);
+  const { storage, driveId, year, ledger } = await openYearLedger(label);
   const clientId = await getClientId();
 
-  const loose = await listLooseFiles(driveId, year.folderId);
+  const loose = await listLooseFiles(storage, driveId, year.folderId);
   const plan = planIngest(ledger.state, loose);
   console.log(`${label}: ${loose.length} loose file(s); ${plan.alreadyKnown} already registered, ${plan.toRegister.length} new.`);
   for (const f of plan.toRegister) console.log(`  ${guessContentKind(f.name).padEnd(13)} ${(f.size / 1024).toFixed(0).padStart(6)} KB  ${f.name}`);

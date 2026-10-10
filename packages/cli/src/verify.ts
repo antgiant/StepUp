@@ -1,16 +1,14 @@
 import "dotenv/config";
 import {
   clockLooksWrong,
-  graphJson,
   hasErrors,
   openLedgerFolders,
   serverClockSkewMs,
   sha256OfBytes,
   verifyLedger,
-  writeFile,
   type Finding,
 } from "@step-up/shared";
-import { downloadItem } from "./graph/onedrive.js";
+import { downloadTo } from "./storage/index.js";
 import { openYearLedger } from "./ledgerYear.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -36,18 +34,18 @@ async function main() {
 
   if (files) {
     const docs = Object.values(opened.ledger.state.documents).filter((d) => d.driveItemId);
-    console.log(`Checking ${docs.length} file(s) in OneDrive${hash ? " (downloading each to check its contents)" : ""}...`);
+    console.log(`Checking ${docs.length} file(s) in ${opened.storage.label}${hash ? " (downloading each to check its contents)" : ""}...`);
     const gone: string[] = [];
     const wrongSize: string[] = [];
     const wrongHash: string[] = [];
     const tmp = hash ? await mkdtemp(path.join(os.tmpdir(), "stepup-verify-")) : undefined;
     for (const d of docs) {
       try {
-        const item = await graphJson<{ size?: number }>(`/drives/${opened.driveId}/items/${d.driveItemId}?$select=size`);
+        const item = await opened.storage.stat(opened.driveId, d.driveItemId!);
         if (d.sizeBytes !== undefined && item.size !== undefined && item.size !== d.sizeBytes) wrongSize.push(d.id);
         if (hash && d.sha256 && tmp) {
           const dest = path.join(tmp, "f");
-          await downloadItem(opened.driveId, d.driveItemId!, dest);
+          await downloadTo(opened.storage, opened.driveId, d.driveItemId!, dest);
           const bytes = await readFile(dest);
           if ((await sha256OfBytes(bytes)) !== d.sha256) wrongHash.push(d.id);
         }
@@ -56,16 +54,16 @@ async function main() {
       }
     }
     if (tmp) await rm(tmp, { recursive: true, force: true });
-    if (gone.length) findings.push({ severity: "error", code: "file-missing-in-onedrive", message: `${gone.length} registered file(s) can't be found in OneDrive (deleted or moved?).`, ids: gone.slice(0, 10) });
+    if (gone.length) findings.push({ severity: "error", code: "file-missing-in-onedrive", message: `${gone.length} registered file(s) can't be found in ${opened.storage.label} (deleted or moved?).`, ids: gone.slice(0, 10) });
     if (wrongSize.length) findings.push({ severity: "warn", code: "file-size-changed", message: `${wrongSize.length} file(s) have a different size than when they were registered (edited?).`, ids: wrongSize.slice(0, 10) });
     if (wrongHash.length) findings.push({ severity: "error", code: "file-contents-changed", message: `${wrongHash.length} file(s) no longer match their recorded SHA-256 (changed or corrupted).`, ids: wrongHash.slice(0, 10) });
   }
 
-  // A tiny write is the only way to learn OneDrive's idea of the time; do it in the reports folder, and only for the clock check.
-  const folders = await openLedgerFolders(opened.driveId, opened.year.folderId);
+  // A tiny write is the only way to learn the storage's idea of the time; do it in the reports folder, and only for the clock check.
+  const folders = await openLedgerFolders(opened.storage, opened.driveId, opened.year.folderId);
   if (folders) {
-    await writeFile(opened.driveId, folders.reportsId, ".clock-check", new Date().toISOString());
-    if (clockLooksWrong()) findings.push({ severity: "warn", code: "clock-skew", message: `This computer's clock is ${Math.round(Math.abs(serverClockSkewMs()!) / 60000)} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly.` });
+    await opened.storage.write(opened.driveId, folders.reportsId, ".clock-check", new Date().toISOString());
+    if (clockLooksWrong()) findings.push({ severity: "warn", code: "clock-skew", message: `This computer's clock is ${Math.round(Math.abs(serverClockSkewMs()!) / 60000)} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} ${opened.storage.label}'s. Edits made on different devices may be ordered wrongly.` });
   }
 
   const icon = { error: "ERROR", warn: "warn ", info: "info " } as const;

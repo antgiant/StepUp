@@ -1,16 +1,10 @@
-import { GraphError, graphJson } from "../graph/client.js";
-import { readTextFile, writeFile } from "../graph/files.js";
+import { isStorageError, type StorageProvider } from "../storage/types.js";
 import type { EventStore } from "./store.js";
 import type { LedgerEvent } from "./types.js";
 
 const SAFE_CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 /** Roll to a new segment file once a log passes this size so each upload stays small. */
 const DEFAULT_SEGMENT_BYTES = 256 * 1024;
-
-interface ChildrenPage {
-  value: Array<{ id: string; name: string; eTag?: string; folder?: unknown }>;
-  "@odata.nextLink"?: string;
-}
 
 interface OwnSegment {
   index: number;
@@ -28,24 +22,25 @@ export interface CachedLog {
   events: LedgerEvent[];
 }
 
-export interface OneDriveEventStoreOptions {
+export interface StorageEventStoreOptions {
   segmentBytes?: number;
 }
 
 /**
- * Event logs in a OneDrive folder: `<clientId>.jsonl`, then `<clientId>.1.jsonl`, ... Only this client ever writes its
- * own segments (uploaded whole with `If-Match`); reads list the folder and fetch only segments whose ETag changed.
+ * Event logs in a storage folder: `<clientId>.jsonl`, then `<clientId>.1.jsonl`, ... Only this client ever writes its
+ * own segments (uploaded whole with `ifMatch`); reads list the folder and fetch only segments whose version changed.
  */
-export class OneDriveEventStore implements EventStore {
+export class StorageEventStore implements EventStore {
   private own?: OwnSegment;
   private readonly cache = new Map<string, { eTag?: string; events: LedgerEvent[] }>();
   private readonly segmentBytes: number;
 
   constructor(
+    private readonly storage: StorageProvider,
     private readonly driveId: string,
     private readonly eventsFolderId: string,
     readonly clientId: string,
-    options: OneDriveEventStoreOptions = {}
+    options: StorageEventStoreOptions = {}
   ) {
     if (!SAFE_CLIENT_ID.test(clientId)) throw new Error(`Unsafe clientId "${clientId}"`);
     this.segmentBytes = options.segmentBytes ?? DEFAULT_SEGMENT_BYTES;
@@ -73,7 +68,7 @@ export class OneDriveEventStore implements EventStore {
       files
         .filter((f) => this.cache.get(f.id)?.eTag !== f.eTag || !this.cache.has(f.id))
         .map(async (f) => {
-          const { text, eTag } = await readTextFile(this.driveId, f.id);
+          const { text, eTag } = await this.storage.readText(this.driveId, f.id);
           this.cache.set(f.id, { eTag: eTag ?? f.eTag, events: parseLines(text) });
         })
     );
@@ -95,7 +90,7 @@ export class OneDriveEventStore implements EventStore {
     const nextLines = [...target.lines, ...added];
     const body = nextLines.join("\n") + "\n";
     try {
-      const stored = await writeFile(this.driveId, this.eventsFolderId, this.segmentName(target.index), body, {
+      const stored = await this.storage.write(this.driveId, this.eventsFolderId, this.segmentName(target.index), body, {
         ifMatch: target.eTag,
         createOnly: !target.eTag,
       });
@@ -104,7 +99,7 @@ export class OneDriveEventStore implements EventStore {
       // We just wrote this file, so we know its contents: never download our own log again.
       this.cache.set(stored.id, { eTag: stored.eTag, events: parseLines(body) });
     } catch (err) {
-      if (err instanceof GraphError && (err.status === 412 || err.status === 409)) {
+      if (isStorageError(err, "changed", "exists")) {
         this.own = undefined;
         throw new Error(
           `The event log for client "${this.clientId}" was changed by someone else. Each device/install must use its own clientId ` +
@@ -150,7 +145,7 @@ export class OneDriveEventStore implements EventStore {
       };
       return this.own;
     }
-    const { text, eTag } = await readTextFile(this.driveId, best.id);
+    const { text, eTag } = await this.storage.readText(this.driveId, best.id);
     const lines = text.split("\n").filter((l) => l.trim());
     this.own = {
       index: best.index,
@@ -164,14 +159,9 @@ export class OneDriveEventStore implements EventStore {
   }
 
   private async listLogs(): Promise<Array<{ id: string; name: string; eTag?: string }>> {
-    const out: Array<{ id: string; name: string; eTag?: string }> = [];
-    let url: string | undefined = `/drives/${this.driveId}/items/${this.eventsFolderId}/children?$select=id,name,eTag,folder&$top=200`;
-    while (url) {
-      const page: ChildrenPage = await graphJson<ChildrenPage>(url);
-      for (const c of page.value) if (!c.folder && c.name.endsWith(".jsonl")) out.push({ id: c.id, name: c.name, eTag: c.eTag });
-      url = page["@odata.nextLink"];
-    }
-    return out;
+    return (await this.storage.list(this.driveId, this.eventsFolderId))
+      .filter((c) => !c.isFolder && c.name.endsWith(".jsonl"))
+      .map((c) => ({ id: c.id, name: c.name, eTag: c.eTag }));
   }
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
+import { OneDriveProvider,
   LEGACY_CHOICES_FILE,
   LegacyLedger,
   ReadOnlyYearError,
@@ -18,7 +18,9 @@ import {
   type LegacyInput,
   type LegacyRow,
 } from "../src/index.js";
-import { FakeGraph } from "./fakeGraph.js";
+
+const storage = new OneDriveProvider(testAuth);
+import { FakeGraph, testAuth } from "./fakeGraph.js";
 
 const row = (id: number, extra: Record<string, unknown>, docs: string[] = ["receipt.pdf"]): LegacyRow => ({
   values: {
@@ -122,20 +124,20 @@ describe("the receipt choices file beside the workbook", () => {
     g.add(year.id, "2025-2026 - FES UA Tracking Spreadsheet.xlsx", false);
     g.add(year.id, "receipt.pdf", false);
 
-    expect(await readReceiptChoices("d", year.id)).toEqual({});
-    await writeReceiptChoices("d", year.id, { "a.pdf b.pdf": "b.pdf" });
+    expect(await readReceiptChoices(storage, "d", year.id)).toEqual({});
+    await writeReceiptChoices(storage, "d", year.id, { "a.pdf b.pdf": "b.pdf" });
     expect(g.child(year.id, LEGACY_CHOICES_FILE)).toBeDefined();
-    expect(await readReceiptChoices("d", year.id)).toEqual({ "a.pdf b.pdf": "b.pdf" });
+    expect(await readReceiptChoices(storage, "d", year.id)).toEqual({ "a.pdf b.pdf": "b.pdf" });
 
-    const [info] = await listYears("d", root);
+    const [info] = await listYears(storage, "d", root);
     expect(info).toMatchObject({ kind: "legacy-excel", looseFileCount: 2 }); // the workbook and the receipt, not the choices file
-    expect((await listLooseFiles("d", year.id)).map((f) => f.name).sort()).toEqual(["2025-2026 - FES UA Tracking Spreadsheet.xlsx", "receipt.pdf"]);
+    expect((await listLooseFiles(storage, "d", year.id)).map((f) => f.name).sort()).toEqual(["2025-2026 - FES UA Tracking Spreadsheet.xlsx", "receipt.pdf"]);
   });
 
   it("treats an unreadable file as no answers", async () => {
     const year = g.add(g.rootId, "2025-2026", true);
     g.add(year.id, LEGACY_CHOICES_FILE, false, new TextEncoder().encode("not json"));
-    expect(await readReceiptChoices("d", year.id)).toEqual({});
+    expect(await readReceiptChoices(storage, "d", year.id)).toEqual({});
   });
 });
 
@@ -201,7 +203,7 @@ describe("year folders with several workbook copies", () => {
     g.add(y.id, "~$2024-2025 - FES UA Tracking Spreadsheet.xlsx", false).modified = "2026-09-01T00:00:00Z";
     const g2 = g.add(root, "2023-2024", true);
     g.add(g2.id, "Home School - Gardiner Scholarship (2023-2024).xlsx", false);
-    const years = await listYears("d", root);
+    const years = await listYears(storage, "d", root);
     expect(years.find((x) => x.label === "2024-2025")).toMatchObject({ kind: "legacy-excel", workbookName: "2024-2025 - FES UA Tracking Spreadsheet.xlsx", workbookCopies: 3 });
     expect(years.find((x) => x.label === "2023-2024")).toMatchObject({ kind: "legacy-excel", workbookCopies: 1 });
   });
@@ -216,7 +218,7 @@ describe("year folders with several workbook copies", () => {
     g.add(g.add(sub.id, "Citi", true).id, "statement.pdf", false);
     g.add(g.add(y.id, "_ledger", true).id, "events.jsonl", false);
     g.add(y.id, LEGACY_CHOICES_FILE, false);
-    const files = await readReceiptFiles({ driveId: "d", itemId: y.id, name: "", isFolder: true });
+    const files = await readReceiptFiles(storage, { driveId: "d", itemId: y.id, name: "", isFolder: true });
     expect(files.map((f) => f.name).sort()).toEqual(["deep.pdf", "same.pdf", "statement.pdf", "top.pdf"]);
     expect(files.find((f) => f.name === "same.pdf")!.id).toBe(g.child(y.id, "same.pdf")!.id);
   });

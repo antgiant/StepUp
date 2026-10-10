@@ -7,11 +7,10 @@
  * (and the few `legacy` checks in main.ts / workspace.ts) can be deleted once the year is settled.
  */
 import {
+  StorageEventStore,
   LegacyLedger,
-  OneDriveEventStore,
   choiceKey,
   deriveLegacyYear,
-  findChild,
   formatCents,
   itemsOf,
   readLegacyWorkbook,
@@ -29,6 +28,7 @@ import {
   type RulesContext,
   type YearInfo,
 } from "@step-up/shared/web";
+import { storage } from "./storage.js";
 import type { WorkspaceCache } from "./cache.js";
 import type { OpenWorkspace } from "./workspace.js";
 
@@ -50,10 +50,10 @@ const refs = (driveId: string, year: YearInfo, book: { id: string; name: string;
 export async function openLegacyWorkspace(pointer: Pointer, years: YearInfo[], year: YearInfo, clientId: string): Promise<OpenWorkspace> {
   const { driveId } = pointer;
   if (!year.workbookName) throw new Error(`${year.label} has no tracking workbook to read.`);
-  const book = await findChild(driveId, year.folderId, year.workbookName);
+  const book = await storage.find(driveId, year.folderId, year.workbookName);
   if (!book) throw new Error(`${year.workbookName} was not found.`);
   const r = refs(driveId, year, book);
-  const [input, choices] = await Promise.all([readLegacyWorkbook(r.workbook, r.folder, year.label), readReceiptChoices(driveId, year.folderId)]);
+  const [input, choices] = await Promise.all([readLegacyWorkbook(storage, r.workbook, r.folder, year.label), readReceiptChoices(storage, driveId, year.folderId)]);
   const derived = deriveLegacyYear(input, choices);
   const ledger = new LegacyLedger(derived.result.events);
   return {
@@ -63,7 +63,7 @@ export async function openLegacyWorkspace(pointer: Pointer, years: YearInfo[], y
     driveId,
     ledger,
     // Never read or written: the ledger above has its own fixed store. Present only to satisfy the workspace shape.
-    store: new OneDriveEventStore(driveId, "", clientId),
+    store: new StorageEventStore(storage, driveId, "", clientId),
     eventsId: "",
     carried: { children: 0, paymentMethods: 0 },
     legacy: { year: derived, ledger, ...r, readAt: Date.now() },
@@ -82,7 +82,7 @@ export function openLegacyFromCache(pointer: Pointer, years: YearInfo[], year: Y
     year,
     driveId,
     ledger,
-    store: new OneDriveEventStore(driveId, "", clientId),
+    store: new StorageEventStore(storage, driveId, "", clientId),
     eventsId: "",
     fromCache: true,
     carried: { children: 0, paymentMethods: 0 },
@@ -100,14 +100,14 @@ export async function refreshLegacy(ws: OpenWorkspace): Promise<boolean> {
   if (latest) ws.year = latest;
   const wantName = latest?.workbookName ?? l.workbook.name;
   const [book, choices, files] = await Promise.all([
-    findChild(driveId, ws.year.folderId, wantName),
-    readReceiptChoices(driveId, ws.year.folderId),
-    readReceiptFiles(l.folder),
+    storage.find(driveId, ws.year.folderId, wantName),
+    readReceiptChoices(storage, driveId, ws.year.folderId),
+    readReceiptFiles(storage, l.folder),
   ]);
   if (!book) throw new Error(`${wantName} was not found.`);
   const unchanged = book.eTag !== undefined && book.eTag === l.workbook.eTag && book.id === l.workbook.itemId;
   if (!unchanged) l.workbook = { ...l.workbook, itemId: book.id, name: book.name };
-  const input = unchanged ? { ...l.year.input, files } : await readLegacyWorkbook(l.workbook, l.folder, ws.year.label);
+  const input = unchanged ? { ...l.year.input, files } : await readLegacyWorkbook(storage, l.workbook, l.folder, ws.year.label);
   const derived = deriveLegacyYear(input, choices);
   const before = JSON.stringify(l.year.result.events);
   const after = JSON.stringify(derived.result.events);
@@ -128,7 +128,7 @@ export async function chooseReceipt(ws: OpenWorkspace, candidates: readonly stri
   const choices = { ...l.year.choices };
   if (file) choices[choiceKey(candidates)] = file;
   else delete choices[choiceKey(candidates)];
-  await writeReceiptChoices(ws.driveId, ws.year.folderId, choices);
+  await writeReceiptChoices(storage, ws.driveId, ws.year.folderId, choices);
   const derived = deriveLegacyYear(l.year.input, choices);
   l.year = derived;
   l.ledger.replace(derived.result.events);
