@@ -236,7 +236,7 @@ export function legacyQueueView(l: LegacyState): string {
         <p class="note">Nothing in the workbook points to these. Some may be receipts the sheet does not name.</p></details>`
     : "";
   return `<h2>Purchases ${listCount(purchases.length)}</h2>
-    <p class="note">${children.length ? `Students: ${esc(children.map((c) => c.name).join(", "))}. ` : ""}Open a purchase to see its items and files.</p>
+    <p class="note">${children.length ? `Students: ${children.map((c) => `<span class="student" data-student="${esc(c.id)}">${esc(c.name ?? c.id)}</span>`).join(", ")}. ` : ""}Open a purchase to see its items and files.</p>
     ${unclearRows.length ? `<p class="note warn">${unclearRows.length} purchase(s) list several files and the sheet does not say which is the receipt. They are shown with every file as additional documentation until you pick one; the answer is kept beside the workbook.</p>` : ""}
     ${listControls({ statuses: allStatuses, unclearCount: unclearRows.length, children, vendors: purchases.map((x) => x.p.vendor ?? x.items.map((i) => i.vendor).find(Boolean) ?? "") })}
     <ul class="queue" id="legacy-list">${purchases.map(row).join("") || "<li>The workbook has no purchases.</li>"}</ul>${unlinkedList}`;

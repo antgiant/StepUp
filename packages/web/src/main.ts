@@ -1650,6 +1650,13 @@ function filterLegacyList(restore = false): void {
   }
   // A control that is narrowing the list is tinted, so it is clear why some purchases are missing.
   for (const k of ["search", "status", "child", "vendor"] as const) controls[k]?.classList.toggle("filtering", legacyFilter[k].trim() !== "");
+  // Students with nothing in the displayed purchases are struck out in the note above the list.
+  const withItems = new Set(rows.filter((li) => !li.hidden).flatMap((li) => (li.dataset["children"] ?? "").split("|")));
+  for (const el of root.querySelectorAll<HTMLElement>(".student[data-student]")) {
+    const none = !withItems.has(el.dataset["student"] ?? "");
+    el.classList.toggle("none", none);
+    if (none) el.title = "No displayed purchases"; else el.removeAttribute("title");
+  }
   const num = (li: HTMLElement, k: string) => Number(li.dataset[k] ?? 0);
   const str = (li: HTMLElement, k: string) => li.dataset[k] ?? "";
   const byOrder = (a: HTMLElement, b: HTMLElement) => num(a, "order") - num(b, "order");

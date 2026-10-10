@@ -170,3 +170,5 @@ html { overscroll-behavior-y: none; }
 .clearable:has(input:placeholder-shown) .clear-x, .combo:has(input:placeholder-shown) .clear-x { display: none; }
 /* On a phone the search field takes its own line, with the status filter below it. */
 @media (max-width: 560px) { .row > .clearable { flex-basis: 100%; } }
+
+.student.none { text-decoration: line-through; opacity: .6; }
