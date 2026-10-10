@@ -121,9 +121,10 @@ export async function refreshLegacy(ws: OpenWorkspace): Promise<boolean> {
 }
 
 /** Remembers which file is a purchase's receipt (beside the workbook). `file` undefined takes the answer back. */
-export async function chooseReceipt(ws: OpenWorkspace, candidates: readonly string[], file: string | undefined): Promise<void> {
+export async function chooseReceipt(ws: OpenWorkspace, candidates: readonly string[], file: string | undefined, purchaseId?: string): Promise<string | undefined> {
   const l = ws.legacy;
-  if (!l) return;
+  if (!l) return undefined;
+  const itemIds = purchaseId ? itemsOf(l.ledger.state, purchaseId).map((i) => i.id) : [];
   const choices = { ...l.year.choices };
   if (file) choices[choiceKey(candidates)] = file;
   else delete choices[choiceKey(candidates)];
@@ -131,6 +132,12 @@ export async function chooseReceipt(ws: OpenWorkspace, candidates: readonly stri
   const derived = deriveLegacyYear(l.year.input, choices);
   l.year = derived;
   l.ledger.replace(derived.result.events);
+  // A purchase's id comes from its receipt file, so choosing (or un-choosing) one gives it a new id.
+  for (const id of itemIds) {
+    const moved = l.ledger.state.items[id]?.purchaseId;
+    if (moved) return moved;
+  }
+  return purchaseId;
 }
 
 // ---- screens (plain HTML strings, like the rest of the app) -----------------------------------------------------
