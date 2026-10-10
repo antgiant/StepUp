@@ -4,6 +4,11 @@ import { ensureFolder, findChild } from "../graph/files.js";
 /** Everything this system adds to a year folder lives under this subfolder; its presence marks a year as ledger-based. */
 export const LEDGER_DIR = "_ledger";
 export const LEDGER_SUBDIRS = ["events", "documents", "inbox", "reports"] as const;
+/**
+ * A year still kept in Excel is viewed read-only. The one thing written beside its workbook is this small file of
+ * answers ("which file is the receipt?"), so archiving the year takes it along. It is never treated as a receipt.
+ */
+export const LEGACY_CHOICES_FILE = "Step Up Helper - receipt choices.json";
 export const YEAR_FOLDER_RE = /^\d{4}-\d{4}$/;
 const TRACKING_WORKBOOK_RE = /tracking.*\.xlsx$/i;
 
@@ -57,7 +62,7 @@ export async function listYears(driveId: string, rootId: string): Promise<YearIn
   for (const child of await listChildren(driveId, rootId)) {
     if (!child.folder || !YEAR_FOLDER_RE.test(child.name)) continue;
     const inside = await listChildren(driveId, child.id);
-    const files = inside.filter((c) => !c.folder);
+    const files = inside.filter((c) => !c.folder && c.name !== LEGACY_CHOICES_FILE);
     const workbook = files.find((f) => TRACKING_WORKBOOK_RE.test(f.name));
     const hasLedger = inside.some((c) => c.folder && c.name === LEDGER_DIR);
     years.push({

@@ -23,6 +23,7 @@ import {
 } from "@step-up/shared/web";
 
 import type { WorkspaceCache } from "./cache.js";
+import { openLegacyWorkspace, refreshLegacy, type LegacyState } from "./legacyYear.js";
 
 const KEY = "stepup.workspace.v1";
 
@@ -106,6 +107,8 @@ export interface OpenWorkspace {
   fromCache?: boolean;
   /** What was copied in from an earlier year on this open (unsaved until the ledger is flushed). */
   carried: CarryResult;
+  /** Set when this year is still kept in Excel and is only being viewed (see legacyYear.ts). Everything else is read-only then. */
+  legacy?: LegacyState;
 }
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
@@ -113,6 +116,9 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const years = await listYears(pointer.driveId, pointer.rootId);
   const ledgerYears = years.filter((y) => y.kind === "ledger");
   const want = yearLabel ?? pointer.year;
+  // A year still kept in Excel is viewed from the workbook, read-only; it is never opened as a ledger.
+  const excelYear = years.find((y) => y.kind === "legacy-excel" && y.label === want);
+  if (excelYear) return openLegacyWorkspace(pointer, years, excelYear, clientId);
   const year = ledgerYears.find((y) => y.label === want) ?? ledgerYears[ledgerYears.length - 1];
   if (!year) throw new NoLedgerYearError(pointer);
   const folders = (await openLedgerFolders(pointer.driveId, year.folderId))!;
@@ -229,6 +235,10 @@ export function openFromCache(pointer: Pointer, clientId: string, rec: Workspace
 
 /** Brings a cache-built workspace up to date: re-lists the years and downloads only the logs whose ETag changed. Returns whether anything changed. */
 export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
+  if (ws.legacy) {
+    ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
+    return refreshLegacy(ws);
+  }
   const before = JSON.stringify([ws.ledger.state, ws.years]);
   ws.years = await listYears(ws.pointer.driveId, ws.pointer.rootId);
   await ws.ledger.refresh();

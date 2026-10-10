@@ -107,6 +107,17 @@ You can type `skip` at the start of any group to move to the next one without pr
 - **Repeated field IDs**: on multi-item screens (item checkboxes, item detail blocks), StepUp reuses the exact same `id` (e.g. `item_0`, `category`) across every repeated instance — a bug on their end. Fields are targeted positionally (`.nth(i)`), not by plain `#id`.
 - **OCR item detection can fail outright** ("We were not able to detect items or services on your document"), in which case you either retry with a different document or continue and manually add item blocks.
 
+## Viewing a year that is still kept in Excel
+
+A year folder that has its tracking workbook but no `_ledger/` shows in the web app's year list as **(Excel, read-only)**.
+Opening it reads the workbook and the receipts folder through OneDrive each time (nothing is stored as truth), so Excel stays
+the authority and edits made there appear on the next open or **Refresh from Excel**. It has its own read-only
+Purchases, Proof of payment, Summary and Reports pages, and a spreadsheet download built on your device; nothing in it can be
+changed and nothing is written to OneDrive except one small file, `Step Up Helper - receipt choices.json`, in the year folder.
+It remembers which file you said is the receipt when the sheet lists several and none is clearly it (until you pick, every
+file shows as additional documentation). The code is isolated in `packages/shared/src/legacy/` and
+`packages/web/src/legacyYear.ts`, and can be removed once the year is settled.
+
 ## Updating for a new school year
 
 Everything year-specific lives in `.env`, not code:

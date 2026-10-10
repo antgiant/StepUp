@@ -47,3 +47,6 @@ export * from "./events/onedriveStore.js";
 export * from "./workspace/workspace.js";
 export * from "./graph/browse.js";
 export * from "./workspace/pointer.js";
+export * from "./import/legacy.js";
+export * from "./legacy/read.js";
+export * from "./legacy/year.js";

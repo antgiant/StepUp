@@ -2,6 +2,7 @@ import type { ContentKind, LedgerState } from "../domain/types.js";
 import type { Ledger } from "../events/ledger.js";
 import { listFolderChildren, type DriveItemRef } from "../graph/onedrive.js";
 import { hashString } from "../util/hash.js";
+import { LEGACY_CHOICES_FILE } from "./workspace.js";
 
 export interface LooseFile {
   id: string;
@@ -13,7 +14,7 @@ export interface LooseFile {
 /** Files placed directly in a folder the old way (not sub-folders). Read-only. */
 export async function listLooseFiles(driveId: string, folderId: string): Promise<LooseFile[]> {
   const ref: DriveItemRef = { driveId, itemId: folderId, name: "", isFolder: true };
-  return (await listFolderChildren(ref)).filter((c) => !c.isFolder).map((c) => ({ id: c.id, name: c.name, size: c.size, webUrl: c.webUrl }));
+  return (await listFolderChildren(ref)).filter((c) => !c.isFolder && c.name !== LEGACY_CHOICES_FILE).map((c) => ({ id: c.id, name: c.name, size: c.size, webUrl: c.webUrl }));
 }
 
 const DATE_IN_NAME = /(?<![0-9])(\d{2})[ ._-](\d{2})[ ._-](\d{4}|\d{2})(?![0-9])/;

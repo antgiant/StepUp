@@ -86,6 +86,7 @@ import { initAuth, signIn, signOut } from "./auth.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
+import { chooseReceipt, legacyBanner, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -153,6 +154,7 @@ let ledgerFolderId: { yearFolderId: string; id: string } | undefined;
 
 /** Finds (or, the first time, freezes) this year's copy of the category list. */
 async function loadYearReference(ws: OpenWorkspace): Promise<void> {
+  if (ws.legacy) return; // a year Excel owns has no frozen category list of its own
   try {
     if (ledgerFolderId?.yearFolderId !== ws.year.folderId) {
       const folders = await openLedgerFolders(ws.driveId, ws.year.folderId);
@@ -380,7 +382,7 @@ let flushingUploads = false;
 /** Uploads whatever was chosen while offline. Safe to call any time; one run at a time. */
 async function flushQueuedUploads(): Promise<void> {
   const ws = workspace;
-  if (!ws || flushingUploads || !navigator.onLine) return;
+  if (!ws || ws.legacy || flushingUploads || !navigator.onLine) return;
   flushingUploads = true;
   try {
     const key = keyOf(ws.pointer);
@@ -455,7 +457,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
   }, "Uploading to OneDrive…");
 }
 
-type View = { name: "queue" } | { name: "summary" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
+type View = { name: "queue" } | { name: "summary" } | { name: "reports" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
@@ -557,7 +559,7 @@ function clearPreviews(): void {
 /** Browser cache of the open workspace (see cache.ts). Best effort: failures just mean a slower next visit. */
 const keyOf = (p: Pointer) => cacheKey(account?.homeAccountId ?? "", p.driveId, p.rootId, p.year ?? "");
 function persist(): void {
-  if (account && workspace) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace, yearSnapshot));
+  if (account && workspace && !workspace.legacy) void writeCache(keyOf(workspace.pointer), snapshotFor(workspace, yearSnapshot));
 }
 function forgetCache(): void {
   if (account && workspace) {
@@ -568,6 +570,7 @@ function forgetCache(): void {
 
 /** Keeps unuploaded edits on this device, and takes back any left over from an earlier visit. */
 async function useOutbox(ws: OpenWorkspace): Promise<void> {
+  if (ws.legacy) return;
   const key = keyOf(ws.pointer);
   const left = await readOutbox(key);
   ws.ledger.onPendingChange = (pending) => void writeOutbox(key, pending);
@@ -633,6 +636,7 @@ async function guarded(action: () => Promise<void>, label = "Waiting for OneDriv
 }
 
 async function save(): Promise<void> {
+  if (workspace?.legacy) return; // nothing in a year viewed from Excel is ever saved
   // New or changed purchases may now match a charge on a statement we already read.
   if (Object.values(ledger.state.documents).some((d) => d.statement)) {
     const linked = relinkAllStatements(ledger);
@@ -653,12 +657,12 @@ let reportsFolder: { yearFolderId: string; id: string } | undefined;
 const mirrorOn = () => ledger.state.settings["year"]?.mirror !== false;
 function scheduleMirror(): void {
   clearTimeout(mirrorTimer);
-  if (!workspace || !mirrorOn()) return;
+  if (!workspace || workspace.legacy || !mirrorOn()) return;
   mirrorTimer = setTimeout(() => void guardedQuiet(() => publishMirrorNow()), 60_000);
 }
 async function publishMirrorNow(): Promise<"written" | "unchanged" | "locked"> {
   const ws = workspace;
-  if (!ws) return "unchanged";
+  if (!ws || ws.legacy) return "unchanged";
   const lib = await import("@step-up/shared/mirror");
   const same = reportsFolder?.yearFolderId === ws.year.folderId;
   const result = await lib.publishYearMirror({
@@ -713,9 +717,10 @@ function connectionBar(): string {
   if (!account) return `<p class="note">Local mode: data stays in this browser. <button id="sign-in">Sign in with Microsoft</button></p>`;
   const who = esc(account.username);
   if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
-  const options = workspace.years.filter((y) => y.kind === "ledger").map((y) => `<option${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}</option>`).join("");
+  const options = workspace.years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel").map((y) => `<option value="${esc(y.label)}"${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}${y.kind === "legacy-excel" ? " (Excel, read-only)" : ""}</option>`).join("");
+  const refresh = workspace.legacy ? "" : `<button id="check-files">Refresh data</button>`;
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    <button id="check-files">Refresh data</button> <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
+    ${refresh} <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
 }
 
 /** The year after the newest one we know ("2025-2026" -> "2026-2027"); with none, the school year that includes today. */
@@ -752,7 +757,7 @@ function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue"><img src="./icon.svg" alt="" class="logo">Step Up Helper</a></h1>
     <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}${queuedUploads ? `<span class="badge warn">${queuedUploads} file(s) waiting to upload</span>` : ""}
-    <details class="menu"><summary class="btn">Advanced</summary>
+    ${workspace?.legacy ? `<details class="menu"><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="disconnect" class="danger">Disconnect</button></div></details>` : `<details class="menu"><summary class="btn">Advanced</summary>
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
@@ -764,7 +769,7 @@ function header(): string {
         ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
-      </div></details></nav></header>
+      </div></details>`}</nav></header>
     ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
 
@@ -774,7 +779,7 @@ let sinceChecked = false;
 const lastSeenKey = (ws: OpenWorkspace) => `stepup.lastSeen.${keyOf(ws.pointer)}`;
 
 function checkSince(ws: OpenWorkspace): void {
-  if (sinceChecked || ws.fromCache) return;
+  if (sinceChecked || ws.fromCache || ws.legacy) return;
   sinceChecked = true;
   let last: number | undefined;
   try {
@@ -1519,8 +1524,20 @@ function closeCombo(input: HTMLInputElement): void {
   input.setAttribute("aria-expanded", "false");
 }
 
+/** The purchases list in a year viewed from Excel narrows in place, so typing never loses its focus to a re-render. */
+function filterLegacyList(): void {
+  const q = (root.querySelector<HTMLInputElement>("#legacy-search")?.value ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const status = root.querySelector<HTMLSelectElement>("#legacy-status")?.value ?? "";
+  for (const li of root.querySelectorAll<HTMLElement>("#legacy-list > li[data-text]")) {
+    const text = li.dataset["text"] ?? "";
+    const has = (li.dataset["statuses"] ?? "").split("|").includes(status);
+    li.hidden = !(q.every((w) => text.includes(w)) && (!status || has));
+  }
+}
+
 root.addEventListener("input", (ev) => {
   const t = ev.target as HTMLInputElement;
+  if (t.id === "legacy-search") return filterLegacyList();
   if (t.dataset?.["combo"] !== undefined) {
     if (t.name === "categoryId") categoryChanged(t);
     else if (t.name === "serviceProvider") t.dataset["picked"] = "";
@@ -1687,7 +1704,16 @@ function render(): void {
     return;
   }
   const onboarding = account && !workspace;
-  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
+  const l = workspace?.legacy;
+  if (l) {
+    // A year Excel still owns: its own read-only screens, and none of the editing ones (see legacyYear.ts).
+    const v = view.name === "statement" ? "statements" : view.name;
+    const read = ctx();
+    const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : v === "reports" ? legacyReportsView(l, read) : legacyQueueView(l);
+    root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page;
+    return;
+  }
+  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" || view.name === "reports" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body;
   scheduleClaimPoll();
 }
@@ -1704,7 +1730,29 @@ root.addEventListener("click", async (ev) => {
   if (!t) return;
   if (!t.closest(".menu")) root.querySelector<HTMLDetailsElement>("details.menu")?.removeAttribute("open");
   const d = t.dataset;
-  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
+  if (workspace?.legacy) {
+    // A year viewed from Excel: only looking around, picking a receipt, and the connection controls do anything.
+    const legacy = workspace;
+    if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); status = "Read the workbook again."; }, "Reading the Excel workbook…");
+    else if (t.id === "legacy-download") {
+      await guarded(async () => {
+        const file = await legacySpreadsheet(legacy);
+        const url = URL.createObjectURL(new Blob([file.bytes as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        Object.assign(document.createElement("a"), { href: url, download: file.name }).click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }, "Building the spreadsheet…");
+    } else if (d["legacyPick"] || d["legacyClear"]) {
+      const id = d["legacyPick"] ?? d["legacyClear"]!;
+      const un = legacy.legacy!.year.unclear.find((u) => u.purchaseId === id);
+      const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
+      const candidates = un?.candidates ?? picked?.candidates;
+      if (candidates) await guarded(() => chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined), "Saving your answer…");
+    } else if (d["go"] || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app") {
+      // fall through to the shared handlers below
+    } else return;
+    if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
+  }
+  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "reports" ? { name: "reports" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
     if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");
@@ -1977,6 +2025,7 @@ root.addEventListener("click", async (ev) => {
 root.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const form = ev.target as HTMLFormElement;
+  if (workspace?.legacy && !["share-form", "new-year-form", "start-year"].includes(form.id)) return;
   if (form.id === "purchase-form") {
     await autosavePurchase(form); // Enter in a field saves like leaving it does
     return;
@@ -2076,6 +2125,11 @@ root.addEventListener("submit", async (ev) => {
 
 root.addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;
+  if (workspace?.legacy && input.id === "legacy-status") {
+    filterLegacyList();
+    return;
+  }
+  if (workspace?.legacy && input.id !== "year-pick") return;
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
     await guarded(async () => attach(await openWorkspace(pointer, store.clientId, input.value)), `Opening ${input.value}…`);

@@ -43,6 +43,12 @@ export interface LegacyInput {
   receiptChoices?: Record<string, string>;
   /** Table5: category path ("A - B") with its eligible scholarships. */
   categories?: Array<{ path: string; eligible: string[] }>;
+  /**
+   * "migrate" (default) is the one-time import: an unclear receipt takes a best guess. "view" is the read-only look at a
+   * year Excel still owns: Excel's status is shown as written, an unclear receipt is never guessed (every candidate goes
+   * to additional documentation until a person picks), and each statement file is kept as a document.
+   */
+  mode?: "migrate" | "view";
 }
 
 export interface ImportReport {
@@ -147,16 +153,20 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
 
   const fileByName = new Map(input.files.map((f) => [f.name, f]));
   const docIds = new Map<string, string>();
-  const ensureDoc = (name: string): string => {
+  const viewing = input.mode === "view";
+  const ensureDoc = (name: string, contentKind?: "statement"): string => {
     let id = docIds.get(name);
     if (id) return id;
     id = `doc-${hashString(name)}`;
     docIds.set(name, id);
     const f = fileByName.get(name);
     if (!f) report.missingFiles.push(name);
-    emit("document", id, clean({ filename: name, driveItemId: f?.id, webUrl: f?.webUrl, sizeBytes: f?.size }), "legacy.document");
+    emit("document", id, clean({ filename: name, driveItemId: f?.id, webUrl: f?.webUrl, sizeBytes: f?.size, contentKind }), "legacy.document");
     return id;
   };
+
+  // A read-only view lists each card statement as a document, so it can be opened from the proof-of-payment page.
+  if (viewing) for (const file of methodFile.values()) ensureDoc(file, "statement");
 
   const purchases = new Map<string, { id: string; date?: string; invoice?: string; vendor?: string }>();
   const submissionsSeen = new Set<string>();
@@ -181,14 +191,17 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
     // ---- which document is the receipt?
     const files = [...new Set(row.docFiles)];
     let main: string | undefined;
+    let unclear = false;
     if (files.length === 1) main = files[0];
     else if (files.length > 1) {
       const keyword = files.filter((f) => RECEIPT_KEYWORDS.some((k) => f.toLowerCase().includes(k)));
       if (keyword.length === 1) main = keyword[0];
       else {
         const remembered = choices[[...files].sort().join(" ")];
-        main = remembered && files.includes(remembered) ? remembered : files[0];
-        report.ambiguousReceipts.push({ itemId, candidates: files, chosen: main!, resolvedFromCache: Boolean(remembered && files.includes(remembered)) });
+        const known = remembered && files.includes(remembered) ? remembered : undefined;
+        unclear = viewing && !known;
+        main = known ?? (viewing ? undefined : files[0]);
+        report.ambiguousReceipts.push({ itemId, candidates: files, chosen: main ?? "", resolvedFromCache: Boolean(known) });
       }
     } else {
       report.itemsWithoutDocuments.push(itemId);
@@ -197,7 +210,8 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
     const vendor = str(v["Vendor"]);
     const provider = str(v["Service Provider"]);
     const vendorKey = (provider || vendor).toLowerCase();
-    const purchaseKey = main ? `${main}::${vendorKey}` : `no-receipt::${legacyId}`;
+    // Rows that share the same unclear set of files are still one purchase, so a later pick settles them together.
+    const purchaseKey = main ? `${main}::${vendorKey}` : unclear ? `unclear::${[...files].sort().join("|")}::${vendorKey}` : `no-receipt::${legacyId}`;
     const date = toIsoDate(v["Date"]);
     const invoice = str(v["Invoice #"]);
     const methodLabel = str(v["Payment Method"]);
@@ -234,7 +248,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
       const key = `${purchase!.id}::${file}`;
       if (additionalSeen.has(key)) return;
       additionalSeen.add(key);
-      emit("additionalDoc", `add-${hashString(key)}`, clean({ ownerKind: "purchase", ownerId: purchase!.id, documentId: ensureDoc(file), kind, source: "manual" }), "legacy.additionalDoc");
+      emit("additionalDoc", `add-${hashString(key)}`, clean({ ownerKind: "purchase", ownerId: purchase!.id, documentId: ensureDoc(file, viewing && kind === "payment-proof" ? "statement" : undefined), kind, source: "manual" }), "legacy.additionalDoc");
     };
     if (paymentFile && paymentFile !== main) addDoc(paymentFile, "payment-proof");
     for (const f of files) if (f !== main && f !== paymentFile) addDoc(f, "other");
@@ -305,7 +319,8 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
         submissionId,
         lineNumber: v["Line Number"] === "" || v["Line Number"] === undefined ? undefined : Number(v["Line Number"]),
         stepUpStatus,
-        statusOverride,
+        // In a read-only view the sheet is the authority, so its status is shown exactly as written.
+        statusOverride: viewing && status ? status : statusOverride,
         approvedCents: stepUpStatus === "Approved" || stepUpStatus === "Adjusted" ? reimbursed : undefined,
         paidCents: stepUpStatus === "Paid" ? reimbursed : undefined,
         notes,
