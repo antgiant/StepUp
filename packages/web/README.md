@@ -16,7 +16,7 @@ Events are stored in this browser's localStorage; Import/Export events moves a l
 
 **Sharing:** the Share button invites someone to edit the workspace folder. They accept in OneDrive, use **Add shortcut to My files** on it (Graph's shared list is unreliable, so a shortcut or a pasted link is how the app finds it), then sign in here and pick it from My OneDrive.
 
-**Settings:** the header's **Advanced** menu holds Import events, Export events and Disconnect. Anything that waits on OneDrive shows a labelled spinner; the caching strategy for slow Graph calls is in `docs/PLAN.md` §3.2b.
+**Settings:** the header's **Advanced** menu holds Import events, Export events, Disconnect and Sign out. Anything that waits on OneDrive shows a labelled spinner; the caching strategy for slow Graph calls is in `docs/PLAN.md` §3.2b.
 
 **Caching:** the last-known ledger for the open year is kept in this browser (IndexedDB) so the page appears immediately and then refreshes from OneDrive, downloading only event logs whose ETag changed. It is cleared on sign-out and Disconnect.
 

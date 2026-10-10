@@ -751,11 +751,11 @@ function attach(next: OpenWorkspace | undefined): void {
 function connectionBar(): string {
   if (!account) return `<p class="note">Local mode: data stays in this browser. <button id="sign-in">Sign in with Microsoft</button></p>`;
   const who = esc(account.username);
-  if (!workspace) return `<p class="note">Signed in as ${who}. <button id="sign-out">Sign out</button></p>`;
+  if (!workspace) return `<p class="note">Signed in as ${who}.</p>`;
   const options = workspace.years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel").map((y) => `<option value="${esc(y.label)}"${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}${y.kind === "legacy-excel" ? " (Excel, read-only)" : ""}</option>`).join("");
   const refresh = workspace.legacy ? "" : `<button id="check-files">Refresh data</button>`;
   return `<p class="note">Signed in as ${who}. Year <select id="year-pick" style="width:auto">${options}</select>
-    ${refresh} <button id="share">Share</button> <button id="sign-out">Sign out</button></p>`;
+    ${refresh} <button id="share">Share</button></p>`;
 }
 
 /** The year after the newest one we know ("2025-2026" -> "2026-2027"); with none, the school year that includes today. */
@@ -792,7 +792,7 @@ function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue"><img src="./icon.svg" alt="" class="logo">Step Up Helper</a></h1>
     <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}${queuedUploads ? `<span class="badge warn">${queuedUploads} file(s) waiting to upload</span>` : ""}
-    ${workspace?.legacy ? `<details class="menu"><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button><button id="disconnect" class="danger">Disconnect</button></div></details>` : `<details class="menu"><summary class="btn">Advanced</summary>
+    ${workspace?.legacy ? `<details class="menu"><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button><button id="disconnect" class="danger">Disconnect</button>${account ? `<button id="sign-out">Sign out</button>` : ""}</div></details>` : `<details class="menu"><summary class="btn">Advanced</summary>
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
@@ -804,6 +804,7 @@ function header(): string {
         ${workspace ? `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>` : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
+        ${account ? `<button id="sign-out">Sign out</button>` : ""}
       </div></details>`}</nav></header>
     ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
