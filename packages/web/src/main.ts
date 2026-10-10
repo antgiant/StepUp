@@ -1560,9 +1560,20 @@ function closeCombo(input: HTMLInputElement): void {
 }
 
 /** The purchases list in a year viewed from Excel narrows in place, so typing never loses its focus to a re-render. */
-function filterLegacyList(): void {
-  const q = (root.querySelector<HTMLInputElement>("#legacy-search")?.value ?? "").toLowerCase().split(/\s+/).filter(Boolean);
-  const status = root.querySelector<HTMLSelectElement>("#legacy-status")?.value ?? "";
+let legacyFilter = { search: "", status: "" };
+
+/** `restore` puts the remembered search and status back into freshly drawn controls (coming back to the list); otherwise the controls are the source and are remembered. */
+function filterLegacyList(restore = false): void {
+  const searchBox = root.querySelector<HTMLInputElement>("#legacy-search");
+  const statusBox = root.querySelector<HTMLSelectElement>("#legacy-status");
+  if (restore) {
+    if (searchBox) searchBox.value = legacyFilter.search;
+    if (statusBox) statusBox.value = legacyFilter.status;
+  }
+  if (searchBox) legacyFilter.search = searchBox.value;
+  if (statusBox) legacyFilter.status = statusBox.value;
+  const q = (searchBox?.value ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const status = statusBox?.value ?? "";
   for (const li of root.querySelectorAll<HTMLElement>("#legacy-list > li[data-text]")) {
     const text = li.dataset["text"] ?? "";
     const has = status === UNCLEAR_FILTER ? li.dataset["unclear"] !== undefined : (li.dataset["statuses"] ?? "").split("|").includes(status);
@@ -1746,6 +1757,7 @@ function render(): void {
     const read = ctx();
     const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : v === "reports" ? legacyReportsView(l, read) : legacyQueueView(l);
     root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page;
+    filterLegacyList(true);
     return;
   }
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" || view.name === "reports" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
