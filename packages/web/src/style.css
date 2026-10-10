@@ -160,3 +160,10 @@ html { overscroll-behavior-y: none; }
 .pull-refresh::before { content: "Pull to refresh"; }
 .pull-refresh.ready::before { content: "Release to refresh"; color: var(--fg); }
 .pull-refresh.busy::before { content: ""; }
+
+/* The small x that clears a search field. Shown only while the field has text. */
+.clearable { position: relative; display: block; flex: 1 1 160px; } .clearable input { width: 100%; padding-right: 34px; }
+.clearable input::-webkit-search-cancel-button { display: none; }
+.clear-x { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); z-index: 1; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.combo input { padding-right: 34px; }
+.clearable:has(input:placeholder-shown) .clear-x, .combo:has(input:placeholder-shown) .clear-x { display: none; }

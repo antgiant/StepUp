@@ -170,6 +170,11 @@ function purchaseTotal(state: LedgerState, id: string): number {
   return itemsOf(state, id).reduce((sum, i) => sum + requestedCents(i), 0);
 }
 
+/** A search field with a small x that clears it (phones have no reliable native one). */
+export function clearableSearch(id: string, placeholder: string): string {
+  return `<span class="clearable"><input id="${id}" type="search" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}"><button type="button" class="clear-x" data-clear="${id}" aria-label="Clear">&times;</button></span>`;
+}
+
 /** The status filter's value for purchases whose receipt the sheet leaves unclear (main.ts matches it against data-unclear). */
 export const UNCLEAR_FILTER = "__receipt_unclear__";
 const statusOf = (i: { statusOverride?: string; stepUpStatus?: string }) => i.statusOverride ?? i.stepUpStatus ?? "(no status)";
@@ -209,7 +214,7 @@ export function legacyQueueView(l: LegacyState): string {
   return `<h2>Purchases (${purchases.length})</h2>
     <p class="note">${children.length ? `Students: ${esc(children.map((c) => c.name).join(", "))}. ` : ""}Open a purchase to see its items and files.</p>
     ${unclearRows.length ? `<p class="note warn">${unclearRows.length} purchase(s) list several files and the sheet does not say which is the receipt. They are shown with every file as additional documentation until you pick one; the answer is kept beside the workbook.</p>` : ""}
-    <p class="row"><input id="legacy-search" type="search" placeholder="Search purchases, items, students" aria-label="Search purchases"><select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${unclearRows.length ? `<option value="${UNCLEAR_FILTER}">Receipt unclear (${unclearRows.length})</option>` : ""}${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
+    <p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}<select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${unclearRows.length ? `<option value="${UNCLEAR_FILTER}">Receipt unclear (${unclearRows.length})</option>` : ""}${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
     <ul class="queue" id="legacy-list">${purchases.map(row).join("") || "<li>The workbook has no purchases.</li>"}</ul>${unlinkedList}`;
 }
 

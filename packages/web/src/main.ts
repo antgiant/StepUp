@@ -26,6 +26,7 @@ import {
   fileNameHints,
   formatCents,
   itemsOf,
+  effectiveDate,
   newId,
   reallocateTax,
   observeActivity,
@@ -86,7 +87,7 @@ import { autoSignIn, canAutoSignIn, initAuth, signIn, signOut } from "./auth.js"
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, legacyBanner, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -940,9 +941,35 @@ function queueView(): string {
     for (const r of e.kind === "item-blocked" ? e.reasons.map((x) => `${e.title}: ${x}`) : e.reasons) if (!row.reasons.includes(r)) row.reasons.push(r);
     byPurchase.set(e.purchaseId, row);
   }
-  if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${looseList}${archivedList}`;
+  const allPurchases = purchaseListing();
+  if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${allPurchases}${looseList}${archivedList}`;
   const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><button class="row-button" data-open="${esc(id)}"><span><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`);
-  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${looseList}${archivedList}`;
+  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${allPurchases}${looseList}${archivedList}`;
+}
+
+/** Every purchase with a search box and a status filter, the same as the Excel view's list (both narrow in place; see filterLegacyList). */
+function purchaseListing(): string {
+  const state = ledger.state;
+  const deadline = state.settings["year"]?.submissionDeadline;
+  const rows = Object.values(state.purchases).filter((p) => !p.archived).map((p) => {
+    const items = itemsOf(state, p.id);
+    const labels = items.map((i) => displayStatus(i, evaluateItem(state, i.id, ctx()), ctx(), deadline));
+    const dates = items.map((i) => effectiveDate(i, p)).filter((d): d is string => Boolean(d)).sort();
+    return { p, items, labels, date: dates[dates.length - 1] ?? p.date ?? "" };
+  }).sort((a, b) => b.date.localeCompare(a.date) || a.p.id.localeCompare(b.p.id));
+  if (!rows.length) return "";
+  const allStatuses = [...new Set(rows.flatMap((r) => r.labels))].sort();
+  const items = rows.map((r) => {
+    const counts = new Map<string, number>();
+    for (const l of r.labels) counts.set(l, (counts.get(l) ?? 0) + 1);
+    const summary = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
+    const total = purchaseTotalCents(state, r.p);
+    const text = `${purchaseName(r.p)} ${r.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
+    return `<li class="q" data-text="${esc(text)}" data-statuses="${esc([...new Set(r.labels)].join("|"))}"><button class="row-button" data-open="${esc(r.p.id)}"><span><strong>${esc(purchaseName(r.p))}</strong><br><small>${esc(r.date)}${r.date ? " · " : ""}${total !== undefined ? formatCents(total) + " · " : ""}${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
+  });
+  return `<h2>All purchases (${rows.length})</h2>
+    <p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}<select id="legacy-status" aria-label="Status" style="width:auto"><option value="">All statuses</option>${allStatuses.map((s) => `<option>${esc(s)}</option>`).join("")}</select></p>
+    <ul class="queue" id="legacy-list">${items.join("")}</ul>`;
 }
 
 function summaryView(): string {
@@ -1449,7 +1476,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
  */
 function searchBox(name: string, value: string | undefined, rows: Array<{ value: string; title: string; detail?: string }>, o: { placeholder: string; required?: boolean; empty: string }): string {
   const items = rows.map((r) => `<li role="option" data-value="${esc(r.value)}" data-hay="${esc((r.value + " " + r.title + " " + (r.detail ?? "")).toLowerCase())}"><strong>${esc(r.title)}</strong>${r.detail ? `<small>${esc(r.detail)}</small>` : ""}</li>`);
-  return `<span class="combo"><input name="${esc(name)}"${o.required ? " required" : ""} value="${esc(value)}" autocomplete="off" data-combo placeholder="${esc(o.placeholder)}" role="combobox" aria-expanded="false">
+  return `<span class="combo"><button type="button" class="clear-x" data-clear aria-label="Clear">&times;</button><input name="${esc(name)}"${o.required ? " required" : ""} value="${esc(value)}" autocomplete="off" data-combo placeholder="${esc(o.placeholder)}" role="combobox" aria-expanded="false">
     <ul class="combo-list" role="listbox" hidden>${items.join("")}<li class="combo-empty" hidden>${o.empty}</li></ul></span>`;
 }
 
@@ -1561,6 +1588,7 @@ function closeCombo(input: HTMLInputElement): void {
 
 /** The purchases list in a year viewed from Excel narrows in place, so typing never loses its focus to a re-render. */
 let legacyFilter = { search: "", status: "" };
+
 
 /** `restore` puts the remembered search and status back into freshly drawn controls (coming back to the list); otherwise the controls are the source and are remembered. */
 function filterLegacyList(restore = false): void {
@@ -1762,6 +1790,7 @@ function render(): void {
   }
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" || view.name === "reports" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body;
+  filterLegacyList(true);
   scheduleClaimPoll();
 }
 
@@ -1802,6 +1831,16 @@ root.addEventListener("click", async (ev) => {
   if (!t) return;
   if (!t.closest(".menu")) root.querySelector<HTMLDetailsElement>("details.menu")?.removeAttribute("open");
   const d = t.dataset;
+  if (d["clear"] !== undefined) {
+    // The little x in a search field: empty it, tell the filters, and keep the keyboard up for the next search.
+    const input = t.parentElement?.querySelector<HTMLInputElement>("input");
+    if (input) {
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    }
+    return;
+  }
   if (workspace?.legacy) {
     // A year viewed from Excel: only looking around, picking a receipt, and the connection controls do anything.
     const legacy = workspace;
@@ -2201,7 +2240,7 @@ root.addEventListener("submit", async (ev) => {
 
 root.addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;
-  if (workspace?.legacy && input.id === "legacy-status") {
+  if (input.id === "legacy-status") {
     filterLegacyList();
     return;
   }
