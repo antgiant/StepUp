@@ -1253,6 +1253,7 @@ async function autosavePurchaseNow(form: HTMLFormElement, focusNext?: string): P
   if (draft) {
     // The purchase now exists, so the full screen (items, documentation) replaces the blank one. Keep the cursor where it was going.
     view = { name: "purchase", id };
+    remember(false);
     render();
     if (focusNext) document.getElementById("app")?.querySelector<HTMLElement>(`#purchase-form [name="${focusNext}"]`)?.focus();
   }
@@ -1752,8 +1753,26 @@ function render(): void {
   scheduleClaimPoll();
 }
 
+// Each screen is a history entry, so the phone's swipe-back / back button returns to the previous screen instead of leaving the app.
+function remember(push: boolean): void {
+  try {
+    if (push) history.pushState({ view }, "");
+    else history.replaceState({ view }, "");
+  } catch { /* history unavailable: back simply leaves the app */ }
+}
+remember(false);
+window.addEventListener("popstate", (ev) => {
+  const back = (ev.state as { view?: View } | null)?.view;
+  view = back && typeof back.name === "string" ? back : { name: "queue" };
+  replacingReceipt = undefined;
+  itemEdit = undefined;
+  preview = undefined;
+  render();
+});
+
 function go(next: View): void {
   view = next;
+  remember(true);
   replacingReceipt = undefined;
   itemEdit = undefined;
   render();
@@ -1940,6 +1959,7 @@ root.addEventListener("click", async (ev) => {
     await save();
   } else if (d["statement"]) {
     view = { name: "statement", id: d["statement"] };
+    remember(true);
     render();
     window.scrollTo({ top: 0 });
     if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
@@ -2042,6 +2062,7 @@ root.addEventListener("click", async (ev) => {
     if (confirm("Archive this purchase? It and its items are hidden from the list, plan and budget. You can restore it later.")) {
       setPurchaseArchived(ledger, d["archive"]);
       view = { name: "queue" };
+      remember(false);
       await save();
     }
   } else if (d["unarchive"]) {
