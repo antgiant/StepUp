@@ -4,7 +4,7 @@ import type { GoogleDriveAuth, StorageAccount } from "@step-up/shared/web";
  * Public identifier of the Google OAuth "Web application" client (it is not a secret; the site's origin must be listed as an
  * authorized JavaScript origin on it). Leave empty until the client exists: Google is then not offered on the first screen.
  */
-export const GOOGLE_CLIENT_ID = "";
+export const GOOGLE_CLIENT_ID: string = "786911806780-t4fbouoc0gqmqqou4qa5gk8gsovbgi91.apps.googleusercontent.com";
 export const googleConfigured = GOOGLE_CLIENT_ID !== "";
 
 /** `drive` reads and writes the folder the person picks (and the folders shared with them); `drive.appdata` holds this app's own hidden settings. */
