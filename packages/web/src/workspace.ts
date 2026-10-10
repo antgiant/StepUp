@@ -111,9 +111,18 @@ export interface OpenWorkspace {
   legacy?: LegacyState;
 }
 
+/**
+ * The year folders under the workspace root. A year still kept in an Excel workbook can only be read through OneDrive's
+ * Excel service, so on other storage such a folder is shown as an empty year that can be set up as a ledger.
+ */
+async function yearsOf(driveId: string, rootId: string): Promise<YearInfo[]> {
+  const years = await listYears(storage, driveId, rootId);
+  return storage.kind === "onedrive" ? years : years.map((y) => (y.kind === "legacy-excel" ? { ...y, kind: "empty" as const } : y));
+}
+
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
 export async function openWorkspace(pointer: Pointer, clientId: string, yearLabel?: string): Promise<OpenWorkspace> {
-  const years = await listYears(storage, pointer.driveId, pointer.rootId);
+  const years = await yearsOf(pointer.driveId, pointer.rootId);
   const ledgerYears = years.filter((y) => y.kind === "ledger");
   const want = yearLabel ?? pointer.year;
   // A year still kept in Excel is viewed from the workbook, read-only; it is never opened as a ledger.
@@ -237,13 +246,13 @@ export function openFromCache(pointer: Pointer, clientId: string, rec: Workspace
 /** Brings a cache-built workspace up to date: re-lists the years and downloads only the logs whose ETag changed. Returns whether anything changed. */
 export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
   if (ws.legacy) {
-    ws.years = await listYears(storage, ws.pointer.driveId, ws.pointer.rootId);
+    ws.years = await yearsOf(ws.pointer.driveId, ws.pointer.rootId);
     const changed = await refreshLegacy(ws);
     ws.fromCache = false;
     return changed;
   }
   const before = JSON.stringify([ws.ledger.state, ws.years]);
-  ws.years = await listYears(storage, ws.pointer.driveId, ws.pointer.rootId);
+  ws.years = await yearsOf(ws.pointer.driveId, ws.pointer.rootId);
   await ws.ledger.refresh();
   ws.fromCache = false;
   // Opening from the cache skips the carry-over done on a fresh open, so a new year would stay without its students.

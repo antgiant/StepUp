@@ -81,6 +81,26 @@ npm run discover
 
 First run will print a Microsoft device-login link + code — open it in Chrome/Edge, sign in as yourself, approve. After that it's cached (`.cache/`, gitignored) and you won't be asked again for months of normal use. This also prints your workbook's table/worksheet/column names and the reference-files folder contents — useful if the spreadsheet's structure ever changes and the code needs updating to match.
 
+## Using Google Drive instead of OneDrive (optional)
+
+The storage is chosen behind one interface (`StorageProvider`), so a workspace can live in OneDrive, in Google Drive, or
+only in the browser / a local folder. Google Drive needs a Google Cloud project once:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/) create a project and enable the **Google Drive API**.
+2. **OAuth consent screen**: app name, support email, the privacy policy (`https://stepup.wooleys.us/privacy.html`) and terms
+   (`/terms.html`) links, and the authorized domain `wooleys.us`. Add the scopes `.../auth/drive` and `.../auth/drive.appdata`.
+   Until Google verifies the app (the `drive` scope is "restricted"), keep it in Testing and add each person as a test user, or
+   publish unverified (people see an "unverified app" screen; Google caps that at 100 users).
+3. **Website**: create an OAuth client of type *Web application* with `https://stepup.wooleys.us` (and `http://localhost:5173`
+   for development) as authorized JavaScript origins. Put its client ID in `GOOGLE_CLIENT_ID` in
+   `packages/web/src/googleAuth.ts` (it is public, like the Microsoft one). Until it is set, "Sign in with Google" is not shown.
+4. **Command line** (optional): create a second client of type *Desktop app* and set `STEPUP_STORAGE=google`,
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_FILES_FOLDER_URL` in `.env` (see `.env.example`). The first run opens
+   a browser to sign in; the refresh token is kept in `.cache/google-token.json`.
+
+Limits on Google Drive: years still kept in an Excel workbook cannot be viewed (that uses OneDrive's Excel service), and the
+single-session lock is best effort because Drive has no conditional writes.
+
 ## Running it
 
 ```bash

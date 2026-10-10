@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BrowserProvider,
+  GoogleDriveProvider,
   MemoryNodeStorage,
   MemoryProvider,
   OneDriveProvider,
@@ -14,6 +15,7 @@ import {
   setTokenProvider,
   type StorageProvider,
 } from "@step-up/shared";
+import { FakeDrive, testGoogleAuth } from "../../shared/test/fakeDrive.js";
 import { FakeGraph, testAuth } from "../../shared/test/fakeGraph.js";
 import { LOCAL_DRIVE, LocalFsProvider } from "../src/storage/localFs.js";
 
@@ -44,6 +46,11 @@ const makers: Record<string, () => Promise<Harness>> = {
     const dir = await mkdtemp(path.join(os.tmpdir(), "stepup-storage-"));
     cleanups.push(() => rm(dir, { recursive: true, force: true }));
     return { storage: new LocalFsProvider(dir), driveId: LOCAL_DRIVE, rootId: "" };
+  },
+  "google drive (fake Drive)": async () => {
+    const drive = new FakeDrive();
+    const storage = new GoogleDriveProvider(testGoogleAuth, { fetch: drive.fetch as typeof fetch, sleep: async () => {} });
+    return { storage, driveId: "google", rootId: "root" };
   },
   "onedrive (fake Graph)": async () => {
     const g = new FakeGraph();

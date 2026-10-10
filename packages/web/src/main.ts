@@ -79,7 +79,9 @@ import {
   type RulesContext,
 } from "@step-up/shared/web";
 import { storage } from "./storage.js";
-import { switchStorage } from "./storage.js";
+import { microsoftAuth } from "./auth.js";
+import { googleAuth, googleConfigured } from "./googleAuth.js";
+import { rememberStorage, switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
@@ -343,7 +345,7 @@ function redactionPanel(): string {
 
 function previewPanel(): string {
   if (!preview) return "";
-  const open = preview.webUrl?.startsWith("https://") ? ` <a href="${esc(preview.webUrl)}" target="_blank" rel="noopener">Open in OneDrive</a>` : "";
+  const open = preview.webUrl?.startsWith("https://") ? ` <a href="${esc(preview.webUrl)}" target="_blank" rel="noopener">Open in ${esc(storage.label)}</a>` : "";
   const body =
     preview.kind === "image" ? `<img src="${esc(preview.url)}" alt="${esc(preview.filename)}">`
     : preview.kind === "pdf" ? `<iframe src="${esc(preview.url)}" title="${esc(preview.filename)}"></iframe>`
@@ -787,6 +789,16 @@ function newYearForm(): string {
 }
 
 function shareForm(): string {
+  if (storage.kind === "google") {
+    return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Google account email" required>
+    <button>Invite to edit</button></form>
+    <p class="note">Google Drive emails them an invitation. Once they have it, they should:</p>
+    <ol class="note">
+      <li>Open the invitation and choose to open the folder in Google Drive (sign in with the account you invited).</li>
+      <li>Open ${esc(location.origin)}, choose <strong>Sign in with Google</strong> with the same account, and pick the folder under <strong>Shared with you</strong>. Or paste the folder's sharing link instead.</li>
+    </ol>
+    <p class="note">If no email arrives, share the folder with them in Google Drive yourself; the steps above are the same.</p>`;
+  }
   return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Microsoft account email" required>
     <button>Invite to edit</button></form>
     <p class="note">OneDrive emails them an invitation. Once they have it, they should:</p>
@@ -813,7 +825,7 @@ function header(): string {
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? (storage.kind === "browser" ? `<button id="update-mirror">Download spreadsheet</button>` : `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>`) : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
-        ${workspace && storage.kind === "onedrive" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
+        ${workspace && storage.kind !== "browser" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
         ${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}
       </div></details>`}</nav></header>
     ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
@@ -1785,13 +1797,17 @@ function onboardingView(): string {
   }
   const open = (list: FolderEntry[]) => list.map((f, i) => `<li><button data-pick="${i}">&#128193; ${esc(f.name)}</button></li>`).join("") || "<li><small>No folders here.</small></li>";
   if (picker.path.length === 0) {
+    const google = storage.kind === "google";
+    const mine = google ? "My Drive" : "My OneDrive";
     return `<h2>Welcome</h2><div class="choices">
       <section class="card"><h3>Set up a new workspace</h3>
-        <p class="note">Pick (or create) a folder in your own OneDrive to hold your school-year folders.</p>
-        <p><button data-pick-mine="1">&#128193; Choose a folder in My OneDrive</button></p></section>
+        <p class="note">Pick (or create) a folder in your own ${esc(storage.label)} to hold your school-year folders.</p>
+        <p><button data-pick-mine="1">&#128193; Choose a folder in ${mine}</button></p></section>
       <section class="card"><h3>Join a shared workspace</h3>
-        <p class="note">If someone invited you to their folder, open the invitation, then in OneDrive choose <strong>Add shortcut to My files</strong> on it. After that, pick it from My OneDrive, or paste the folder's sharing link here.</p>
-        <form id="pick-link" class="row"><input name="link" placeholder="OneDrive sharing link" required><button>Join with this link</button></form>
+        <p class="note">${google
+          ? "If someone invited you to their folder, you will find it below under <strong>Shared with you</strong>. You can also paste the folder's sharing link here."
+          : `If someone invited you to their folder, open the invitation, then in OneDrive choose <strong>Add shortcut to My files</strong> on it. After that, pick it from My OneDrive, or paste the folder's sharing link here.`}</p>
+        <form id="pick-link" class="row"><input name="link" placeholder="${esc(storage.label)} sharing link" required><button>Join with this link</button></form>
         ${picker.shared.length ? `<h4>Shared with you</h4><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("")}</ul>` : ""}</section>
     </div>`;
   }
@@ -1873,6 +1889,7 @@ function chooserView(): string {
     <p class="note">Where should your data be stored?</p>
     <div class="gate-choices">
       <button id="sign-in" class="primary big">Sign in with Microsoft<small>Stored in your OneDrive</small></button>
+      ${googleConfigured ? `<button id="sign-in-google" class="big">Sign in with Google<small>Stored in your Google Drive</small></button>` : ""}
       <button id="use-local" class="big">Local only<small>Stays in this browser; no account</small></button>
     </div>
   </section></main>${footer()}`;
@@ -1979,12 +1996,27 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "reload-app") location.reload();
   else if (t.id === "use-local") switchStorage("local");
   else if (t.id === "pick-again") await guarded(pickerTop);
-  else if (t.id === "sign-in") { note("Redirecting to Microsoft to sign in…"); showBusy("Redirecting to Microsoft to sign in…"); await storage.auth.signIn(); }
+  else if (t.id === "sign-in") {
+    // Microsoft is the default storage: forget any other choice, then go to Microsoft (the page leaves).
+    rememberStorage(undefined);
+    note("Redirecting to Microsoft to sign in…");
+    showBusy("Redirecting to Microsoft to sign in…");
+    await microsoftAuth.signIn();
+  }
+  else if (t.id === "sign-in-google") {
+    // Google signs in in a window opened by this click; once it succeeds the page restarts on Google Drive.
+    await guarded(async () => {
+      await googleAuth.signIn();
+      switchStorage("google");
+    }, "Signing in to Google…");
+  }
   else if (t.id === "sign-out") {
     // Local storage has no account to leave: this just stops using it. Everything stays on this device for next time.
     if (storage.kind === "browser") { switchStorage(undefined); return; }
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to ${storage.label} and will be lost if you sign out. Sign out anyway?`)) return;
-    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy("Signing out of Microsoft…"); await storage.auth.signOut();
+    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy(`Signing out of ${storage.kind === "google" ? "Google" : "Microsoft"}…`); await storage.auth.signOut();
+    // Google signs out without leaving the page; start over so the first screen asks again.
+    if (storage.kind === "google") switchStorage(undefined);
   }
   else if (t.id === "disconnect") {
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to ${storage.label} and will be lost if you disconnect. Disconnect anyway?`)) return;
@@ -2278,8 +2310,10 @@ root.addEventListener("submit", async (ev) => {
     await guarded(async () => {
       const email = val(form, "email");
       const folder = await workspaceFolder(workspace!.pointer);
-      await storage.invite!(folder, email, `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
-      status = `Invited ${email}. If they do not get an email, share the folder with them in OneDrive instead.`;
+      await storage.invite!(folder, email, storage.kind === "google"
+        ? `Sharing our Step Up Helper folder. Open ${location.origin}/, sign in with Google and pick it under Shared with you.`
+        : `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
+      status = `Invited ${email}. If they do not get an email, share the folder with them in ${storage.label} instead.`;
       sharing = false;
     }, "Inviting them to the folder…");
     return;
@@ -2399,7 +2433,7 @@ root.addEventListener("change", async (ev) => {
 await ledger.refresh();
 render();
 await guarded(async () => {
-  note(storage.kind === "onedrive" ? "Completing Microsoft sign-in…" : "Opening your files…");
+  note(storage.kind === "onedrive" ? "Completing Microsoft sign-in…" : storage.kind === "google" ? "Signing in to Google…" : "Opening your files…");
   account = await storage.auth.restore();
   authReady = true;
   if (!account && storage.auth.canAutoSignIn()) {

@@ -112,7 +112,7 @@ export type AppFolder = { driveId: string; id: string };
 
 export interface StorageProvider {
   /** "browser" is storage inside this browser (IndexedDB); "local-folder" is a folder on this computer (command line). */
-  readonly kind: "onedrive" | "browser" | "local-folder" | "memory";
+  readonly kind: "onedrive" | "google" | "browser" | "local-folder" | "memory";
   /** What to call it when talking to a person ("OneDrive", "this device"). */
   readonly label: string;
   /** How to sign in to it. */
