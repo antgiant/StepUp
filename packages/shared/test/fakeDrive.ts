@@ -3,6 +3,13 @@ import { noSignIn, type GoogleDriveAuth } from "../src/index.js";
 /** Sign-in for tests: always signed in, with a fixed token. */
 export const testGoogleAuth: GoogleDriveAuth = { ...noSignIn({ id: "g", name: "g@example.com" }), getToken: async () => "token" };
 
+/** Stands in for Drive's md5Checksum: any stable function of the bytes will do. */
+const contentHash = (b: Uint8Array): string => {
+  let h = 2166136261;
+  for (const x of b) h = Math.imul(h ^ x, 16777619) >>> 0;
+  return `${h.toString(16)}-${b.byteLength}`;
+};
+
 interface Node {
   id: string;
   name: string;
@@ -51,6 +58,7 @@ export class FakeDrive {
       name: n.name,
       mimeType: n.mimeType,
       ...(n.mimeType === FOLDER || n.shortcut ? {} : { size: String(n.content.byteLength) }),
+      ...(n.mimeType === FOLDER || n.shortcut ? {} : { md5Checksum: contentHash(n.content) }),
       version: String(n.version),
       modifiedTime: new Date(1_700_000_000_000 + n.version * 1000).toISOString(),
       createdTime: new Date(1_700_000_000_000 + n.created * 1000).toISOString(),

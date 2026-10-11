@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OneDriveProvider, StorageEventStore,
+import { OneDriveProvider, StorageEventStore, isStorageError,
   GraphError,
   HlcClock,
   Ledger,
@@ -120,13 +120,20 @@ describe("OneDriveEventStore", () => {
     expect(all.map((e) => e.entityId).sort()).toEqual(["i1", "i2", "i3"]);
   });
 
-  it("fails loudly when another writer used the same clientId", async () => {
+  it("reports a plain-language conflict when another writer used the same clientId, then recovers on retry", async () => {
     const folder = await storage.ensureFolder("d", g.rootId, "events");
     const one = new StorageEventStore(storage, "d", folder, "dev-a");
     const clone = new StorageEventStore(storage, "d", folder, "dev-a");
     await one.appendOwn([event("dev-a", 1, "i1", { description: "x" })]);
     await clone.appendOwn([event("dev-a", 2, "i1", { notes: "from the clone" })]);
-    await expect(one.appendOwn([event("dev-a", 3, "i1", { notes: "stale" })])).rejects.toThrow(/clientId/);
+    const stale = event("dev-a", 3, "i1", { notes: "stale" });
+    const err = await one.appendOwn([stale]).catch((e: unknown) => e);
+    expect(isStorageError(err, "changed")).toBe(true);
+    expect((err as Error).message).toMatch(/kept on this device and will be retried shortly/);
+    expect((err as Error).message).not.toMatch(/clientId/);
+    // The cached copy was dropped, so the retry re-reads the file and goes through.
+    await one.appendOwn([stale]);
+    expect((await one.readAll()).map((e) => e.id)).toContain(stale.id);
   });
 
   it("ignores a torn trailing line instead of failing the read", async () => {

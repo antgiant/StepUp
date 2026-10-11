@@ -18,7 +18,7 @@ const API = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
 const FOLDER = "application/vnd.google-apps.folder";
 const SHORTCUT = "application/vnd.google-apps.shortcut";
-const FIELDS = "id,name,mimeType,size,version,modifiedTime,createdTime,webViewLink,parents,trashed,shortcutDetails(targetId,targetMimeType)";
+const FIELDS = "id,name,mimeType,size,version,md5Checksum,modifiedTime,createdTime,webViewLink,parents,trashed,shortcutDetails(targetId,targetMimeType)";
 
 /** The one "drive" a Google provider has; shared drives are reached by item id and need no separate id here. */
 export const GOOGLE_DRIVE = "google";
@@ -50,6 +50,7 @@ interface DriveFile {
   mimeType?: string;
   size?: string;
   version?: string;
+  md5Checksum?: string;
   modifiedTime?: string;
   createdTime?: string;
   webViewLink?: string;
@@ -85,6 +86,12 @@ const isFolderish = (f: DriveFile): boolean => f.mimeType === FOLDER || (f.mimeT
 /** A shortcut stands for its target everywhere in this provider, so a shortcut to a folder opens that folder. */
 const resolved = (f: DriveFile): DriveFile => (f.mimeType === SHORTCUT && f.shortcutDetails?.targetId ? { ...f, id: f.shortcutDetails.targetId, mimeType: f.shortcutDetails.targetMimeType ?? f.mimeType } : f);
 
+/**
+ * The token that stands for "this content". Drive's `version` also moves for changes nobody made (indexing, thumbnails,
+ * sharing), which would read as someone else editing our log, so the content hash is preferred where Drive has one.
+ */
+const tagOf = (f: DriveFile): string | undefined => f.md5Checksum ?? f.version;
+
 const toEntry = (raw: DriveFile): StorageEntry => {
   const f = resolved(raw);
   return {
@@ -92,7 +99,7 @@ const toEntry = (raw: DriveFile): StorageEntry => {
     name: raw.name,
     isFolder: f.mimeType === FOLDER,
     ...(f.size !== undefined ? { size: Number(f.size) } : {}),
-    ...(f.version ? { eTag: f.version } : {}),
+    ...(tagOf(f) ? { eTag: tagOf(f) } : {}),
     ...(raw.webViewLink ? { webUrl: raw.webViewLink } : {}),
     ...(raw.modifiedTime ? { modified: raw.modifiedTime } : {}),
   };
@@ -115,6 +122,8 @@ export class GoogleDriveProvider implements StorageProvider {
   private readonly maxRetries: number;
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
+  /** Ids of files this client has written, by `parentId/name`, for when Drive's listing has not caught up yet. */
+  private readonly written = new Map<string, string>();
 
   constructor(readonly auth: GoogleDriveAuth, options: GoogleDriveOptions = {}) {
     this.fetchFn = options.fetch ?? ((...args) => fetch(...args));
@@ -241,7 +250,7 @@ export class GoogleDriveProvider implements StorageProvider {
       this.getLive(itemId),
       this.request(`${API}/files/${encodeURIComponent(itemId)}?alt=media&supportsAllDrives=true`, {}, "Downloading a file…"),
     ]);
-    return { text: await res.text(), ...(meta.version ? { eTag: meta.version } : {}) };
+    return { text: await res.text(), ...(tagOf(meta) ? { eTag: tagOf(meta) } : {}) };
   }
 
   async download(_driveId: string, itemId: string, label?: string): Promise<Blob> {
@@ -277,9 +286,19 @@ export class GoogleDriveProvider implements StorageProvider {
   }
 
   async write(_driveId: string, parentId: string, name: string, body: FileBody, options: WriteOptions = {}): Promise<StoredFile> {
-    const existing = await this.findRaw(parentId, name);
+    const key = `${parentId}/${name}`;
+    let existing = await this.findRaw(parentId, name);
+    if (!existing) {
+      // Drive's search index lags behind writes, so a file we just made can be missing from the listing. Ask for it by id.
+      const known = this.written.get(key);
+      if (known) existing = await this.getLive(known).catch(() => undefined);
+    }
     if (existing && options.createOnly) throw new StorageError("exists", `"${name}" already exists`);
-    if (options.ifMatch && (!existing || existing.version !== options.ifMatch)) throw new StorageError("changed", `"${name}" changed since it was read`);
+    if (options.ifMatch) {
+      // Listings can also be stale, so the comparison uses a direct (consistent) read of the file.
+      const live = existing ? await this.getLive(existing.id).catch(() => undefined) : undefined;
+      if (!live || tagOf(live) !== options.ifMatch) throw new StorageError("changed", `"${name}" changed since it was read`);
+    }
 
     const mime = body instanceof Blob && body.type ? body.type : typeof body === "string" ? "text/plain; charset=utf-8" : "application/octet-stream";
     const metadata = existing ? {} : { name, parents: [parentId] };
@@ -305,7 +324,8 @@ export class GoogleDriveProvider implements StorageProvider {
         throw new StorageError("exists", `"${name}" already exists`);
       }
     }
-    return { id: stored.id, name: stored.name, ...(stored.version ? { eTag: stored.version } : {}), ...(stored.size !== undefined ? { size: Number(stored.size) } : {}), ...(stored.webViewLink ? { webUrl: stored.webViewLink } : {}) };
+    this.written.set(key, stored.id);
+    return { id: stored.id, name: stored.name, ...(tagOf(stored) ? { eTag: tagOf(stored) } : {}), ...(stored.size !== undefined ? { size: Number(stored.size) } : {}), ...(stored.webViewLink ? { webUrl: stored.webViewLink } : {}) };
   }
 
   private async resumable(url: string, method: string, metadata: object, bytes: Uint8Array, mime: string, name: string): Promise<DriveFile> {
@@ -364,7 +384,7 @@ export class GoogleDriveProvider implements StorageProvider {
   async remove(_driveId: string, itemId: string, ifMatch?: string): Promise<void> {
     if (ifMatch) {
       const current = await this.getLive(itemId);
-      if (current.version !== ifMatch) throw new StorageError("changed", `"${current.name}" changed since it was read`);
+      if (tagOf(current) !== ifMatch) throw new StorageError("changed", `"${current.name}" changed since it was read`);
     }
     // To the bin, like OneDrive's delete, so a mistake can be undone.
     await this.json(this.fileUrl(itemId), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }) });

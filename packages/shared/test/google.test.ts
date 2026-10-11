@@ -90,6 +90,37 @@ describe("Google Drive provider", () => {
     expect(again.id).toBe(stored.id);
   });
 
+  it("replaces our own log when the folder listing has not caught up with the file we just wrote", async () => {
+    const { drive } = setup();
+    const real = drive.fetch;
+    let stale = false;
+    const mine = new GoogleDriveProvider(testGoogleAuth, {
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (stale && String(input).includes("/files?q=") && String(input).includes("name")) return new Response(JSON.stringify({ files: [] }), { status: 200 });
+        return real(input, init);
+      }) as typeof fetch,
+      sleep: async () => {},
+    });
+    const one = await mine.write(D, "root", "other.jsonl", "x\n");
+    stale = true; // search no longer shows what was just written
+    const two = await mine.write(D, "root", "other.jsonl", "x\ny\n", { ifMatch: one.eTag });
+    expect(two.id).toBe(one.id);
+    expect([...drive.nodes.values()].filter((n) => n.name === "other.jsonl")).toHaveLength(1);
+  });
+
+  it("does not call a file changed when only Drive's version number moved", async () => {
+    const { drive, storage } = setup();
+    const stored = await storage.write(D, "root", "me.jsonl", "a\n");
+    drive.nodes.get(stored.id)!.version += 3; // indexing, thumbnails, sharing: content untouched
+    const next = await storage.write(D, "root", "me.jsonl", "a\nb\n", { ifMatch: stored.eTag });
+    expect(next.id).toBe(stored.id);
+    expect(drive.text(stored.id)).toBe("a\nb\n");
+    // A real edit by someone else is still caught.
+    drive.nodes.get(stored.id)!.content = new TextEncoder().encode("theirs\n");
+    const err = await storage.write(D, "root", "me.jsonl", "mine\n", { ifMatch: next.eTag }).catch((e: unknown) => e);
+    expect(isStorageError(err, "changed")).toBe(true);
+  });
+
   it("retries rate limits and server errors, then succeeds", async () => {
     const { drive, storage, sleeps } = setup();
     drive.add("a.txt", ["root"], "text/plain", new TextEncoder().encode("x"));

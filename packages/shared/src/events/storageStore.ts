@@ -1,4 +1,4 @@
-import { isStorageError, type StorageProvider } from "../storage/types.js";
+import { isStorageError, StorageError, type StorageProvider } from "../storage/types.js";
 import type { EventStore } from "./store.js";
 import type { LedgerEvent } from "./types.js";
 
@@ -101,9 +101,14 @@ export class StorageEventStore implements EventStore {
     } catch (err) {
       if (isStorageError(err, "changed", "exists")) {
         this.own = undefined;
-        throw new Error(
-          `The event log for client "${this.clientId}" was changed by someone else. Each device/install must use its own clientId ` +
-            `(was .cache copied between machines?). Original error: ${err.message}`
+        // The technical detail is for whoever is debugging; a person only needs to know it will be tried again.
+        console.warn(
+          `The event log for client "${this.clientId}" changed while it was being saved (${err.message}). ` +
+            `If this keeps happening, another device or install may be using the same clientId (was .cache copied between machines?).`
+        );
+        throw new StorageError(
+          "changed",
+          "The file this device saves to was changed while it was being saved, so the save was skipped. Your change is kept on this device and will be retried shortly."
         );
       }
       throw err;

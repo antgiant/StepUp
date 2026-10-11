@@ -2,6 +2,7 @@ import {
   type StorageAccount,
   type LedgerEvent,
   HlcClock,
+  isStorageError,
   scholarshipNamesMatch,
   Ledger,
   createSubfolder,
@@ -1255,6 +1256,13 @@ function itemForm(purchaseId: string, next: ReturnType<typeof suggestNextItem>):
 /** The "Saving… / Saved" mark next to the purchase details. Updated in place so typing and focus are never disturbed. */
 const saveIndicator = (elId = "save-state") => `<span class="save-state" id="${elId}" role="status" aria-live="polite"></span>`;
 let saveStateTimer: ReturnType<typeof setTimeout> | undefined;
+/** What to tell the person when a save did not reach the storage provider (their change is already kept on this device). */
+function saveFailure(err: unknown): string {
+  // A conflict is not a connection problem, and its message already says what happens next.
+  if (isStorageError(err, "changed")) return err.message;
+  return `Could not reach ${storage.label} (${err instanceof Error ? err.message : err}). Your change is kept on this device.`;
+}
+
 function showSaveState(state: "saving" | "saved" | "local" | "error", detail = "", elId = "save-state"): void {
   const el = document.getElementById(elId);
   if (!el) return;
@@ -1305,7 +1313,7 @@ async function autosavePurchaseNow(form: HTMLFormElement, focusNext?: string): P
     showSaveState("saved");
   } catch (err) {
     // The edit is already kept on this device; it is sent again with the next save or refresh.
-    showSaveState(navigator.onLine ? "error" : "local", `Could not reach ${storage.label} (${err instanceof Error ? err.message : err}). Your change is kept on this device.`);
+    showSaveState(navigator.onLine ? "error" : "local", saveFailure(err));
   }
   if (draft) {
     // The purchase now exists, so the full screen (items, documentation) replaces the blank one. Keep the cursor where it was going.
@@ -1363,7 +1371,7 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
     scheduleMirror();
     showSaveState("saved", "", "item-save-state");
   } catch (err) {
-    showSaveState(navigator.onLine ? "error" : "local", `Could not reach ${storage.label} (${err instanceof Error ? err.message : err}). Your change is kept on this device.`, "item-save-state");
+    showSaveState(navigator.onLine ? "error" : "local", saveFailure(err), "item-save-state");
   }
   if (created) {
     // The new item now shows in the list above, so draw the screen again and put the cursor back where it was heading.
