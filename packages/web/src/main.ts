@@ -462,7 +462,7 @@ type View = { name: "queue" } | { name: "summary" } | { name: "reports" } | { na
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
-/** Spinner shown while we wait on OneDrive. Lives outside #app so re-rendering never removes it. */
+/** Spinner shown while we wait on the storage provider. Lives outside #app so re-rendering never removes it. */
 const busyEl = Object.assign(document.createElement("div"), { className: "busy", hidden: true, role: "status" });
 busyEl.setAttribute("aria-live", "polite");
 document.body.append(busyEl);
@@ -472,7 +472,7 @@ let fallbackLabel = "";
 let fallbackLocal = false;
 
 const DETAIL_KEY = "stepup.detailedRefresh";
-/** Off by default: the spinner just says OneDrive data is refreshing. On, it names each request. Remembered per browser. */
+/** Off by default: the spinner just says the storage provider's data is refreshing. On, it names each request. Remembered per browser. */
 let detailedRefresh = (() => {
   try {
     return localStorage.getItem(DETAIL_KEY) === "1";
@@ -495,11 +495,15 @@ observeActivity((ev) => {
   else active.set(ev.id, ev.label);
   paintBusy();
 });
+/** The summary shown instead of per-request detail, naming wherever the data actually lives. */
+function refreshingLabel(): string {
+  return storage.kind === "google" || storage.kind === "onedrive" ? `Refreshing ${storage.label} data` : "Refreshing…";
+}
 /** Shows what we are actually waiting on (the newest request), else the operation the person started. */
 function paintBusy(): void {
   const labels = [...active.values()];
   const detailed = labels[labels.length - 1] ?? fallbackLabel;
-  const main = detailedRefresh || (fallbackLocal && labels.length === 0) ? detailed : detailed ? "Refreshing OneDrive Data" : "";
+  const main = detailedRefresh || (fallbackLocal && labels.length === 0) ? detailed : detailed ? refreshingLabel() : "";
   if (!main || (pending === 0 && labels.length === 0)) {
     busyEl.hidden = true;
     document.body.removeAttribute("aria-busy");
