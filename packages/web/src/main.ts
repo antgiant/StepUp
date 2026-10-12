@@ -679,6 +679,22 @@ async function guarded(action: () => Promise<void>, label = `Waiting for ${stora
   render();
 }
 
+/**
+ * A confirmation modal (a native <dialog>, so focus is trapped and Escape cancels). Resolves true only when the person
+ * presses the confirm button; Cancel, Escape and a click on the backdrop all resolve false.
+ */
+function confirmModal(title: string, message: string, confirmLabel: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const dlg = document.createElement("dialog");
+    dlg.className = "confirm-modal";
+    dlg.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><p>${esc(message)}</p><div class="actions"><button value="cancel" autofocus>Cancel</button><button value="ok" class="danger">${esc(confirmLabel)}</button></div></form>`;
+    dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close("cancel"); });
+    dlg.addEventListener("close", () => { resolve(dlg.returnValue === "ok"); dlg.remove(); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
 const ARCHIVE_FOLDER = "Archive";
 
 /** `name`, or `name (2)`, `name (3)`... when the folder already holds that name. */
@@ -2330,7 +2346,11 @@ root.addEventListener("click", async (ev) => {
     await save();
   } else if (d["archiveDoc"]) {
     const linkedCount = Number(d["linked"] ?? 0);
-    if (!linkedCount || confirm(`${linkedCount} charge(s) on this file are linked as proof for purchases. Archive it anyway? The links stay, and you can restore the file later.`)) {
+    const name = ledger.state.documents[d["archiveDoc"]]?.filename ?? "this file";
+    const message = linkedCount
+      ? `${linkedCount} charge(s) on ${name} are linked as proof for purchases. The links stay, and you can restore the file later.`
+      : `${name} will be hidden and moved to the "${ARCHIVE_FOLDER}" folder. It is not deleted; you can restore it later.`;
+    if (await confirmModal("Archive this file?", message, "Archive")) {
       await setArchived(d["archiveDoc"], true);
     }
   } else if (d["unarchiveDoc"]) {
@@ -2345,7 +2365,7 @@ root.addEventListener("click", async (ev) => {
     preview = undefined;
     render();
   } else if (d["archive"]) {
-    if (confirm("Archive this purchase? It and its items are hidden from the list, plan and budget. You can restore it later.")) {
+    if (await confirmModal("Archive this purchase?", "It and its items are hidden from the list, plan and budget. You can restore it later.", "Archive")) {
       setPurchaseArchived(ledger, d["archive"]);
       view = { name: "queue" };
       remember(false);

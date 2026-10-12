@@ -186,3 +186,10 @@ html { overscroll-behavior-y: none; }
 .pivot-scroll th[scope="row"] { text-align: left; font-weight: 600; }
 .cell-link { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; width: auto; min-height: 0; text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
 .cell-link:hover, .cell-link:focus-visible { color: var(--accent); }
+
+/* Confirmation modal (archive and similar). */
+.confirm-modal { max-width: min(420px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--fg); box-shadow: var(--shadow); }
+.confirm-modal::backdrop { background: rgba(10, 14, 24, .55); }
+.confirm-modal h2 { margin: 0 0 8px; font-size: 1.1rem; }
+.confirm-modal p { margin: 0 0 16px; overflow-wrap: anywhere; }
+.confirm-modal .actions { display: flex; justify-content: flex-end; gap: 8px; }
