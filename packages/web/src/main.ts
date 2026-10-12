@@ -2074,7 +2074,8 @@ root.addEventListener("click", async (ev) => {
   if (d["pcell"] !== undefined) {
     // A pivot cell: the purchase list, narrowed to the items that make the cell up.
     drillInto((workspace?.legacy?.ledger.state ?? ledger.state), ctx(), Number(d["pcell"]), d["prow"], d["pcol"]);
-    legacyFilter = { search: "", status: "", child: "", vendor: "", sort: "" };
+    // The dropdowns take on the cell's student / vendor / status where the pivot has one; a value the list has no option for falls back to "All".
+    legacyFilter = { search: "", status: "", child: "", vendor: "", sort: "", ...getDrill()?.filters };
     go({ name: "queue" });
     root.querySelector(".drill")?.scrollIntoView({ block: "start" });
     return;

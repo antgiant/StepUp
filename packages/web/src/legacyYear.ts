@@ -474,8 +474,8 @@ function membersOf(entries: PivotEntry[], budget: boolean, row?: string, col?: s
 }
 
 /** What the purchase list is narrowed to after a pivot cell is clicked (see main.ts); undefined when showing everything. */
-let drill: { title: string; ids: Set<string> } | undefined;
-export const getDrill = (): { title: string; ids: Set<string> } | undefined => drill;
+let drill: { title: string; ids: Set<string>; filters: { status?: string; child?: string; vendor?: string } } | undefined;
+export const getDrill = (): { title: string; ids: Set<string>; filters: { status?: string; child?: string; vendor?: string } } | undefined => drill;
 export const clearDrill = (): void => { drill = undefined; };
 
 /** Narrows the purchase list to the items that make up one cell of pivot table `n`. */
@@ -484,7 +484,20 @@ export function drillInto(state: LedgerState, ctx: RulesContext, n: number, row?
   const pv = pivot(state, ctx, cfg);
   const budget = cfg.cols === BUDGET_COLS;
   const parts = [row !== undefined ? `${DIMENSIONS[cfg.rows]!.label} ${row}` : "", col !== undefined ? (budget ? col : `${DIMENSIONS[cfg.cols]!.label} ${col}`) : ""].filter(Boolean);
-  drill = { title: parts.join(" \u00b7 ") || "the whole table", ids: new Set(membersOf(pv.entries, budget, row, col)) };
+  // The cell's row / column labels that have a matching dropdown above the list are carried over to it, so the dropdowns say what the list is narrowed to.
+  const filters: { status?: string; child?: string; vendor?: string } = {};
+  const carry = (dim: string, label: string | undefined) => {
+    if (label === undefined || label === "(none)") return;
+    if (dim === "status") filters.status = label;
+    else if (dim === "vendor") filters.vendor = vendorKey(label);
+    else if (dim === "child") {
+      const named = Object.values(state.children).filter((c) => c.name === label);
+      if (named.length === 1) filters.child = named[0]!.id;
+    }
+  };
+  carry(cfg.rows, row);
+  if (!budget) carry(cfg.cols, col);
+  drill = { title: parts.join(" \u00b7 ") || "the whole table", ids: new Set(membersOf(pv.entries, budget, row, col)), filters };
 }
 
 function pivotPanel(n: number, state: LedgerState, ctx: RulesContext): string {
