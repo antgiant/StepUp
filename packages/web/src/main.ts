@@ -250,7 +250,7 @@ async function loadDocument(docId: string): Promise<{ url: string; kind: Preview
 
 /** A receipt being photographed page by page. Nothing leaves this device until it is saved. */
 /** `purchaseId`: the purchase the scan is for (the PDF becomes its receipt, or extra documentation if it has one). */
-let scan: { name: string; pages: ScanPage[]; purchaseId?: string; role?: DocRole } | undefined;
+let scan: { name: string; pages: ScanPage[]; purchaseId?: string; role?: DocRole; statement?: boolean } | undefined;
 type DocRole = "receipt" | "additional";
 
 function discardScan(): void {
@@ -1055,7 +1055,7 @@ function statementsView(): string {
   });
   return `<h2>Proof of payment</h2>
     <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</span></p>
-    ${workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label></p>` : `<p class="note">Connect a folder to add files.</p>`}
+    ${workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label><button id="start-scan" data-as-statement="1">Scan (several pages)</button></p>` : `<p class="note">Connect a folder to add files.</p>`}
     ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>Nothing marked as proof of payment yet.</p>"}`;
 }
 
@@ -2194,7 +2194,7 @@ root.addEventListener("click", async (ev) => {
   } else if (t.id === "start-scan") {
     const now = new Date();
     const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
-    scan = { name: `Scan ${stamp}.pdf`, pages: [], ...(d["forPurchase"] ? { purchaseId: d["forPurchase"], role: d["role"] === "additional" ? "additional" as const : "receipt" as const } : {}) };
+    scan = { name: `Scan ${stamp}.pdf`, pages: [], ...(d["asStatement"] ? { statement: true } : {}), ...(d["forPurchase"] ? { purchaseId: d["forPurchase"], role: d["role"] === "additional" ? "additional" as const : "receipt" as const } : {}) };
     render();
   } else if (t.id === "scan-cancel") {
     discardScan();
@@ -2383,7 +2383,11 @@ root.addEventListener("submit", async (ev) => {
         attachToPurchase(draft.purchaseId, result.documentId, draft.role);
         await ledger.flush();
       }
-      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s))${draft.purchaseId ? " on this purchase" : " to your unattached files"}.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
+      if (draft.statement && result.status === "uploaded" && result.documentId) {
+        ledger.set("document", result.documentId, { contentKind: "statement" }, { label: "document.markedStatement" });
+        await ledger.flush();
+      }
+      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s))${draft.purchaseId ? " on this purchase" : draft.statement ? " as proof of payment" : " to your unattached files"}.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
       discardScan();
       persist();
     }, "Building the PDF…");
