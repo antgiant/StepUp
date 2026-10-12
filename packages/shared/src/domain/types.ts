@@ -97,6 +97,8 @@ export interface DocumentRec {
   filename?: string;
   sha256?: string;
   contentKind?: ContentKind;
+  /** Put away by a person (added by mistake): hidden from the lists and never matched; reversible, and the file itself is left alone. */
+  archived?: boolean;
   sizeBytes?: number;
   pages?: number;
   derivedFrom?: string;

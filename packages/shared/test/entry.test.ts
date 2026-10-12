@@ -14,6 +14,7 @@ import {
   copyChildren,
   copyYearSetup,
   setPurchaseArchived,
+  setDocumentArchived,
   setReadyToSubmit,
   createPurchase,
   detachAdditional,
@@ -251,6 +252,15 @@ describe("file name hints", () => {
     expect(ledger.state.purchases[p]!.archived).toBe(true);
     setPurchaseArchived(ledger, p, false);
     expect(buildQueue(ledger.state, ctx).length).toBeGreaterThan(0);
+  });
+
+  it("archives an unattached file out of the queue, and restores it", () => {
+    ledger.set("document", "d", { filename: "Mistake.pdf", contentKind: "other" });
+    expect(buildQueue(ledger.state, ctx)).toHaveLength(1);
+    setDocumentArchived(ledger, "d");
+    expect(buildQueue(ledger.state, ctx)).toEqual([]);
+    setDocumentArchived(ledger, "d", false);
+    expect(buildQueue(ledger.state, ctx)).toHaveLength(1);
   });
 
   it("copies children from an earlier year once, keeping ids and not overwriting", () => {

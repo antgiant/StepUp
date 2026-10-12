@@ -19,6 +19,7 @@ const WORDS: Record<string, (n: number) => string> = {
   "purchase.created": (n) => `added ${n} purchase(s)`,
   "purchase.archived": (n) => `archived ${n} purchase(s)`,
   "purchase.edited": (n) => `edited ${n} purchase(s)`,
+  "document.archived": (n) => `put away ${n} file(s)`,
   "document.registered": (n) => `added ${n} file(s)`,
   "document.uploaded": (n) => `added ${n} file(s)`,
   "document.redacted": (n) => `made ${n} redacted copy(ies)`,

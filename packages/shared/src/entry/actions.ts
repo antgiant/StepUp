@@ -86,6 +86,12 @@ export function setReadyToSubmit(ledger: Ledger, itemId: string, ready = true): 
   ledger.set("item", itemId, { readyToSubmit: ready }, { label: ready ? "item.markedReady" : "item.unmarkedReady" });
 }
 
+/** Puts a file away (added by mistake) without deleting it from storage; `archived = false` brings it back. */
+export function setDocumentArchived(ledger: Ledger, documentId: string, archived = true): void {
+  if (!ledger.state.documents[documentId]) return;
+  ledger.set("document", documentId, { archived }, { label: archived ? "document.archived" : "document.unarchived" });
+}
+
 /** Hides a purchase and its items everywhere (queue, plan, budget) without losing anything; `archived = false` brings it back. */
 export function setPurchaseArchived(ledger: Ledger, purchaseId: string, archived = true): void {
   const label = archived ? "purchase.archived" : "purchase.unarchived";

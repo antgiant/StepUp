@@ -175,7 +175,7 @@ export function saveStatement(ledger: Ledger, docId: string, data: StatementData
 export function relinkAllStatements(ledger: Ledger, options: MatchOptions = {}): number {
   let n = 0;
   for (const doc of Object.values(ledger.state.documents)) {
-    if (!doc.statement) continue;
+    if (!doc.statement || doc.archived) continue;
     n += linkConfidentMatches(ledger, doc.id, matchStatement(ledger.state, doc.id, doc.statement, options));
   }
   return n;

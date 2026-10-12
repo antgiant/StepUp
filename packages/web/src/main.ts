@@ -66,6 +66,7 @@ import {
   openLedgerFolders,
   uploadReceipt,
   setPurchaseArchived,
+  setDocumentArchived,
   remainingToItemize,
   startPurchaseFromDocument,
   suggestNextItem,
@@ -961,10 +962,14 @@ function queueView(): string {
       return `<button data-attach="${esc(e.id)}" data-kind="${s.target.kind}" data-target="${esc(s.target.id)}" data-role="${s.role}">${s.role === "receipt" ? "Receipt of" : "Attach to"} ${esc(name)}</button>`;
     }).join("");
     const doc = state.documents[e.id];
-    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Proof of Payment</button>` : `<button data-statement="${esc(e.id)}">Open proof of payment</button>`}${sugg}`;
+    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Proof of Payment</button>` : `<button data-statement="${esc(e.id)}">Open proof of payment</button>`}${sugg}<button class="danger" data-archive-doc="${esc(e.id)}" title="Hide this file (added by mistake). You can restore it.">Archive</button>`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}</div><div class="actions wide">${actions}</div></li>`;
   });
+  const archivedDocs = Object.values(state.documents).filter((d) => d.archived && d.contentKind !== "statement").sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const archivedFiles = archivedDocs.length
+    ? `<details><summary>Archived files (${archivedDocs.length})</summary><ul class="queue">${archivedDocs.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
+    : "";
   const looseList = loose.length ? `<details><summary>Unattached files (${loose.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : "";
 
   // One row per purchase: receipts with no items, and purchases with items that cannot be filed yet.
@@ -976,9 +981,9 @@ function queueView(): string {
     byPurchase.set(e.purchaseId, row);
   }
   const allPurchases = purchaseListing();
-  if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${allPurchases}${looseList}${archivedList}`;
+  if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${allPurchases}${looseList}${archivedFiles}${archivedList}`;
   const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><button class="row-button" data-open="${esc(id)}"><span><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`);
-  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${allPurchases}${looseList}${archivedList}`;
+  return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${allPurchases}${looseList}${archivedFiles}${archivedList}`;
 }
 
 /** Every purchase with a search box and a status filter, the same as the Excel view's list (both narrow in place; see filterLegacyList). */
@@ -1044,19 +1049,23 @@ const purchaseLabel = (id: string) => {
 
 function statementsView(): string {
   const state = ledger.state;
-  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && !d.archived).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
   const linkedBy = (docId: string) => new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId));
   const rows = docs.map((d) => {
     const charges = d.statement?.transactions.filter((t) => t.kind === "purchase") ?? [];
     const linked = linkedBy(d.id);
     const summary = d.statement ? `${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
     return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${esc(summary)}${d.statement?.last4 ? ` &middot; card ending ${esc(d.statement.last4)}` : ""}</small></div>
-      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button></div></li>`;
+      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button><button class="danger" data-archive-doc="${esc(d.id)}" data-linked="${linked.size}" title="Hide this file (added by mistake). You can restore it.">Archive</button></div></li>`;
   });
+  const archivedStatements = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && d.archived);
+  const archivedList = archivedStatements.length
+    ? `<details><summary>Archived proof of payment (${archivedStatements.length})</summary><ul class="queue">${archivedStatements.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
+    : "";
   return `<h2>Proof of payment</h2>
     <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</span></p>
     ${workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label><button id="start-scan" data-as-statement="1">Scan (several pages)</button></p>` : `<p class="note">Connect a folder to add files.</p>`}
-    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>Nothing marked as proof of payment yet.</p>"}`;
+    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>Nothing marked as proof of payment yet.</p>"}${archivedList}`;
 }
 
 function statementReview(id: string): string {
@@ -2276,6 +2285,16 @@ root.addEventListener("click", async (ev) => {
     await save();
   } else if (d["unlink"]) {
     unlinkTransaction(ledger, d["unlink"], d["doc"]!, d["txn"]!);
+    await save();
+  } else if (d["archiveDoc"]) {
+    const linkedCount = Number(d["linked"] ?? 0);
+    if (!linkedCount || confirm(`${linkedCount} charge(s) on this file are linked as proof for purchases. Archive it anyway? The links stay, and you can restore the file later.`)) {
+      setDocumentArchived(ledger, d["archiveDoc"]);
+      status = "Archived. It is hidden but not deleted; find it under Archived files to restore it.";
+      await save();
+    }
+  } else if (d["unarchiveDoc"]) {
+    setDocumentArchived(ledger, d["unarchiveDoc"], false);
     await save();
   } else if (d["markStatement"]) {
     ledger.set("document", d["markStatement"], { contentKind: "statement" }, { label: "document.markedStatement" });
