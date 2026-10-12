@@ -1770,6 +1770,8 @@ document.addEventListener("pointerdown", (ev) => {
 root.addEventListener("click", (ev) => {
   const li = (ev.target as HTMLElement).closest<HTMLLIElement>(".combo-list li[data-value]");
   if (!li) return;
+  // The box sits inside a <label>, whose first labelable child is the clear "x": left alone, the label would click it and empty what was just picked.
+  ev.preventDefault();
   listTouch = false;
   pickRow(li);
 });
