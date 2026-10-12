@@ -176,8 +176,8 @@ html { overscroll-behavior-y: none; }
 .site-footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line); text-align: center; font-size: .85rem; color: var(--muted); }
 .site-footer a { color: var(--muted); }
 
-/* Summary pivot tables: two side by side when there is room, stacked on a phone. */
-.pivots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+/* Summary pivot tables: one under the other, each scrolling sideways on a phone if it is wide. */
+.pivots { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .pivot { min-width: 0; }
 .pivot-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 8px; }
 .pivot-controls label { display: flex; flex-direction: column; gap: 2px; font-size: .85em; color: var(--muted); }

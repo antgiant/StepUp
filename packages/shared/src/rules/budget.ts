@@ -15,6 +15,18 @@ export interface ChildBudget {
 const PENDING = new Set(["Submitted", "Re-Submitted"]);
 const APPROVED = new Set(["Approved", "Adjusted"]);
 
+export type BudgetStage = "paid" | "approved" | "pending" | "unfiled";
+
+/** Where an item sits against the award, and how many cents it counts for there. Denied (filed, not pending) items sit nowhere. */
+export function budgetStage(item: LedgerState["items"][string]): { stage: BudgetStage; cents: number } | undefined {
+  const status = item.stepUpStatus ?? (item.submissionId ? "Submitted" : "");
+  if (status === "Paid") return { stage: "paid", cents: item.paidCents ?? item.approvedCents ?? requestedCents(item) };
+  if (APPROVED.has(status)) return { stage: "approved", cents: item.approvedCents ?? requestedCents(item) };
+  if (PENDING.has(status)) return { stage: "pending", cents: requestedCents(item) };
+  if (!isFiled(item)) return { stage: "unfiled", cents: requestedCents(item) };
+  return undefined;
+}
+
 /** remaining = cap - paid - approved - pending(filed, awaiting decision). Denied and unfiled items do not count. */
 export function childBudget(state: LedgerState, childId: string): ChildBudget {
   const child = state.children[childId];
@@ -29,11 +41,8 @@ export function childBudget(state: LedgerState, childId: string): ChildBudget {
   };
   for (const item of Object.values(state.items)) {
     if (item.childId !== childId || item.archived) continue;
-    const status = item.stepUpStatus ?? (item.submissionId ? "Submitted" : "");
-    if (status === "Paid") budget.paidCents += item.paidCents ?? item.approvedCents ?? requestedCents(item);
-    else if (APPROVED.has(status)) budget.approvedCents += item.approvedCents ?? requestedCents(item);
-    else if (PENDING.has(status)) budget.pendingCents += requestedCents(item);
-    else if (!isFiled(item)) budget.unfiledCents += requestedCents(item);
+    const at = budgetStage(item);
+    if (at) budget[`${at.stage}Cents`] += at.cents;
   }
   budget.remainingCents = budget.capCents - budget.paidCents - budget.approvedCents - budget.pendingCents;
   return budget;

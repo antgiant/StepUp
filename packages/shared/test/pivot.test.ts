@@ -29,4 +29,30 @@ describe("summary pivot", () => {
     expect(r.cols).toEqual(["Total"]);
     expect(r.rows).toEqual(["Paid", "Pending"]);
   });
+  it("award mode lists every student with the award, money by stage and what is left", () => {
+    const st: any = {
+      children: { a: { id: "a", name: "Ann", scholarship: "FES-UA", capCents: 5000 }, b: { id: "b", name: "Bo", capCents: 0 } },
+      purchases: {},
+      items: {
+        1: { childId: "a", amountCents: 1000, stepUpStatus: "Paid", paidCents: 900 },
+        2: { childId: "a", amountCents: 500, stepUpStatus: "Approved" },
+        3: { childId: "a", amountCents: 200, stepUpStatus: "Submitted" },
+        4: { childId: "a", amountCents: 300 },
+        5: { childId: "a", amountCents: 700, stepUpStatus: "Denied", submissionId: "s" },
+      },
+    };
+    const r = pivot(st, ctx, { rows: "child", cols: "budget", value: "dollars" });
+    expect(r.cols).toEqual(["Award", "Paid", "Approved", "Pending", "Remaining", "Not yet filed"]);
+    expect(r.rows).toEqual(["Ann", "Bo"]);
+    const c = (row: string, col: string) => r.cell.get(`${row}\u0000${col}`)?.cents;
+    expect([c("Ann", "Award"), c("Ann", "Paid"), c("Ann", "Approved"), c("Ann", "Pending"), c("Ann", "Remaining"), c("Ann", "Not yet filed")]).toEqual([5000, 900, 500, 200, 3400, 300]);
+    expect(c("Bo", "Award")).toBeUndefined();
+    expect(c("Bo", "Paid")).toBe(0);
+    expect(r.colTotal.get("Award")?.cents).toBe(5000);
+  });
+  it("leaves the award empty when grouping by something an award does not belong to", () => {
+    const r = pivot(state, ctx, { rows: "vendor", cols: "budget", value: "dollars" });
+    expect(r.cell.get("Amazon\u0000Award")).toBeUndefined();
+    expect(r.cell.get("Amazon\u0000Paid")?.cents).toBe(1000);
+  });
 });

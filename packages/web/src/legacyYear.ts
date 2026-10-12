@@ -19,7 +19,9 @@ import {
   requestedCents,
   effectiveDate,
   writeReceiptChoices,
-  yearSummary,
+  budgetStage,
+  displayStatus,
+  evaluateItem,
   type DriveItemRef,
   type LedgerState,
   type LegacyYear,
@@ -304,27 +306,16 @@ export function legacyStatementsView(l: LegacyState): string {
     ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>The workbook lists no statement files.</p>"}`;
 }
 
+/** The Summary page's two pivot tables, for a year kept in Excel or in the app's own ledger alike. */
+export function pivotTables(state: LedgerState, ctx: RulesContext): string {
+  return `<p class="note">Two pivot tables you can reshape: pick what to group by, add a second grouping to spread it across columns, and choose what to total. Dollars are what was requested (item amount plus tax and shipping), and archived items are left out.</p>
+    <div class="pivots">${pivotPanel(0, state, ctx)}${pivotPanel(1, state, ctx)}</div>
+    <p class="row"><button data-pivot-reset>Reset both tables to the default views</button></p>`;
+}
+
 export function legacySummaryView(l: LegacyState, ctx: RulesContext): string {
-  const state = l.ledger.state;
-  const s = yearSummary(state, ctx);
-  const rows = s.children.map((b) => {
-    const c = state.children[b.childId]!;
-    const width = b.capCents > 0 ? Math.min(100, Math.round(((b.paidCents + b.approvedCents + b.pendingCents) / b.capCents) * 100)) : 0;
-    return `<tr><td><strong>${esc(c.name ?? c.id)}</strong><br><small>${esc(c.scholarship)}</small></td>
-      <td class="num">${b.capCents ? money(b.capCents) : "&ndash;"}<div class="bar" title="${width}% used"><span style="width:${width}%"></span></div></td>
-      <td class="num">${money(b.paidCents)}</td><td class="num">${money(b.approvedCents)}</td><td class="num">${money(b.pendingCents)}</td>
-      <td class="num ${b.capCents && b.remainingCents < 0 ? "warn" : "ok"}">${b.capCents ? money(b.remainingCents) : "&ndash;"}</td><td class="num">${money(b.unfiledCents)}</td></tr>`;
-  });
-  const counts = Object.entries(s.statusCounts).sort(([a], [b]) => a.localeCompare(b));
   return `<h2>Summary</h2>
-    <h3>Awards</h3>
-    ${rows.length ? `<table><thead><tr><th>Student</th><th>Award</th><th>Paid</th><th>Approved</th><th>Pending</th><th>Remaining</th><th>Not yet filed</th></tr></thead><tbody>${rows.join("")}</tbody></table>
-      <p class="note">Remaining = award &minus; paid &minus; approved &minus; pending. Awards come from the workbook's Summary sheet.</p>` : "<p>The workbook lists no students.</p>"}
-    <h3>Items by status</h3>
-    ${counts.length ? `<ul class="queue">${counts.map(([k, n]) => `<li><span>${esc(k)}</span><strong>${n}</strong></li>`).join("")}</ul>` : "<p>No items.</p>"}
-    <h3>Pivot tables</h3>
-    <p class="note">Pick what to group by and what to total. Add a second grouping to spread it across columns. Two tables sit side by side so you can compare. Everything is worked out from the workbook as it is right now; dollars are what was requested (item amount plus tax and shipping), and archived items are left out.</p>
-    <div class="pivots">${pivotPanel(0, l, ctx)}${pivotPanel(1, l, ctx)}</div>
+    ${pivotTables(l.ledger.state, ctx)}
     <p class="row"><button id="legacy-download" class="primary">Download as a spreadsheet</button> <small>The same tracking sheet, summary and document list the app keeps for its own years.</small></p>`;
 }
 
@@ -335,7 +326,11 @@ interface Dimension { label: string; of: (i: Item, p: Purchase | undefined, stat
 const DIMENSIONS: Record<string, Dimension> = {
   child: { label: "Student", of: (i, _p, st) => st.children[i.childId ?? ""]?.name ?? "" },
   vendor: { label: "Store / vendor", of: (_i, p) => (p?.vendor ?? "").trim() },
-  status: { label: "Status", of: (i) => statusOf(i) },
+  // Same wording the rest of the app uses, so an item the sheet gives no status reads "Unfiled (...)" rather than blank.
+  status: {
+    label: "Status",
+    of: (i, _p, st, ctx) => i.statusOverride ?? i.stepUpStatus ?? (i.submissionId ? "Submitted" : displayStatus(i, evaluateItem(st, i.id, ctx), ctx, Object.values(st.settings)[0]?.submissionDeadline)),
+  },
   category: { label: "Category (top level)", of: (i, _p, _s, ctx) => ((i.categoryId && ctx.category(i.categoryId)?.path[0]) || i.categoryPath?.[0]) ?? "" },
   categoryFull: { label: "Category (full path)", of: (i, _p, _s, ctx) => ((i.categoryId && ctx.category(i.categoryId)?.path.join(" - ")) || i.categoryPath?.join(" - ")) ?? "" },
   provider: { label: "Service provider", of: (i) => (i.serviceProvider ?? "").trim() },
@@ -343,11 +338,20 @@ const DIMENSIONS: Record<string, Dimension> = {
   scholarship: { label: "Scholarship", of: (i, _p, st) => st.children[i.childId ?? ""]?.scholarship ?? "" },
 };
 
+/**
+ * An "Across" choice that is not a grouping: the columns become the award and where its money stands (paid, approved,
+ * pending, what is left, and what is not yet filed). Always dollars, and the award is only known for rows that are
+ * students (or scholarships, which add their students' awards up).
+ */
+export const BUDGET_COLS = "budget";
+const BUDGET_HEADS = ["Award", "Paid", "Approved", "Pending", "Remaining", "Not yet filed"] as const;
+const STAGE_HEAD = { paid: "Paid", approved: "Approved", pending: "Pending", unfiled: "Not yet filed" } as const;
+
 export interface PivotConfig { rows: string; cols: string; value: "dollars" | "count" | "both" }
-const PIVOT_KEY = "stepup.pivots";
+const PIVOT_KEY = "stepup.pivots.2";
 const PIVOT_DEFAULTS: PivotConfig[] = [
-  { rows: "child", cols: "", value: "dollars" },
-  { rows: "status", cols: "", value: "count" },
+  { rows: "child", cols: BUDGET_COLS, value: "dollars" },
+  { rows: "status", cols: "", value: "dollars" },
 ];
 let pivots: PivotConfig[] | undefined;
 
@@ -355,9 +359,15 @@ function loadPivots(): PivotConfig[] {
   if (pivots) return pivots;
   let saved: unknown;
   try { saved = JSON.parse(localStorage.getItem(PIVOT_KEY) ?? "null"); } catch { /* storage blocked: defaults */ }
-  const ok = (c: unknown): c is PivotConfig => !!c && typeof c === "object" && (c as PivotConfig).rows in DIMENSIONS && ((c as PivotConfig).cols === "" || (c as PivotConfig).cols in DIMENSIONS) && ["dollars", "count", "both"].includes((c as PivotConfig).value);
+  const ok = (c: unknown): c is PivotConfig => !!c && typeof c === "object" && (c as PivotConfig).rows in DIMENSIONS && ((c as PivotConfig).cols === "" || (c as PivotConfig).cols === BUDGET_COLS || (c as PivotConfig).cols in DIMENSIONS) && ["dollars", "count", "both"].includes((c as PivotConfig).value);
   pivots = Array.isArray(saved) && saved.length === 2 && saved.every(ok) ? (saved as PivotConfig[]) : PIVOT_DEFAULTS.map((c) => ({ ...c }));
   return pivots;
+}
+
+/** Puts both pivot tables back to their default views and forgets any saved choice. */
+export function resetPivots(): void {
+  pivots = PIVOT_DEFAULTS.map((c) => ({ ...c }));
+  try { localStorage.removeItem(PIVOT_KEY); } catch { /* nothing saved to forget */ }
 }
 
 /** Applies one changed dropdown (`data-pivot="<table>:<rows|cols|value>"`); returns false if it was not a pivot control. */
@@ -368,7 +378,7 @@ export function setPivot(which: string, value: string): boolean {
   if (!cfg || !["rows", "cols", "value"].includes(field ?? "")) return false;
   (cfg as unknown as Record<string, string>)[field!] = value;
   if (!(cfg.rows in DIMENSIONS)) cfg.rows = "child";
-  if (cfg.cols && !(cfg.cols in DIMENSIONS)) cfg.cols = "";
+  if (cfg.cols && cfg.cols !== BUDGET_COLS && !(cfg.cols in DIMENSIONS)) cfg.cols = "";
   if (!["dollars", "count", "both"].includes(cfg.value)) cfg.value = "dollars";
   try { localStorage.setItem(PIVOT_KEY, JSON.stringify(all)); } catch { /* kept for this visit only */ }
   return true;
@@ -385,7 +395,8 @@ const addTo = (b: Bucket | undefined, cents: number): Bucket => {
 /** Pivots the year's (unarchived) items: row labels, column labels (just "Total" when no column grouping) and the cells. */
 export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): { rows: string[]; cols: string[]; cell: Map<string, Bucket>; rowTotal: Map<string, Bucket>; colTotal: Map<string, Bucket>; total: Bucket } {
   const rowDim = DIMENSIONS[cfg.rows]!;
-  const colDim = cfg.cols ? DIMENSIONS[cfg.cols] : undefined;
+  const budget = cfg.cols === BUDGET_COLS;
+  const colDim = cfg.cols && !budget ? DIMENSIONS[cfg.cols] : undefined;
   // Names that differ only in case ("Amazon" / "amazon") are one row; the first spelling seen is shown.
   const spelling = new Map<string, string>();
   const label = (raw: string) => {
@@ -398,10 +409,27 @@ export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): 
   const rowTotal = new Map<string, Bucket>();
   const colTotal = new Map<string, Bucket>();
   const total: Bucket = { count: 0, cents: 0 };
+  // Every student shows in an award table, even one with nothing filed yet; their award is what they have to spend.
+  const award = new Map<string, number>();
+  if (budget && (cfg.rows === "child" || cfg.rows === "scholarship")) {
+    for (const c of Object.values(state.children)) {
+      const r = label(rowDim.of({ childId: c.id } as Item, undefined, state, ctx));
+      rowTotal.set(r, rowTotal.get(r) ?? { count: 0, cents: 0 });
+      award.set(r, (award.get(r) ?? 0) + (c.capCents ?? 0));
+    }
+  }
   for (const i of Object.values(state.items)) {
     if (i.archived) continue;
     const p = state.purchases[i.purchaseId ?? ""];
     const r = label(rowDim.of(i, p, state, ctx));
+    if (budget) {
+      const at = budgetStage(i);
+      if (!at) continue;
+      const head = STAGE_HEAD[at.stage];
+      cell.set(`${r}\u0000${head}`, addTo(cell.get(`${r}\u0000${head}`), at.cents));
+      rowTotal.set(r, rowTotal.get(r) ?? { count: 0, cents: 0 });
+      continue;
+    }
     const c = colDim ? label(colDim.of(i, p, state, ctx)) : "Total";
     const cents = requestedCents(i);
     cell.set(`${r}\u0000${c}`, addTo(cell.get(`${r}\u0000${c}`), cents));
@@ -409,29 +437,74 @@ export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): 
     colTotal.set(c, addTo(colTotal.get(c), cents));
     addTo(total, cents);
   }
+  if (budget) {
+    const rows = [...rowTotal.keys()];
+    const at = (r: string, h: string) => cell.get(`${r}\u0000${h}`)?.cents ?? 0;
+    for (const r of rows) {
+      for (const h of ["Paid", "Approved", "Pending", "Not yet filed"]) cell.set(`${r}\u0000${h}`, { count: cell.get(`${r}\u0000${h}`)?.count ?? 0, cents: at(r, h) });
+      const cap = award.get(r) ?? 0;
+      // No award on file: the Award and Remaining cells stay empty rather than showing a made-up zero.
+      if (cap > 0) {
+        cell.set(`${r}\u0000Award`, { count: 0, cents: cap });
+        cell.set(`${r}\u0000Remaining`, { count: 0, cents: cap - at(r, "Paid") - at(r, "Approved") - at(r, "Pending") });
+      }
+    }
+    for (const h of BUDGET_HEADS) {
+      const got = rows.map((r) => cell.get(`${r}\u0000${h}`)).filter((b): b is Bucket => Boolean(b));
+      if (got.length) colTotal.set(h, { count: 0, cents: got.reduce((n, b) => n + b.cents, 0) });
+    }
+  }
   const sorted = (m: Map<string, Bucket>) => [...m.keys()].sort((a, b) => (a === "(none)" ? 1 : b === "(none)" ? -1 : a.localeCompare(b)));
-  return { rows: sorted(rowTotal), cols: colDim ? sorted(colTotal) : ["Total"], cell, rowTotal, colTotal, total };
+  return { rows: sorted(rowTotal), cols: budget ? [...BUDGET_HEADS] : colDim ? sorted(colTotal) : ["Total"], cell, rowTotal, colTotal, total };
 }
 
-function pivotPanel(n: number, l: LegacyState, ctx: RulesContext): string {
+function pivotPanel(n: number, state: LedgerState, ctx: RulesContext): string {
   const cfg = loadPivots()[n]!;
-  const pv = pivot(l.ledger.state, ctx, cfg);
+  const pv = pivot(state, ctx, cfg);
+  const budget = cfg.cols === BUDGET_COLS;
   const show = (b: Bucket | undefined): string => {
     if (!b) return "&ndash;";
     return cfg.value === "count" ? String(b.count) : cfg.value === "dollars" ? money(b.cents) : `${b.count} &middot; ${money(b.cents)}`;
   };
   const opts = (current: string, entries: Array<[string, string]>) => entries.map(([k, v]) => `<option value="${esc(k)}"${k === current ? " selected" : ""}>${esc(v)}</option>`).join("");
   const dims = Object.entries(DIMENSIONS).map(([k, d]) => [k, d.label] as [string, string]);
-  const spread = Boolean(cfg.cols);
-  const body = pv.rows.map((r) => `<tr><th scope="row">${esc(r)}</th>${spread ? pv.cols.map((c) => `<td class="num">${show(pv.cell.get(`${r}\u0000${c}`))}</td>`).join("") : ""}<td class="num"><strong>${show(pv.rowTotal.get(r))}</strong></td></tr>`).join("");
-  const foot = `<tr><th scope="row">Total</th>${spread ? pv.cols.map((c) => `<td class="num"><strong>${show(pv.colTotal.get(c))}</strong></td>`).join("") : ""}<td class="num"><strong>${show(pv.total)}</strong></td></tr>`;
+  const rowLabel = DIMENSIONS[cfg.rows]!.label;
+  const scholarship = new Map(Object.values(state.children).map((c) => [(c.name ?? "").toLowerCase(), c.scholarship] as const));
+  const heading = budget ? "Awards" : cfg.cols ? `${rowLabel} by ${DIMENSIONS[cfg.cols]!.label.toLowerCase()}` : `${rowLabel}`;
+  const rowHead = (r: string) => `${cfg.rows === "child" ? `<strong>${esc(r)}</strong>${scholarship.get(r.toLowerCase()) ? `<br><small>${esc(scholarship.get(r.toLowerCase()))}</small>` : ""}` : esc(r)}`;
+
+  let head: string;
+  let body: string;
+  let foot: string;
+  if (budget) {
+    const cents = (r: string, h: string) => pv.cell.get(`${r}\u0000${h}`)?.cents ?? 0;
+    head = `<th>${esc(rowLabel)}</th>${pv.cols.map((c) => `<th class="num">${c}</th>`).join("")}`;
+    body = pv.rows.map((r) => {
+      const award = pv.cell.get(`${r}\u0000Award`);
+      // How much of the award is spoken for, as a bar under it.
+      const used = award && award.cents > 0 ? Math.min(100, Math.round(((cents(r, "Paid") + cents(r, "Approved") + cents(r, "Pending")) / award.cents) * 100)) : 0;
+      const left = pv.cell.get(`${r}\u0000Remaining`);
+      return `<tr><th scope="row">${rowHead(r)}</th>
+        <td class="num">${show(award)}${award ? `<div class="bar" title="${used}% used"><span style="width:${used}%"></span></div>` : ""}</td>
+        ${["Paid", "Approved", "Pending"].map((h) => `<td class="num">${show(pv.cell.get(`${r}\u0000${h}`))}</td>`).join("")}
+        <td class="num ${left && left.cents < 0 ? "warn" : "ok"}">${show(left)}</td><td class="num">${show(pv.cell.get(`${r}\u0000Not yet filed`))}</td></tr>`;
+    }).join("");
+    foot = `<tr><th scope="row">Total</th>${pv.cols.map((c) => `<td class="num"><strong>${show(pv.colTotal.get(c))}</strong></td>`).join("")}</tr>`;
+  } else {
+    const spread = Boolean(cfg.cols);
+    head = `<th>${esc(rowLabel)}</th>${spread ? pv.cols.map((c) => `<th class="num">${esc(c)}</th>`).join("") : ""}<th class="num">Total</th>`;
+    body = pv.rows.map((r) => `<tr><th scope="row">${rowHead(r)}</th>${spread ? pv.cols.map((c) => `<td class="num">${show(pv.cell.get(`${r}\u0000${c}`))}</td>`).join("") : ""}<td class="num"><strong>${show(pv.rowTotal.get(r))}</strong></td></tr>`).join("");
+    foot = `<tr><th scope="row">Total</th>${spread ? pv.cols.map((c) => `<td class="num"><strong>${show(pv.colTotal.get(c))}</strong></td>`).join("") : ""}<td class="num"><strong>${show(pv.total)}</strong></td></tr>`;
+  }
   return `<section class="pivot">
+    <h3>${esc(heading)}</h3>
     <div class="pivot-controls">
       <label>Group by<select data-pivot="${n}:rows">${opts(cfg.rows, dims)}</select></label>
-      <label>Across<select data-pivot="${n}:cols">${opts(cfg.cols, [["", "(nothing)"], ...dims])}</select></label>
-      <label>Show<select data-pivot="${n}:value">${opts(cfg.value, [["dollars", "Dollars"], ["count", "Item count"], ["both", "Count and dollars"]])}</select></label>
+      <label>Across<select data-pivot="${n}:cols">${opts(cfg.cols, [["", "(nothing)"], [BUDGET_COLS, "Award, paid, approved, pending, remaining"], ...dims])}</select></label>
+      ${budget ? "" : `<label>Show<select data-pivot="${n}:value">${opts(cfg.value, [["dollars", "Dollars"], ["count", "Item count"], ["both", "Count and dollars"]])}</select></label>`}
     </div>
-    ${pv.rows.length ? `<div class="pivot-scroll"><table><thead><tr><th>${esc(DIMENSIONS[cfg.rows]!.label)}</th>${spread ? pv.cols.map((c) => `<th class="num">${esc(c)}</th>`).join("") : ""}<th class="num">Total</th></tr></thead><tbody>${body}${foot}</tbody></table></div>` : "<p>No items.</p>"}
+    ${pv.rows.length ? `<div class="pivot-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}${foot}</tbody></table></div>` : "<p>No items.</p>"}
+    ${budget ? `<p class="note">Remaining = award &minus; paid &minus; approved &minus; pending. "Not yet filed" is informational and not counted against the award. Awards are only known when grouping by student or scholarship.</p>` : ""}
   </section>`;
 }
 

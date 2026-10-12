@@ -86,7 +86,7 @@ import { rememberStorage, switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs, setPivot } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -1006,29 +1006,20 @@ function purchaseListing(): string {
 function summaryView(): string {
   const state = ledger.state;
   const s = yearSummary(state, ctx());
-  const money = (c: number) => formatCents(c);
   const d = s.deadline;
   const banner = d
     ? `<p class="${d.daysLeft < 0 ? "warn" : d.daysLeft <= 30 ? "warn" : "note"} banner">${d.daysLeft < 0 ? `The submission deadline passed ${-d.daysLeft} day(s) ago (${esc(d.date)}).` : `${d.daysLeft} day(s) until the submission deadline (${esc(d.date)}).`}</p>`
     : `<p class="note banner">No submission deadline set.</p>`;
   const deadlineForm = `<form id="deadline-form" class="row"><label>Submission deadline<input name="deadline" type="date" value="${esc(d?.date)}"></label><button>Save deadline</button></form>`;
-  const rows = s.children.map((b) => {
+  // Awards are typed in here; the pivot tables below show them against what has been spent.
+  const awards = s.children.map((b) => {
     const c = state.children[b.childId]!;
-    const width = b.capCents > 0 ? Math.min(100, Math.round(((b.paidCents + b.approvedCents + b.pendingCents) / b.capCents) * 100)) : 0;
-    return `<tr><td><strong>${esc(c.name ?? c.id)}</strong><br><small>${esc(c.scholarship)}</small></td>
-      <td><form class="inline" data-cap="${esc(c.id)}"><input name="cap" inputmode="decimal" aria-label="Award for ${esc(c.name)}" value="${b.capCents ? (b.capCents / 100).toFixed(2) : ""}" placeholder="0.00"><button>Save</button></form>
-        <div class="bar" title="${width}% used"><span style="width:${width}%"></span></div></td>
-      <td class="num">${money(b.paidCents)}</td><td class="num">${money(b.approvedCents)}</td><td class="num">${money(b.pendingCents)}</td>
-      <td class="num ${b.remainingCents < 0 ? "warn" : "ok"}">${money(b.remainingCents)}</td><td class="num">${money(b.unfiledCents)}</td></tr>`;
+    return `<form class="inline" data-cap="${esc(c.id)}"><label>${esc(c.name ?? c.id)}<input name="cap" inputmode="decimal" value="${b.capCents ? (b.capCents / 100).toFixed(2) : ""}" placeholder="0.00"></label><button>Save</button></form>`;
   });
-  const counts = Object.entries(s.statusCounts).sort(([a], [b]) => a.localeCompare(b));
   return `<h2>Summary</h2>${banner}${deadlineForm}
-    <h3>Awards</h3>
-    ${rows.length ? `<table><thead><tr><th>Student</th><th>Award</th><th>Paid</th><th>Approved</th><th>Pending</th><th>Remaining</th><th>Not yet filed</th></tr></thead><tbody>${rows.join("")}</tbody></table>
-      <p class="note">Remaining = award &minus; paid &minus; approved &minus; pending. "Not yet filed" is informational and not counted against the award.</p>` : `<p>Add a student on the list page first.</p>`}
+    ${awards.length ? `<h3>Award for each student</h3>${awards.join("")}` : `<p>Add a student on the list page first.</p>`}
     ${Object.keys(filingNow()).length ? `<p class="banner">${Object.keys(filingNow()).length} item(s) are being filed with StepUp right now (see the list page).</p>` : ""}
-    <h3>Items by status</h3>
-    ${counts.length ? `<ul class="queue">${counts.map(([k, n]) => `<li><span>${esc(k)}</span><strong>${n}</strong></li>`).join("")}</ul>` : "<p>No items yet.</p>"}`;
+    ${pivotTables(state, ctx())}`;
 }
 
 /** The purchase's own name if it has one, else "Vendor, date", else the receipt's file name. */
@@ -1997,11 +1988,12 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
+    } else if (d["go"] || d["pivotReset"] !== undefined || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
   }
+  if (d["pivotReset"] !== undefined) { resetPivots(); render(); return; }
   if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
