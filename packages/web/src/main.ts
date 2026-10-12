@@ -86,7 +86,7 @@ import { rememberStorage, switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacyReportsView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -459,7 +459,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
   }, `Uploading to ${storage.label}…`);
 }
 
-type View = { name: "queue" } | { name: "summary" } | { name: "reports" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
+type View = { name: "queue" } | { name: "summary" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
 let view: View = { name: "queue" };
 const root = document.getElementById("app")!;
 
@@ -1738,6 +1738,8 @@ root.addEventListener("focusout", (ev) => {
 });
 root.addEventListener("change", (ev) => {
   const t = ev.target as HTMLInputElement;
+  const pivotControl = t.dataset?.["pivot"];
+  if (pivotControl !== undefined && setPivot(pivotControl, t.value)) return render();
   if (t.type === "date" || t.tagName === "SELECT") autosaveFor(t);
 });
 root.addEventListener("focusin", (ev) => {
@@ -1920,12 +1922,12 @@ function render(): void {
     // A year Excel still owns: its own read-only screens, and none of the editing ones (see legacyYear.ts).
     const v = view.name === "statement" ? "statements" : view.name;
     const read = ctx();
-    const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : v === "reports" ? legacyReportsView(l, read) : legacyQueueView(l);
+    const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : legacyQueueView(l);
     root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page + footer();
     filterLegacyList(true);
     return;
   }
-  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" || view.name === "reports" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
+  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body + footer();
   filterLegacyList(true);
   scheduleClaimPoll();
@@ -2000,7 +2002,7 @@ root.addEventListener("click", async (ev) => {
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
   }
-  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "reports" ? { name: "reports" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
+  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
     if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");

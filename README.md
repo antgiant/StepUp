@@ -132,7 +132,7 @@ You can type `skip` at the start of any group to move to the next one without pr
 A year folder that has its tracking workbook but no `_ledger/` shows in the web app's year list as **(Excel, read-only)**.
 Opening it reads the workbook and the receipts folder through OneDrive each time (nothing is stored as truth), so Excel stays
 the authority and edits made there appear on the next open or **Refresh from Excel**. It has its own read-only
-Purchases, Proof of payment, Summary and Reports pages, and a spreadsheet download built on your device; nothing in it can be
+Purchases, Proof of payment and Summary pages (the Summary has two pivot tables to group and compare by student, store, status and more), and a spreadsheet download built on your device; nothing in it can be
 changed and nothing is written to OneDrive except one small file, `Step Up Helper - receipt choices.json`, in the year folder.
 A year folder may hold several copies of the workbook; the most recently edited one is used (the banner says which). Three
 layouts are understood: the 2025-2026 sheet (files named in "Documentation File" columns), the 2024-2025 sheet, and the
