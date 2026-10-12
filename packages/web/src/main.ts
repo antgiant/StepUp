@@ -86,7 +86,7 @@ import { rememberStorage, switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { UNCLEAR_FILTER, chooseReceipt, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -994,7 +994,7 @@ function purchaseListing(): string {
     const total = purchaseTotalCents(state, r.p);
     const vendor = r.p.vendor ?? r.items.map((i) => i.vendor).find(Boolean) ?? "";
     const text = `${purchaseName(r.p)} ${vendor} ${r.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
-    const attrs = listRowAttrs({ order: n, text, statuses: [...new Set(r.labels)], childIds: [...new Set(r.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name: purchaseName(r.p), date: r.date, totalCents: total ?? 0 });
+    const attrs = listRowAttrs({ order: n, itemIds: r.items.map((i) => i.id), text, statuses: [...new Set(r.labels)], childIds: [...new Set(r.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name: purchaseName(r.p), date: r.date, totalCents: total ?? 0 });
     return `<li class="q" ${attrs}><button class="row-button" data-open="${esc(r.p.id)}"><span><strong>${esc(purchaseName(r.p))}</strong><br><small>${esc(r.date)}${r.date ? " · " : ""}${total !== undefined ? formatCents(total) + " · " : ""}${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   });
   const vendors = rows.map((r) => r.p.vendor ?? r.items.map((i) => i.vendor).find(Boolean) ?? "");
@@ -1645,6 +1645,8 @@ function filterLegacyList(restore = false): void {
     const d = li.dataset;
     const f = { status, child, vendor, ...over };
     const has = f.status === UNCLEAR_FILTER ? d["unclear"] !== undefined : (d["statuses"] ?? "").split("|").includes(f.status);
+    const behind = getDrill()?.ids;
+    if (behind && !(d["items"] ?? "").split("|").some((id) => behind.has(id))) return false;
     return q.every((w) => (d["text"] ?? "").includes(w)) && (!f.status || has) && (!f.child || (d["children"] ?? "").split("|").includes(f.child)) && (!f.vendor || d["vendor"] === f.vendor);
   };
   let shown = 0;
@@ -1988,12 +1990,21 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["pivotReset"] !== undefined || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
+    } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
   }
   if (d["pivotReset"] !== undefined) { resetPivots(); render(); return; }
+  if (d["drillClear"] !== undefined) { clearDrill(); render(); return; }
+  if (d["pcell"] !== undefined) {
+    // A pivot cell: the purchase list, narrowed to the items that make the cell up.
+    drillInto((workspace?.legacy?.ledger.state ?? ledger.state), ctx(), Number(d["pcell"]), d["prow"], d["pcol"]);
+    legacyFilter = { search: "", status: "", child: "", vendor: "", sort: "" };
+    go({ name: "queue" });
+    root.querySelector(".drill")?.scrollIntoView({ block: "start" });
+    return;
+  }
   if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
@@ -2402,6 +2413,7 @@ root.addEventListener("change", async (ev) => {
   if (workspace?.legacy && input.id !== "year-pick") return;
   if (input.id === "year-pick" && workspace) {
     const pointer = workspace.pointer;
+    clearDrill();
     await guarded(() => switchYear(pointer, input.value), `Opening ${input.value}…`);
     return;
   }

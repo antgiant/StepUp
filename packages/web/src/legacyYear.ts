@@ -178,11 +178,11 @@ export function clearableSearch(id: string, placeholder: string): string {
 }
 
 /** What a purchase list row needs so main.ts can filter and sort it in place (see filterLegacyList). */
-export interface ListRowFacts { order: number; text: string; statuses: string[]; childIds: string[]; vendor: string; name: string; date: string; totalCents: number }
+export interface ListRowFacts { order: number; itemIds?: string[]; text: string; statuses: string[]; childIds: string[]; vendor: string; name: string; date: string; totalCents: number }
 export const vendorKey = (v: string | undefined): string => (v ?? "").trim().toLowerCase();
 
 export function listRowAttrs(f: ListRowFacts): string {
-  return `data-order="${f.order}" data-text="${esc(f.text)}" data-statuses="${esc(f.statuses.join("|"))}" data-children="${esc(f.childIds.join("|"))}" data-vendor="${esc(vendorKey(f.vendor))}" data-name="${esc(f.name.toLowerCase())}" data-date="${esc(f.date)}" data-total="${f.totalCents}"`;
+  return `data-order="${f.order}" data-items="${esc((f.itemIds ?? []).join("|"))}" data-text="${esc(f.text)}" data-statuses="${esc(f.statuses.join("|"))}" data-children="${esc(f.childIds.join("|"))}" data-vendor="${esc(vendorKey(f.vendor))}" data-name="${esc(f.name.toLowerCase())}" data-date="${esc(f.date)}" data-total="${f.totalCents}"`;
 }
 
 /** The search box and dropdowns above a purchase list: status, student (only when there are several), vendor, and sort. */
@@ -191,7 +191,10 @@ export function listControls(o: { statuses: string[]; unclearCount?: number; chi
   for (const v of o.vendors) if (v.trim() && !vendors.has(vendorKey(v))) vendors.set(vendorKey(v), v.trim());
   const opt = (v: string, label: string) => `<option value="${esc(v)}">${esc(label)}</option>`;
   const sel = (id: string, label: string, first: string, options: string) => `<select id="${id}" aria-label="${label}" style="width:auto"><option value="">${first}</option>${options}</select>`;
-  return `<p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}</p>
+  const behind = drill
+    ? `<p class="banner drill">Showing the purchases holding the ${drill.ids.size} item(s) behind <strong>${esc(drill.title)}</strong> in a pivot table. <button data-drill-clear>Show all purchases</button></p>`
+    : "";
+  return `${behind}<p class="row">${clearableSearch("legacy-search", "Search purchases, items, students")}</p>
     <p class="row">${sel("legacy-status", "Status", "All statuses", `${o.unclearCount ? `<option value="${UNCLEAR_FILTER}">Receipt unclear (${o.unclearCount})</option>` : ""}${o.statuses.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("")}`)}${o.children.length > 1 ? sel("legacy-child", "Student", "All students", o.children.map((c) => opt(c.id, c.name ?? c.id)).join("")) : ""}${vendors.size ? sel("legacy-vendor", "Vendor", "All vendors", [...vendors.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([k, v]) => opt(k, v)).join("")) : ""}<select id="legacy-sort" aria-label="Sort by" style="width:auto"><option value="">Sort: newest first</option><option value="oldest">Sort: oldest first</option><option value="name">Sort: name A–Z</option><option value="vendor">Sort: vendor A–Z</option><option value="high">Sort: amount, high to low</option><option value="low">Sort: amount, low to high</option></select></p>`;
 }
 
@@ -225,7 +228,7 @@ export function legacyQueueView(l: LegacyState): string {
     const note = unclear.has(x.p.id) ? ` <span class="badge warn">Receipt unclear</span>` : "";
     const text = `${name} ${x.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
     const vendor = x.p.vendor ?? x.items.map((i) => i.vendor).find(Boolean) ?? "";
-    const attrs = listRowAttrs({ order: orderOf.get(x.p.id) ?? 0, text: `${text} ${vendor}`.toLowerCase(), statuses: x.statuses, childIds: [...new Set(x.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name, date: x.date, totalCents: purchaseTotal(state, x.p.id) });
+    const attrs = listRowAttrs({ order: orderOf.get(x.p.id) ?? 0, itemIds: x.items.map((i) => i.id), text: `${text} ${vendor}`.toLowerCase(), statuses: x.statuses, childIds: [...new Set(x.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name, date: x.date, totalCents: purchaseTotal(state, x.p.id) });
     return `<li class="q" ${attrs}${unclear.has(x.p.id) ? " data-unclear" : ""}><button class="row-button" data-open="${esc(x.p.id)}"><span><strong>${esc(name)}</strong>${note}<br><small>${esc(x.date)}${x.date ? " · " : ""}${money(purchaseTotal(state, x.p.id))} · ${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   };
   const unclearRows = purchases.filter((x) => unclear.has(x.p.id));
@@ -392,8 +395,11 @@ const addTo = (b: Bucket | undefined, cents: number): Bucket => {
   return x;
 };
 
+/** One item as the pivot placed it: its row label and column label (a stage heading in award mode). */
+interface PivotEntry { id: string; r: string; c: string }
+
 /** Pivots the year's (unarchived) items: row labels, column labels (just "Total" when no column grouping) and the cells. */
-export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): { rows: string[]; cols: string[]; cell: Map<string, Bucket>; rowTotal: Map<string, Bucket>; colTotal: Map<string, Bucket>; total: Bucket } {
+export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): { rows: string[]; cols: string[]; cell: Map<string, Bucket>; rowTotal: Map<string, Bucket>; colTotal: Map<string, Bucket>; total: Bucket; entries: PivotEntry[] } {
   const rowDim = DIMENSIONS[cfg.rows]!;
   const budget = cfg.cols === BUDGET_COLS;
   const colDim = cfg.cols && !budget ? DIMENSIONS[cfg.cols] : undefined;
@@ -418,7 +424,8 @@ export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): 
       award.set(r, (award.get(r) ?? 0) + (c.capCents ?? 0));
     }
   }
-  for (const i of Object.values(state.items)) {
+  const entries: PivotEntry[] = [];
+  for (const [id, i] of Object.entries(state.items)) {
     if (i.archived) continue;
     const p = state.purchases[i.purchaseId ?? ""];
     const r = label(rowDim.of(i, p, state, ctx));
@@ -426,12 +433,14 @@ export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): 
       const at = budgetStage(i);
       if (!at) continue;
       const head = STAGE_HEAD[at.stage];
+      entries.push({ id, r, c: head });
       cell.set(`${r}\u0000${head}`, addTo(cell.get(`${r}\u0000${head}`), at.cents));
       rowTotal.set(r, rowTotal.get(r) ?? { count: 0, cents: 0 });
       continue;
     }
     const c = colDim ? label(colDim.of(i, p, state, ctx)) : "Total";
     const cents = requestedCents(i);
+    entries.push({ id, r, c });
     cell.set(`${r}\u0000${c}`, addTo(cell.get(`${r}\u0000${c}`), cents));
     rowTotal.set(r, addTo(rowTotal.get(r), cents));
     colTotal.set(c, addTo(colTotal.get(c), cents));
@@ -455,7 +464,27 @@ export function pivot(state: LedgerState, ctx: RulesContext, cfg: PivotConfig): 
     }
   }
   const sorted = (m: Map<string, Bucket>) => [...m.keys()].sort((a, b) => (a === "(none)" ? 1 : b === "(none)" ? -1 : a.localeCompare(b)));
-  return { rows: sorted(rowTotal), cols: budget ? [...BUDGET_HEADS] : colDim ? sorted(colTotal) : ["Total"], cell, rowTotal, colTotal, total };
+  return { rows: sorted(rowTotal), cols: budget ? [...BUDGET_HEADS] : colDim ? sorted(colTotal) : ["Total"], cell, rowTotal, colTotal, total, entries };
+}
+
+/** The items behind a cell: `row` / `col` left out mean the total row / total column. In award mode the award and what is left stand on the money that is spoken for. */
+function membersOf(entries: PivotEntry[], budget: boolean, row?: string, col?: string): string[] {
+  const cols = budget && (col === "Award" || col === "Remaining") ? ["Paid", "Approved", "Pending"] : col === undefined ? undefined : [col];
+  return entries.filter((e) => (row === undefined || e.r === row) && (!cols || cols.includes(e.c))).map((e) => e.id);
+}
+
+/** What the purchase list is narrowed to after a pivot cell is clicked (see main.ts); undefined when showing everything. */
+let drill: { title: string; ids: Set<string> } | undefined;
+export const getDrill = (): { title: string; ids: Set<string> } | undefined => drill;
+export const clearDrill = (): void => { drill = undefined; };
+
+/** Narrows the purchase list to the items that make up one cell of pivot table `n`. */
+export function drillInto(state: LedgerState, ctx: RulesContext, n: number, row?: string, col?: string): void {
+  const cfg = loadPivots()[n]!;
+  const pv = pivot(state, ctx, cfg);
+  const budget = cfg.cols === BUDGET_COLS;
+  const parts = [row !== undefined ? `${DIMENSIONS[cfg.rows]!.label} ${row}` : "", col !== undefined ? (budget ? col : `${DIMENSIONS[cfg.cols]!.label} ${col}`) : ""].filter(Boolean);
+  drill = { title: parts.join(" \u00b7 ") || "the whole table", ids: new Set(membersOf(pv.entries, budget, row, col)) };
 }
 
 function pivotPanel(n: number, state: LedgerState, ctx: RulesContext): string {
@@ -468,6 +497,9 @@ function pivotPanel(n: number, state: LedgerState, ctx: RulesContext): string {
   };
   const opts = (current: string, entries: Array<[string, string]>) => entries.map(([k, v]) => `<option value="${esc(k)}"${k === current ? " selected" : ""}>${esc(v)}</option>`).join("");
   const dims = Object.entries(DIMENSIONS).map(([k, d]) => [k, d.label] as [string, string]);
+  /** A cell's figure as a button into the list of items behind it; plain text when nothing is behind it. */
+  const link = (text: string, row?: string, col?: string): string =>
+    membersOf(pv.entries, budget, row, col).length ? `<button class="cell-link" data-pcell="${n}"${row !== undefined ? ` data-prow="${esc(row)}"` : ""}${col !== undefined ? ` data-pcol="${esc(col)}"` : ""}>${text}</button>` : text;
   const rowLabel = DIMENSIONS[cfg.rows]!.label;
   const scholarship = new Map(Object.values(state.children).map((c) => [(c.name ?? "").toLowerCase(), c.scholarship] as const));
   const heading = budget ? "Awards" : cfg.cols ? `${rowLabel} by ${DIMENSIONS[cfg.cols]!.label.toLowerCase()}` : `${rowLabel}`;
@@ -485,16 +517,16 @@ function pivotPanel(n: number, state: LedgerState, ctx: RulesContext): string {
       const used = award && award.cents > 0 ? Math.min(100, Math.round(((cents(r, "Paid") + cents(r, "Approved") + cents(r, "Pending")) / award.cents) * 100)) : 0;
       const left = pv.cell.get(`${r}\u0000Remaining`);
       return `<tr><th scope="row">${rowHead(r)}</th>
-        <td class="num">${show(award)}${award ? `<div class="bar" title="${used}% used"><span style="width:${used}%"></span></div>` : ""}</td>
-        ${["Paid", "Approved", "Pending"].map((h) => `<td class="num">${show(pv.cell.get(`${r}\u0000${h}`))}</td>`).join("")}
-        <td class="num ${left && left.cents < 0 ? "warn" : "ok"}">${show(left)}</td><td class="num">${show(pv.cell.get(`${r}\u0000Not yet filed`))}</td></tr>`;
+        <td class="num">${link(show(award), r, "Award")}${award ? `<div class="bar" title="${used}% used"><span style="width:${used}%"></span></div>` : ""}</td>
+        ${["Paid", "Approved", "Pending"].map((h) => `<td class="num">${link(show(pv.cell.get(`${r}\u0000${h}`)), r, h)}</td>`).join("")}
+        <td class="num ${left && left.cents < 0 ? "warn" : "ok"}">${link(show(left), r, "Remaining")}</td><td class="num">${link(show(pv.cell.get(`${r}\u0000Not yet filed`)), r, "Not yet filed")}</td></tr>`;
     }).join("");
-    foot = `<tr><th scope="row">Total</th>${pv.cols.map((c) => `<td class="num"><strong>${show(pv.colTotal.get(c))}</strong></td>`).join("")}</tr>`;
+    foot = `<tr><th scope="row">Total</th>${pv.cols.map((c) => `<td class="num">${link(`<strong>${show(pv.colTotal.get(c))}</strong>`, undefined, c)}</td>`).join("")}</tr>`;
   } else {
     const spread = Boolean(cfg.cols);
     head = `<th>${esc(rowLabel)}</th>${spread ? pv.cols.map((c) => `<th class="num">${esc(c)}</th>`).join("") : ""}<th class="num">Total</th>`;
-    body = pv.rows.map((r) => `<tr><th scope="row">${rowHead(r)}</th>${spread ? pv.cols.map((c) => `<td class="num">${show(pv.cell.get(`${r}\u0000${c}`))}</td>`).join("") : ""}<td class="num"><strong>${show(pv.rowTotal.get(r))}</strong></td></tr>`).join("");
-    foot = `<tr><th scope="row">Total</th>${spread ? pv.cols.map((c) => `<td class="num"><strong>${show(pv.colTotal.get(c))}</strong></td>`).join("") : ""}<td class="num"><strong>${show(pv.total)}</strong></td></tr>`;
+    body = pv.rows.map((r) => `<tr><th scope="row">${rowHead(r)}</th>${spread ? pv.cols.map((c) => `<td class="num">${link(show(pv.cell.get(`${r}\u0000${c}`)), r, c)}</td>`).join("") : ""}<td class="num">${link(`<strong>${show(pv.rowTotal.get(r))}</strong>`, r)}</td></tr>`).join("");
+    foot = `<tr><th scope="row">Total</th>${spread ? pv.cols.map((c) => `<td class="num">${link(`<strong>${show(pv.colTotal.get(c))}</strong>`, undefined, c)}</td>`).join("") : ""}<td class="num">${link(`<strong>${show(pv.total)}</strong>`)}</td></tr>`;
   }
   return `<section class="pivot">
     <h3>${esc(heading)}</h3>

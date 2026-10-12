@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 // The web module signs in at import time, which wants a browser; the pivot itself needs none of it.
 vi.mock("../../web/src/storage.js", () => ({ storage: {} }));
 vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} });
-const { pivot } = await import("../../web/src/legacyYear.js");
+const { pivot, drillInto, getDrill, clearDrill } = await import("../../web/src/legacyYear.js");
 
 const state: any = {
   children: { a: { name: "Ann" }, b: { name: "Bo" } },
@@ -54,5 +54,30 @@ describe("summary pivot", () => {
     const r = pivot(state, ctx, { rows: "vendor", cols: "budget", value: "dollars" });
     expect(r.cell.get("Amazon\u0000Award")).toBeUndefined();
     expect(r.cell.get("Amazon\u0000Paid")?.cents).toBe(1000);
+  });
+  it("a cell's drill-down is exactly the items that make it up", () => {
+    const st: any = {
+      children: { a: { id: "a", name: "Ann", capCents: 5000 }, b: { id: "b", name: "Bo" } },
+      purchases: {},
+      items: {
+        i1: { childId: "a", amountCents: 1000, stepUpStatus: "Paid" },
+        i2: { childId: "a", amountCents: 500, stepUpStatus: "Approved" },
+        i3: { childId: "b", amountCents: 200, stepUpStatus: "Paid" },
+        i4: { childId: "a", amountCents: 100, stepUpStatus: "Paid", archived: true },
+      },
+    };
+    // Table 1 defaults to students by award stages.
+    drillInto(st, ctx, 0, "Ann", "Paid");
+    expect([...getDrill()!.ids]).toEqual(["i1"]);
+    drillInto(st, ctx, 0, "Ann", "Remaining");
+    expect([...getDrill()!.ids].sort()).toEqual(["i1", "i2"]);
+    drillInto(st, ctx, 0, undefined, "Paid");
+    expect([...getDrill()!.ids].sort()).toEqual(["i1", "i3"]);
+    // Table 2 defaults to status with a single Total column.
+    drillInto(st, ctx, 1, "Paid");
+    expect(getDrill()!.title).toBe("Status Paid");
+    expect([...getDrill()!.ids].sort()).toEqual(["i1", "i3"]);
+    clearDrill();
+    expect(getDrill()).toBeUndefined();
   });
 });
