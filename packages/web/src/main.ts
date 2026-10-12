@@ -428,12 +428,13 @@ function attachToPurchase(purchaseId: string, docId: string, role: DocRole = "re
   else attachAdditional(ledger, { kind: "purchase", id: purchaseId }, docId);
 }
 
-async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: string, role: DocRole = "receipt"): Promise<void> {
+async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: string, role: DocRole = "receipt", asStatement = false): Promise<void> {
   if (!workspace || files.length === 0) return;
   await guarded(async () => {
     let added = 0;
     let waiting = 0;
     let attached = 0;
+    let marked = 0;
     const dupes: string[] = [];
     for (const [i, file] of files.entries()) {
       note(`Preparing ${file.name} (${i + 1} of ${files.length})…`);
@@ -443,15 +444,20 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
       if (result.status === "uploaded") added++;
       else if (result.status === "queued") waiting++;
       else dupes.push(result.name);
+      if (asStatement && result.status === "uploaded" && result.documentId) {
+        ledger.set("document", result.documentId, { contentKind: "statement" }, { label: "document.markedStatement" });
+        marked++;
+      }
       if (purchaseId && result.documentId && result.status !== "queued") {
         attachToPurchase(purchaseId, result.documentId, role);
         attached++;
       }
     }
-    if (attached) await ledger.flush();
+    if (attached || marked) await ledger.flush();
     persist();
     status = [
-      purchaseId ? (attached ? `Attached ${attached} file(s) to this purchase.` : "") : added ? `Added ${added} file(s) to your unattached files.` : "",
+      asStatement ? (marked ? `Added ${marked} file(s) as proof of payment. Open one to read it.` : "") : "",
+      purchaseId ? (attached ? `Attached ${attached} file(s) to this purchase.` : "") : added && !asStatement ? `Added ${added} file(s) to your unattached files.` : "",
       purchaseId && added > attached ? `Added ${added - attached} file(s) to your unattached files.` : "",
       waiting ? `${waiting} file(s) saved on this device; they will upload when you are back online.` : "",
       dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : "",
@@ -957,7 +963,7 @@ function queueView(): string {
     const doc = state.documents[e.id];
     const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Proof of Payment</button>` : `<button data-statement="${esc(e.id)}">Open proof of payment</button>`}${sugg}`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
-    return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}</div><div class="actions">${actions}</div></li>`;
+    return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}</div><div class="actions wide">${actions}</div></li>`;
   });
   const looseList = loose.length ? `<details><summary>Unattached files (${loose.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : "";
 
@@ -1048,7 +1054,8 @@ function statementsView(): string {
       <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button></div></li>`;
   });
   return `<h2>Proof of payment</h2>
-    <p class="note">A card or bank statement can prove payment for many purchases at once. Mark a file as proof of payment from the list page (<em>Mark as Proof of Payment</em>), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</p>
+    <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</span></p>
+    ${workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label></p>` : `<p class="note">Connect a folder to add files.</p>`}
     ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>Nothing marked as proof of payment yet.</p>"}`;
 }
 
@@ -2433,6 +2440,13 @@ root.addEventListener("change", async (ev) => {
     await guarded(async () => {
       scan!.pages.push(await addScanPage(file));
     }, "Checking the photo…");
+    return;
+  }
+  if ((input.id === "upload-statement" || input.id === "photo-statement") && input.files?.length) {
+    const files = [...input.files];
+    const fromCamera = input.id === "photo-statement";
+    input.value = "";
+    await uploadFiles(files, fromCamera, undefined, "receipt", true);
     return;
   }
   if ((input.id === "upload" || input.id === "upload-later" || input.id === "photo") && input.files?.length) {
