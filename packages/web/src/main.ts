@@ -679,6 +679,48 @@ async function guarded(action: () => Promise<void>, label = `Waiting for ${stora
   render();
 }
 
+const ARCHIVE_FOLDER = "Archive";
+
+/** `name`, or `name (2)`, `name (3)`... when the folder already holds that name. */
+function freeName(taken: Set<string>, name: string): string {
+  if (!taken.has(name.toLowerCase())) return name;
+  const dot = name.lastIndexOf(".");
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  for (let n = 2; ; n++) {
+    const next = `${stem} (${n})${ext}`;
+    if (!taken.has(next.toLowerCase())) return next;
+  }
+}
+
+/**
+ * Puts a file away (or brings it back): it moves to an "Archive" folder inside the year's folder, so it is clear in
+ * the storage too, and the ledger stops listing or matching it. Restoring moves it back to the year's folder.
+ */
+async function setArchived(docId: string, archived: boolean): Promise<void> {
+  const doc = ledger.state.documents[docId];
+  const ws = workspace;
+  if (!doc) return;
+  let moved = false;
+  await guarded(async () => {
+    if (ws && doc.driveItemId && !ws.legacy) {
+      const target = archived ? await storage.ensureFolder(ws.driveId, ws.year.folderId, ARCHIVE_FOLDER) : ws.year.folderId;
+      const taken = new Set((await storage.list(ws.driveId, target)).map((e) => e.name.toLowerCase()));
+      const current = doc.filename ?? doc.id;
+      const name = freeName(taken, current);
+      const newId = await storage.move(ws.driveId, doc.driveItemId, target, name !== current ? name : undefined);
+      if (newId !== doc.driveItemId || name !== current) ledger.set("document", docId, { driveItemId: newId, filename: name }, { label: "document.moved" });
+      moved = true;
+    }
+    setDocumentArchived(ledger, docId, archived);
+  }, archived ? "Moving the file to the Archive folder…" : "Moving the file back…");
+  if (Boolean(ledger.state.documents[docId]?.archived) !== archived) return; // the move failed: its message is already showing
+  await save();
+  status = archived
+    ? `Archived${moved ? ` to the "${ARCHIVE_FOLDER}" folder` : ""}. It is hidden, not deleted; find it under Archived files to restore it.`
+    : "Restored.";
+  render();
+}
+
 async function save(): Promise<void> {
   if (workspace?.legacy) return; // nothing in a year viewed from Excel is ever saved
   // New or changed purchases may now match a charge on a statement we already read.
@@ -1482,7 +1524,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
   const extras = Object.values(state.additionalDocs).filter((a) => a.ownerKind === "purchase" && a.ownerId === purchaseId);
   const used = new Set<string>([...Object.values(state.purchases).flatMap((q) => (q.receiptDocumentId ? [q.receiptDocumentId] : [])), ...Object.values(state.additionalDocs).flatMap((a) => (a.documentId ? [a.documentId] : []))]);
   const hasCopy = new Set(Object.values(state.documents).flatMap((d) => (d.derivedFrom ? [d.derivedFrom] : [])));
-  const loose = Object.values(state.documents).filter((d) => !used.has(d.id) && !d.derivedFrom && !hasCopy.has(d.id)).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const loose = Object.values(state.documents).filter((d) => !d.archived && !used.has(d.id) && !d.derivedFrom && !hasCopy.has(d.id)).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
   const adders = (role: DocRole) => online
     ? `<p class="row"><label class="btn">Add files<input type="file" id="upload" data-purchase="${esc(purchaseId)}" data-role="${role}" multiple accept="application/pdf,image/*" hidden></label>
         <label class="btn">Take a photo<input type="file" id="photo" data-purchase="${esc(purchaseId)}" data-role="${role}" accept="image/*" capture="environment" hidden></label>
@@ -2289,13 +2331,10 @@ root.addEventListener("click", async (ev) => {
   } else if (d["archiveDoc"]) {
     const linkedCount = Number(d["linked"] ?? 0);
     if (!linkedCount || confirm(`${linkedCount} charge(s) on this file are linked as proof for purchases. Archive it anyway? The links stay, and you can restore the file later.`)) {
-      setDocumentArchived(ledger, d["archiveDoc"]);
-      status = "Archived. It is hidden but not deleted; find it under Archived files to restore it.";
-      await save();
+      await setArchived(d["archiveDoc"], true);
     }
   } else if (d["unarchiveDoc"]) {
-    setDocumentArchived(ledger, d["unarchiveDoc"], false);
-    await save();
+    await setArchived(d["unarchiveDoc"], false);
   } else if (d["markStatement"]) {
     ledger.set("document", d["markStatement"], { contentKind: "statement" }, { label: "document.markedStatement" });
     await save();

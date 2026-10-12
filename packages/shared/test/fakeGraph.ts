@@ -122,11 +122,14 @@ export class FakeGraph {
     if ((m = /^\/drives\/[^/]+\/items\/([^/?]+)(\?.*)?$/.exec(path)) && method === "PATCH") {
       const n = this.nodes.get(m[1]!);
       if (!n) return this.json({ error: "itemNotFound" }, 404);
-      const spec = JSON.parse(String(body)) as { name?: string };
-      if (spec.name) {
-        const taken = n.parent ? this.child(n.parent, spec.name) : undefined;
+      const spec = JSON.parse(String(body)) as { name?: string; parentReference?: { id?: string } };
+      const parent = spec.parentReference?.id ?? n.parent;
+      const name = spec.name ?? n.name;
+      if (spec.name || spec.parentReference?.id) {
+        const taken = parent ? this.child(parent, name) : undefined;
         if (taken && taken.id !== n.id) return this.json({ error: "nameAlreadyExists" }, 409);
-        n.name = spec.name;
+        n.name = name;
+        if (parent) n.parent = parent;
       }
       return this.json(this.meta(n));
     }

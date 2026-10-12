@@ -158,6 +158,20 @@ describe.each(Object.entries(makers))("StorageProvider contract: %s", (_name, ma
     expect(isStorageError(err, "exists")).toBe(true);
   });
 
+  it("moves into another folder, optionally renaming, and refuses a taken name", async () => {
+    const { storage, driveId, rootId } = await make();
+    const dest = await storage.ensureFolder(driveId, rootId, "Archive");
+    const file = await storage.write(driveId, rootId, "a.txt", "keep");
+    await storage.write(driveId, dest, "b.txt", "other");
+    const clash = await storage.write(driveId, rootId, "b.txt", "mine");
+    const err = await storage.move(driveId, clash.id, dest).catch((e: unknown) => e);
+    expect(isStorageError(err, "exists")).toBe(true);
+    const id = await storage.move(driveId, file.id, dest, "a (2).txt");
+    expect(await storage.find(driveId, rootId, "a.txt")).toBeUndefined();
+    expect((await storage.readText(driveId, id)).text).toBe("keep");
+    expect((await storage.find(driveId, dest, "a (2).txt"))?.id).toBe(id);
+  });
+
   it("removes, honours ifMatch, and reports a missing item as 'not-found'", async () => {
     const { storage, driveId, rootId } = await make();
     const v1 = await storage.write(driveId, rootId, "a.txt", "1");

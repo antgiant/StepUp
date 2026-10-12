@@ -140,6 +140,8 @@ export interface StorageProvider {
   write(driveId: string, parentId: string, name: string, body: FileBody, options?: WriteOptions): Promise<StoredFile>;
   /** Renames in place. Returns the item's id afterwards (providers that address by path may change it). `StorageError("exists")` if the name is taken. */
   rename(driveId: string, itemId: string, name: string): Promise<string>;
+  /** Moves an item into another folder of the same drive, optionally under a new name. Returns the item's id afterwards. `StorageError("exists")` if the name is taken there. */
+  move(driveId: string, itemId: string, parentId: string, name?: string): Promise<string>;
   /** Deletes (to the recycle bin where there is one). With `ifMatch`, only if the version still matches. */
   remove(driveId: string, itemId: string, ifMatch?: string): Promise<void>;
 

@@ -160,6 +160,19 @@ export class LocalFsProvider implements StorageProvider {
     return nextId;
   }
 
+  async move(_driveId: string, itemId: string, parentId: string, name?: string): Promise<string> {
+    const from = this.abs(itemId);
+    const nextId = this.childId(parentId, name ?? path.basename(from));
+    const to = this.abs(nextId);
+    if (to !== from && (await this.find(LOCAL_DRIVE, parentId, name ?? path.basename(from)))) throw new StorageError("exists", `"${name ?? path.basename(from)}" already exists`);
+    try {
+      await fsRename(from, to);
+    } catch (err) {
+      throw translate(err, from);
+    }
+    return nextId;
+  }
+
   async remove(_driveId: string, itemId: string, ifMatch?: string): Promise<void> {
     const full = this.abs(itemId);
     if (ifMatch) {

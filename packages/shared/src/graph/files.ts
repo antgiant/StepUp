@@ -59,6 +59,15 @@ export async function renameItem(driveId: string, itemId: string, name: string):
   await graphJson(`/drives/${driveId}/items/${itemId}`, { method: "PATCH", body: JSON.stringify({ name, "@microsoft.graph.conflictBehavior": "fail" }), label: `Renaming to ${name}…` });
 }
 
+/** Moves a file or folder into another folder (it keeps its id), optionally renaming it. Fails with 409 if the name is taken there. */
+export async function moveItem(driveId: string, itemId: string, parentId: string, name?: string): Promise<void> {
+  await graphJson(`/drives/${driveId}/items/${itemId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ parentReference: { id: parentId }, ...(name ? { name } : {}), "@microsoft.graph.conflictBehavior": "fail" }),
+    label: "Moving a file…",
+  });
+}
+
 /** Deletes an item (to the recycle bin). With `ifMatch`, only if its ETag still matches; a mismatch throws GraphError 412. */
 export async function deleteItem(driveId: string, itemId: string, ifMatch?: string): Promise<void> {
   await graphFetch(`/drives/${driveId}/items/${itemId}`, { method: "DELETE", ...(ifMatch ? { headers: { "If-Match": ifMatch } } : {}), rawBody: true });

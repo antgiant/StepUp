@@ -143,6 +143,18 @@ export class MemoryProvider implements StorageProvider {
     return n.id;
   }
 
+  async move(_driveId: string, itemId: string, parentId: string, name?: string): Promise<string> {
+    const n = this.get(itemId);
+    this.get(parentId);
+    const next = name ?? n.name;
+    const taken = this.child(parentId, next);
+    if (taken && taken.id !== n.id) throw new StorageError("exists", `"${next}" already exists`);
+    n.parent = parentId;
+    n.name = next;
+    await this.commit([n], []);
+    return n.id;
+  }
+
   async remove(_driveId: string, itemId: string, ifMatch?: string): Promise<void> {
     const n = this.get(itemId);
     if (ifMatch && this.entry(n).eTag !== ifMatch) throw new StorageError("changed", `"${n.name}" changed since it was read`);

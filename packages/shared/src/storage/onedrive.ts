@@ -1,7 +1,7 @@
 import { setTokenProvider } from "../graph/client.js";
 import { subfolders, inviteToFolder, folderFromLink, myDriveRoot, sharedFolders } from "../graph/browse.js";
 import { GraphError, graphJson } from "../graph/client.js";
-import { deleteItem, ensureFolder, findChild, readTextFile, renameItem, writeFile } from "../graph/files.js";
+import { deleteItem, ensureFolder, findChild, moveItem, readTextFile, renameItem, writeFile } from "../graph/files.js";
 import { fetchItemContent } from "../graph/onedrive.js";
 import type { AppFolder, FileBody, FolderEntry, StorageAuth, StorageEntry, StorageProvider, StoredFile, WriteOptions } from "./types.js";
 
@@ -94,6 +94,11 @@ export class OneDriveProvider implements StorageProvider {
   async rename(driveId: string, itemId: string, name: string): Promise<string> {
     await renameItem(driveId, itemId, name);
     return itemId; // OneDrive ids survive a rename
+  }
+
+  async move(driveId: string, itemId: string, parentId: string, name?: string): Promise<string> {
+    await moveItem(driveId, itemId, parentId, name);
+    return itemId; // OneDrive ids survive a move
   }
 
   remove(driveId: string, itemId: string, ifMatch?: string): Promise<void> {

@@ -190,6 +190,8 @@ export class FakeDrive {
         const spec = JSON.parse(String(init.body)) as { name?: string; trashed?: boolean };
         if (spec.name !== undefined) n.name = spec.name;
         if (spec.trashed !== undefined) n.trashed = spec.trashed;
+        const remove = q["removeParents"]?.split(",") ?? [];
+        if (q["addParents"] || remove.length) n.parents = [...n.parents.filter((p) => !remove.includes(p)), ...(q["addParents"]?.split(",") ?? [])];
         n.version += 1;
         return this.json(this.meta(n));
       }

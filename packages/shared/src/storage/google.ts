@@ -381,6 +381,16 @@ export class GoogleDriveProvider implements StorageProvider {
     return itemId; // Drive ids survive a rename
   }
 
+  async move(_driveId: string, itemId: string, parentId: string, name?: string): Promise<string> {
+    const self = await this.getLive(itemId);
+    const from = self.parents?.[0];
+    const taken = await this.findRaw(parentId, name ?? self.name);
+    if (taken && taken.id !== itemId) throw new StorageError("exists", `"${name ?? self.name}" already exists`);
+    const extra: Record<string, string> = { addParents: parentId, ...(from ? { removeParents: from } : {}) };
+    await this.json(this.fileUrl(itemId, extra), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(name ? { name } : {}) }, "Moving a file…");
+    return itemId; // Drive ids survive a move
+  }
+
   async remove(_driveId: string, itemId: string, ifMatch?: string): Promise<void> {
     if (ifMatch) {
       const current = await this.getLive(itemId);
