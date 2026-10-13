@@ -34,7 +34,7 @@ button.danger { color: var(--danger); }
 button.danger:hover { border-color: var(--danger); }
 button:disabled { opacity: .55; cursor: progress; }
 
-input, select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; width: 100%; }
+input, select { font: inherit; font-size: max(16px, 1rem); /* iOS Safari zooms the page on focus when a field is under 16px */ padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; width: 100%; }
 label { display: flex; flex-direction: column; gap: 3px; font-size: .82rem; color: var(--muted); }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
 .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; } .row input { width: auto; flex: 1 1 160px; }
