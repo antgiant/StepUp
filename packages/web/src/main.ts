@@ -1176,7 +1176,8 @@ function queueView(): string {
   const archivedFiles = archivedDocs.length
     ? `<details><summary>Archived files (${archivedDocs.length})</summary><ul class="queue">${archivedDocs.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
-  const looseList = loose.length ? `<details><summary>Unattached files (${loose.length})</summary><ul class="queue">${looseRows.join("")}</ul></details>` : "";
+  const keepForLater = workspace ? `<p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits here until you attach it to a purchase.</small></p>` : "";
+  const looseList = loose.length || workspace ? `<details><summary>Unattached files (${loose.length})</summary>${keepForLater}${loose.length ? `<ul class="queue">${looseRows.join("")}</ul>` : ""}</details>` : "";
 
   // One row per purchase: receipts with no items, and purchases with items that cannot be filed yet.
   const byPurchase = new Map<string, { title: string; reasons: string[] }>();
@@ -1732,6 +1733,17 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
   }
 }
 
+/** Cards on the purchase page the person has folded away; remembered while the page is open, across redraws. */
+const collapsedPanels = new Set<string>();
+function panel(key: string, step: number, title: string, body: string, cls = ""): string {
+  return `<details class="panel${cls ? " " + cls : ""}" data-panel="${key}"${collapsedPanels.has(key) ? "" : " open"}><summary class="panel-title"><span class="step">${step}</span>${title}</summary>${body}</details>`;
+}
+root.addEventListener("toggle", (ev) => {
+  const el = ev.target;
+  const key = el instanceof HTMLDetailsElement ? el.dataset["panel"] : undefined;
+  if (key) (el as HTMLDetailsElement).open ? collapsedPanels.delete(key) : collapsedPanels.add(key);
+}, true);
+
 function purchaseView(id: string, draft = false): string {
   const state = ledger.state;
   const p = state.purchases[id] ?? (draft ? { id } : undefined);
@@ -1770,15 +1782,14 @@ function purchaseView(id: string, draft = false): string {
     return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>New purchase</h2>
   <p class="note">This purchase is saved as soon as you fill in a detail and move to the next field.</p>
-  <section class="panel"><h3 class="panel-title"><span class="step">1</span>Purchase details</h3>
-  <form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
+  ${panel("details", 1, "Purchase details", `<form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
     <label class="wide">Name<input name="name" placeholder="e.g. Math curriculum"></label>
     <label class="wide">Vendor${storeBox("vendor", undefined)}</label>
     <label>Date<input name="date" type="date"></label>
     <label>Invoice #<input name="invoiceNo"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
-    ${saveIndicator()}</form></section>
+    ${saveIndicator()}</form>`)}
   ${documentation(id, undefined, "bottom", true)}`;
   }
   const categories = reference()
@@ -1789,22 +1800,24 @@ function purchaseView(id: string, draft = false): string {
     ? `<section class="filing-banner"><div class="filing-head"><strong>${esc(filers.join(" and "))} ${filers.length > 1 ? "are" : "is"} filing this purchase with StepUp right now</strong><button id="refresh-now">Refresh</button></div>
         <p class="note">Wait for the run to finish before changing it; edits made now may not be picked up. This page refreshes by itself every minute.</p></section>`
     : "";
-  const receiptExtras = `${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}}
-  ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}}`;
+  const tooBig = (doc?.sizeBytes ?? 0) > MAX_PROOF_BYTES;
+  const receipt = {
+    tools: doc?.driveItemId && workspace ? `<button data-read-receipt="${esc(id)}">Read receipt</button>${tooBig ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}` : "",
+    notes: `${tooBig ? `<p class="note warn">This receipt is ${((doc?.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}`,
+  };
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
   <div class="page-title"><h2>${esc(purchaseName(p))}</h2><p class="note">${doc ? `Receipt file: ${esc(doc.filename)}` : "No receipt file yet"}</p></div>
-  <section class="panel"><h3 class="panel-title"><span class="step">1</span>Purchase details</h3>
-  <form id="purchase-form" class="grid" data-id="${esc(id)}">
+  ${panel("details", 1, "Purchase details", `<form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label class="wide">Name<input name="name" value="${esc(p.name)}" placeholder="${esc(purchaseName({ ...p, name: undefined }))}"></label>
     <label class="wide">Vendor${storeBox("vendor", p.vendor)}</label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
     <label>Invoice #<input name="invoiceNo" value="${esc(p.invoiceNo)}"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal" value="${money(p.orderTotalCents)}"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal" value="${money(p.taxShippingTotalCents)}"></label>
-    ${saveIndicator()}</form></section>
-  ${documentation(id, p.receiptDocumentId, "bottom", false, receiptExtras)}
-  <section class="panel"><h3 class="panel-title"><span class="step">3</span>Items${remaining !== undefined ? ` <small>${formatCents(remaining)} left to itemize</small>` : ""}</h3>
+    ${saveIndicator()}</form>`)}
+  ${documentation(id, p.receiptDocumentId, "bottom", false, receipt)}
+  ${panel("items", 3, `Items${items.length || remaining !== undefined ? ` <small>${items.length} item${items.length === 1 ? "" : "s"}${remaining !== undefined ? ` &middot; ${formatCents(remaining)} left to itemize` : ""}</small>` : ""}`, `
   ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">No items yet. Add the first one below.</p>`}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
   <h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Item" : "Add an item"}</h4>
@@ -1815,7 +1828,7 @@ function purchaseView(id: string, draft = false): string {
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
       <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
     <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}
-  </section>
+  `)}
   <section class="panel danger-zone"><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p></section>`;
 }
 
@@ -1824,7 +1837,7 @@ function purchaseView(id: string, draft = false): string {
  * paid for it; additional documentation is anything else that backs the purchase up (a card statement, an order email,
  * a letter). Each part has its own ways to add a file.
  */
-function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false, receiptExtras = ""): string {
+function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false, receipt: { tools: string; notes: string } = { tools: "", notes: "" }): string {
   const state = ledger.state;
   const online = Boolean(workspace);
   const nameOf = (id: string | undefined) => {
@@ -1847,7 +1860,9 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
   const receiptPart = receiptId && !replacing
     ? `<h4>Receipt</h4>
     <p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>
-    <p class="row">${state.documents[receiptId]?.driveItemId && online ? `<button data-preview="${esc(receiptId)}">Preview</button>` : ""}<button data-replace-receipt="${esc(purchaseId)}">Replace Receipt</button><button data-receipt-to-extra="${esc(purchaseId)}">Move to additional documentation</button></p>`
+    ${state.documents[receiptId]?.driveItemId && online ? `<p class="row"><button class="primary" data-preview="${esc(receiptId)}">Preview</button></p>` : ""}
+    ${receipt.notes}
+    <details class="more"><summary>More receipt options</summary><p class="row"><button data-replace-receipt="${esc(purchaseId)}">Replace Receipt</button><button data-receipt-to-extra="${esc(purchaseId)}">Move to additional documentation</button>${receipt.tools}</p></details>`
     : `<h4>Receipt</h4>
     <p class="note">The one document that shows what you bought and what it cost: an order confirmation, invoice or store receipt.${receiptId ? " Whatever you choose here replaces the current receipt, which goes back to your unattached files." : ""}</p>
     ${receiptId ? `<p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>` : `<p class="warn">No receipt yet.</p>`}
@@ -1859,18 +1874,23 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
   const listOf = (rows: typeof extras) => [...new Map(rows.map((a) => [a.documentId, a])).values()].map((a) => {
     const hasCharge = a.kind === "payment-proof" && extras.some((x) => x.documentId === a.documentId && x.transactionId);
     const canPreview = state.documents[a.documentId ?? ""]?.driveItemId && online;
-    return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`;
+    return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button class="primary" data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button class="primary" data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<details class="more inline"><summary>More</summary><button class="danger" data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove from this purchase</button></details></span></li>`;
   }).join("");
   const proofs = extras.filter(isProof);
   const others = extras.filter((a) => !isProof(a));
   const saveFirst = (what: string) => `<p class="note">Save the purchase details above (or add a receipt) first; then you can add ${what} here.</p>`;
+  // Once the linked charges cover the purchase, linking more and adding statements is tucked away.
+  const linkedCents = extras.filter((a) => a.kind === "payment-proof" && a.transactionId).reduce((sum, a) => sum + Math.abs(state.documents[a.documentId ?? ""]?.statement?.transactions.find((t) => t.id === a.transactionId)?.amountCents ?? 0), 0);
+  const orderTotal = state.purchases[purchaseId]?.orderTotalCents;
+  const allLinked = linkedCents > 0 && (orderTotal === undefined || linkedCents >= orderTotal * 0.99 - 100);
+  const manage = `${chargeAssist(purchaseId)}${adders("additional")}${pick("additional", "Use as proof of payment")}`;
+  const manageProof = allLinked ? `<details${assist?.kind === "purchase" && assist.purchaseId === purchaseId ? " open" : ""}><summary>Link another charge or add a statement</summary>${manage}</details>` : manage;
   const proofPart = draft
     ? `<h4>Proof of payment</h4>${saveFirst("proof of payment")}`
     : `<h4>Proof of payment</h4>
     <p class="note">The card or bank statement showing what was paid for this purchase. Link the charge below, and a copy that shows only that charge is what gets sent.</p>
     ${proofs.length ? `<ul class="queue">${listOf(proofs)}</ul>` : `<p class="warn">No proof of payment yet.</p>`}
-    ${chargeAssist(purchaseId)}
-    ${adders("additional")}${pick("additional", "Use as proof of payment")}`;
+    ${manageProof}`;
   const extraPart = draft
     ? `<h4>Additional documentation</h4>${saveFirst("more documentation")}`
     : `<h4>Additional documentation</h4>
@@ -1880,8 +1900,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
   // One "Documents" section: the receipt first, then proof of payment, then anything else. (`top` is no longer used.)
   if (part === "top") return "";
-  return `<section class="panel"><h3 class="panel-title"><span class="step">2</span>Documents</h3>${receiptPart}${receiptId && !replacing ? receiptExtras : ""}${proofPart}${extraPart}
-    ${online ? `<h4>Not for a purchase yet</h4><p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits in Unattached files on the list page until you attach it.</small></p>` : ""}</section>`;
+  return panel("documents", 2, "Documents", `${receiptPart}${proofPart}${extraPart}`);
 }
 
 /**

@@ -237,3 +237,21 @@ label[hidden] { display: none; }
 .item-card .actions { margin-top: 2px; }
 .danger-zone { padding-top: 12px; border-color: var(--line); }
 .danger-zone p { margin: 0; }
+
+/* Cards fold away; the title row is the handle. */
+details.panel > summary.panel-title { cursor: pointer; list-style: none; }
+details.panel > summary.panel-title::-webkit-details-marker { display: none; }
+details.panel > summary.panel-title::after { content: "\25BE"; margin-left: auto; color: var(--muted); }
+details.panel:not([open]) > summary.panel-title::after { content: "\25B8"; }
+details.panel:not([open]) { padding-bottom: 4px; }
+details.panel:not([open]) > summary.panel-title { margin-bottom: 6px; }
+/* Blue is for the one main action (class primary); other buttons in a row stay plain. */
+.panel p.row > button:last-child { background: var(--surface); border-color: var(--line); color: var(--fg); }
+.panel p.row > button.primary, .panel .actions > button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.panel p.row > button.danger:last-child { color: var(--danger); }
+/* "More" folds on a list row or under a main action. */
+details.more { background: none; border: 0; padding: 0; margin: 8px 0 0; box-shadow: none; }
+details.more > summary { font-weight: 500; color: var(--muted); font-size: .9rem; }
+details.more.inline { margin: 0; flex: 1 1 100%; }
+details.more > .row { margin: 8px 0 0; }
+details.more.inline > button.danger { margin-top: 8px; }
