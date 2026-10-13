@@ -37,8 +37,6 @@ import {
   parseStatementText,
   saveStatement,
   clusterStatements,
-  editStatementDetails,
-  editTransaction,
   statementDisplayName,
   chargesForPurchase,
   purchasesForCharge,
@@ -46,6 +44,8 @@ import {
   type AssistSort,
   type ChargeCandidate,
   type PurchaseCandidate,
+  editStatementDetails,
+  editTransaction,
   addTransaction,
   removeTransaction,
   mergeReread,
@@ -148,8 +148,6 @@ let addingChild = false;
 let replacingReceipt: string | undefined;
 /** The statement row open for correcting (its id), or "new" while a missed row is being added. */
 let editingTxn: string | undefined;
-/** The item the add-an-item form is working on: once its required details are filled in it exists and edits update it. */
-let itemEdit: { purchaseId: string; itemId?: string } | undefined;
 /**
  * The manual-linking helper: the charge (on a statement) or the purchase it is open for, and how its list is ordered and
  * narrowed. Opening it for something else starts the ordering and filters over.
@@ -157,6 +155,8 @@ let itemEdit: { purchaseId: string; itemId?: string } | undefined;
 let assist: { kind: "txn"; docId: string; txnId: string } | { kind: "purchase"; purchaseId: string } | undefined;
 let assistView: { sort: AssistSort; card: string; child: string; vendor: string; method: string; noProof: boolean } = { sort: "best", card: "", child: "", vendor: "", method: "", noProof: false };
 const resetAssistView = () => { assistView = { sort: "best", card: "", child: "", vendor: "", method: "", noProof: false }; };
+/** The item the add-an-item form is working on: once its required details are filled in it exists and edits update it. */
+let itemEdit: { purchaseId: string; itemId?: string } | undefined;
 const itemDraftKey = (purchaseId: string) => `stepup.itemdraft.${purchaseId}`;
 function readItemDraft(purchaseId: string): Record<string, string> {
   try {
@@ -1240,8 +1240,6 @@ const purchaseLabel = (id: string) => {
   return `${purchaseName(p)}${total !== undefined ? `, ${formatCents(total)}` : ""}`;
 };
 
-function statementsView(): string {
-  const state = ledger.state;
 const ASSIST_LIMIT = 25;
 const assistDays = (n: number | undefined) =>
   n === undefined ? "no receipt date" : n === 0 ? "same day" : n > 0 ? `${n} day${n === 1 ? "" : "s"} after the receipt` : `${-n} day${n === -1 ? "" : "s"} before the receipt`;
@@ -1303,6 +1301,8 @@ function chargeAssist(purchaseId: string): string {
     <p class="note">A payment does not normally show before its receipt, so charges dated before it are listed last. They can still be right (a receipt dated at shipping, or billing ahead).</p></div>`;
 }
 
+function statementsView(): string {
+  const state = ledger.state;
   const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && !d.archived);
   const linkedBy = (docId: string) => new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId));
   const row = (d: (typeof docs)[number]) => {
@@ -1842,6 +1842,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
       const canPreview = state.documents[a.documentId ?? ""]?.driveItemId && online;
       return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`;
     }).join("")}</ul><p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>` : `<p><small>None yet.</small></p>`}
+    ${chargeAssist(purchaseId)}
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
   // Until there is a receipt, adding one comes first (above the items). After that, its details stay at the top of the
   // screen and the controls to replace or move it sit down here with the rest of the documentation.
@@ -1853,7 +1854,6 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
 /**
  * A search box with a list under it that narrows as you type (every word must appear somewhere in the row). Each row
  * leads with `title`, the part that tells options apart, with `detail` smaller beneath. Picking a row puts its `value`
-    ${chargeAssist(purchaseId)}
  * in the box. `free` lets any text be kept, for names that are not in the list.
  */
 function searchBox(name: string, value: string | undefined, rows: Array<{ value: string; title: string; detail?: string }>, o: { placeholder: string; required?: boolean; empty: string }): string {
@@ -2086,6 +2086,13 @@ root.addEventListener("change", (ev) => {
   const t = ev.target as HTMLInputElement;
   const pivotControl = t.dataset?.["pivot"];
   if (pivotControl !== undefined && setPivot(pivotControl, t.value)) return render();
+  const assistControl = t.dataset?.["assist"];
+  if (assistControl !== undefined) {
+    if (assistControl === "noProof") assistView.noProof = t.checked;
+    else if (assistControl === "sort") assistView.sort = (["best", "date", "amount"].includes(t.value) ? t.value : "best") as AssistSort;
+    else if (assistControl === "card" || assistControl === "child" || assistControl === "vendor" || assistControl === "method") assistView[assistControl] = t.value;
+    return render();
+  }
   if (t.type === "date" || t.tagName === "SELECT") autosaveFor(t);
 });
 root.addEventListener("focusin", (ev) => {
@@ -2097,13 +2104,6 @@ root.addEventListener("focusin", (ev) => {
 function pickRow(li: HTMLElement): void {
   const input = li.closest(".combo")!.querySelector<HTMLInputElement>("input")!;
   input.value = li.dataset["value"]!;
-  const assistControl = t.dataset?.["assist"];
-  if (assistControl !== undefined) {
-    if (assistControl === "noProof") assistView.noProof = t.checked;
-    else if (assistControl === "sort") assistView.sort = (["best", "date", "amount"].includes(t.value) ? t.value : "best") as AssistSort;
-    else if (assistControl === "card" || assistControl === "child" || assistControl === "vendor" || assistControl === "method") assistView[assistControl] = t.value;
-    return render();
-  }
   input.dataset["picked"] = "1";
   closeCombo(input);
   if (input.name === "categoryId") categoryChanged(input);
@@ -2697,17 +2697,6 @@ root.addEventListener("click", async (ev) => {
     const n = relinkAllStatements(ledger);
     status = n ? `Linked ${n} more charge(s).` : "No new confident matches.";
     await save();
-  } else if (d["link"]) {
-    linkTransaction(ledger, d["link"], d["doc"]!, d["txn"]!, "manual");
-    const txn = ledger.state.documents[d["doc"]!]?.statement?.transactions.find((x) => x.id === d["txn"]);
-    if (txn && learnAlias(ledger, txn.descriptor, ledger.state.purchases[d["link"]]?.vendor)) status = "Linked. Next time this name will match by itself.";
-    await save();
-  } else if (d["unlink"]) {
-    unlinkTransaction(ledger, d["unlink"], d["doc"]!, d["txn"]!);
-    await save();
-  } else if (d["archiveDoc"]) {
-    const linkedCount = Number(d["linked"] ?? 0);
-    const name = ledger.state.documents[d["archiveDoc"]]?.filename ?? "this file";
   } else if (d["assistTxn"]) {
     resetAssistView();
     assist = { kind: "txn", docId: d["doc"]!, txnId: d["assistTxn"] };
@@ -2722,8 +2711,19 @@ root.addEventListener("click", async (ev) => {
     assist = undefined;
     render();
     return;
-    const message = linkedCount
+  } else if (d["link"]) {
     if (assist?.kind === "txn") assist = undefined;
+    linkTransaction(ledger, d["link"], d["doc"]!, d["txn"]!, "manual");
+    const txn = ledger.state.documents[d["doc"]!]?.statement?.transactions.find((x) => x.id === d["txn"]);
+    if (txn && learnAlias(ledger, txn.descriptor, ledger.state.purchases[d["link"]]?.vendor)) status = "Linked. Next time this name will match by itself.";
+    await save();
+  } else if (d["unlink"]) {
+    unlinkTransaction(ledger, d["unlink"], d["doc"]!, d["txn"]!);
+    await save();
+  } else if (d["archiveDoc"]) {
+    const linkedCount = Number(d["linked"] ?? 0);
+    const name = ledger.state.documents[d["archiveDoc"]]?.filename ?? "this file";
+    const message = linkedCount
       ? `${linkedCount} charge(s) on ${name} are linked as proof for purchases. The links stay, and you can restore the file later.`
       : `${name} will be hidden and moved to the "${ARCHIVE_FOLDER}" folder. It is not deleted; you can restore it later.`;
     if (await confirmModal("Archive this file?", message, "Archive")) {
