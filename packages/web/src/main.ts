@@ -2092,7 +2092,42 @@ function chooserView(): string {
   </section></main>${footer()}`;
 }
 
+/**
+ * While a file picker is open the page must not be redrawn: a redraw replaces the <input>, and the chosen files are then
+ * reported to an element that is no longer on the page, so choosing files looks exactly like pressing Cancel. On iOS
+ * the picker can stay open a while (files are fetched from iCloud), long enough for a background refresh, a
+ * connection change or an app update to redraw the page. Redraws wait; anything the person presses ends the wait, so
+ * the page can never stay frozen.
+ */
+let filePickerOpen = false;
+let renderDeferred = false;
+let filePickerTimer: ReturnType<typeof setTimeout> | undefined;
+function filePickerClosed(): void {
+  filePickerOpen = false;
+  clearTimeout(filePickerTimer);
+  setTimeout(() => {
+    if (renderDeferred && !filePickerOpen) {
+      renderDeferred = false;
+      render();
+    }
+  }, 0);
+}
+const isFileInput = (el: EventTarget | null): boolean => el instanceof HTMLInputElement && el.type === "file";
+root.addEventListener("click", (ev) => {
+  if (isFileInput(ev.target)) {
+    filePickerOpen = true;
+    clearTimeout(filePickerTimer);
+    filePickerTimer = setTimeout(filePickerClosed, 2 * 60_000);
+  } else if (filePickerOpen) filePickerClosed();
+}, true);
+root.addEventListener("change", (ev) => { if (isFileInput(ev.target)) filePickerClosed(); }, true);
+root.addEventListener("cancel", (ev) => { if (isFileInput(ev.target)) filePickerClosed(); }, true);
+
 function render(): void {
+  if (filePickerOpen) {
+    renderDeferred = true;
+    return;
+  }
   if (!account) {
     root.innerHTML = authReady ? chooserView() : "";
     return;
