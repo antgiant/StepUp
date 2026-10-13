@@ -8,6 +8,7 @@ import {
   clusterStatements,
   editStatementDetails,
   editTransaction,
+  groupBoxesIntoRows,
   mergeReread,
   parseStatementText,
   removeTransaction,
@@ -90,5 +91,24 @@ describe("clusterStatements", () => {
     ]);
     expect(groups.map((g) => g.label)).toEqual(["Amex ending 9999", "Chase ending 4242", "Not read yet"]);
     expect(groups[1]!.items.map((i) => i.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("groupBoxesIntoRows (OCR of a screenshot of a table)", () => {
+  const box = (text: string, x0: number, y0: number, x1: number, y1: number) => ({ text, x0, y0, x1, y1, confidence: 0.9 });
+  it("puts date, description and amount columns back on one row, top to bottom", () => {
+    const rows = groupBoxesIntoRows([
+      box("54.28", 800, 102, 880, 128),
+      box("09/18", 20, 100, 90, 126),
+      box("AMZN Mktp US", 140, 101, 520, 127),
+      box("12.00", 800, 172, 880, 198),
+      box("10/02", 20, 170, 90, 196),
+      box("STAR LEARNING", 140, 171, 520, 197),
+    ]);
+    expect(rows.map((r) => r.text)).toEqual(["09/18 AMZN Mktp US 54.28", "10/02 STAR LEARNING 12.00"]);
+    expect(parseStatementText(rows.map((r) => r.text).join("\n"), { defaultYear: 2026 }).transactions).toHaveLength(2);
+  });
+  it("keeps separate rows apart", () => {
+    expect(groupBoxesIntoRows([box("a", 0, 0, 10, 20), box("b", 0, 25, 10, 45)])).toHaveLength(2);
   });
 });
