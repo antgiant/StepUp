@@ -12,7 +12,7 @@ import { acquireStepUpLock } from "./stepupLock.js";
 import { getClientId } from "./clientId.js";
 import { getSignedInName } from "./graph/auth.js";
 import { attachSearchCapture } from "./statusSync.js";
-import { archiveSearchResults, useArchiveYear } from "./stepUpArchive.js";
+import { archiveSearchResults } from "./stepUpArchive.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 

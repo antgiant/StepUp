@@ -38,7 +38,6 @@ import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reim
 import { attachCategoryTreeListener, type Cache } from "../categorySync.js";
 import { nodesFromCache } from "../categoryNodes.js";
 import { attachStatusSyncListenerWith, type ApiResponse } from "../statusSync.js";
-import { useArchiveYear } from "../stepUpArchive.js";
 import type { FilingStore } from "./store.js";
 
 const REFERENCE_FILE = path.resolve(process.cwd(), "packages/web/public/reference/categories.json");
@@ -236,8 +235,6 @@ export class LedgerStore implements FilingStore {
   }
 
   attachListeners(page: Page): void {
-    // The full list is kept in this same year's ledger.
-    void useArchiveYear(this.opened.storage, this.opened.driveId, this.opened.year.folderId, this.opened.year.label).catch(() => undefined);
     attachStatusSyncListenerWith(page, (body) => this.applyStatusResponse(body));
     // StepUp's own category list, as it is observed, becomes edits in this year's ledger (the old Table5 sync).
     attachCategoryTreeListener(page, (cache) => this.recordCategories(cache));
