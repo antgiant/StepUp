@@ -178,6 +178,43 @@ describe("redaction modes and output check", () => {
     expect(checkRedactionOutput(["Chase\nTrans Date Description Amount\n09/18 AMZN 54.28\n4000 1234 5678 9012"], kept, { headerKept: true }).leaks.length).toBeGreaterThan(0);
   });
 
+  it("keeps a heading that repeats on every page whole, even lines with an amount or a balance", () => {
+    const head = (n: number) => ["Chase Freedom Unlimited", `Account Number: 4000 1234 5678 9012 Page ${n} of 2`, "New Balance $1,812.44 Rewards points 1,204", "Trans Date Post Date Description Amount"];
+    const page1 = [...head(1), "09/18 09/19 AMZN Mktp US*2K4 Amzn.com/bill WA 54.28", "09/20 09/21 SOME PRIVATE PHARMACY 33.10", ...Array.from({ length: 12 }, (_, i) => `Footer line ${i}`)];
+    const page2 = [...head(2), "10/02 10/03 STAR LEARNING CO 12.00", "10/04 10/04 SOME OTHER SHOP 9.99", ...Array.from({ length: 12 }, (_, i) => `Footer line ${i}`)];
+    const plan = planRedaction(layout([page1, page2]), { keepTransactionIds: new Set([id(/AMZN/), id(/STAR LEARNING/)]) });
+    for (const p of plan.pages) expect(p.keptText.slice(0, 4)).toEqual(head(plan.pages.indexOf(p) + 1));
+    expect(plan.pages[1]!.keptText).toContain("10/02 10/03 STAR LEARNING CO 12.00");
+    expect(plan.pages[1]!.keptText).not.toContain("10/04 10/04 SOME OTHER SHOP 9.99");
+  });
+
+  it("does not flag text on a kept charge's own line, such as the points it earned", () => {
+    const kept = [{ descriptor: "AMZN", amountCents: 5428 }];
+    const out = ["Chase\nTrans Date Description Amount\n09/18 AMZN Mktp 54.28   Points earned 54.28 1,204.00"];
+    expect(checkRedactionOutput(out, kept, { headerKept: true }).leaks).toEqual([]);
+    expect(checkRedactionOutput([out[0] + "\nRewards balance 1,204.00"], kept, { headerKept: true }).leaks.length).toBe(1);
+  });
+
+  it("checks every page's heading, not only the first page's", () => {
+    const kept = [{ descriptor: "AMZN", amountCents: 5428 }];
+    const out = ["Chase\nTrans Date Description Amount\n09/18 AMZN 54.28", "Chase  Account 4000 1234 5678 9012\nNew Balance 1,812.44\nTrans Date Description Amount\n09/19 STAR 54.28"];
+    expect(checkRedactionOutput(out, kept, { headerKept: true }).leaks).toEqual([]);
+  });
+
+  it("keeps the whole heading area down to the statement period, and nothing below it (points, autopay notes)", () => {
+    const page = ["Billing Inquiries and Customer Service", "Citi Double Cash Card", "Member Since 2020. Account number ending in: 7859", "JULY STATEMENT", "Billing Period: 06/20/26-07/21/26", "145,955 as of 06/30/26", "deducted from your bank account on 08/14/2026. If", "Trans Date Post Date Description Amount", "09/18 09/19 AMZN Mktp US*2K4 Amzn.com/bill WA 54.28", ...Array.from({ length: 10 }, (_, i) => `Footer line ${i}`)];
+    const plan = planRedaction(layout([page]), { keepTransactionIds: new Set([id(/AMZN/)]) });
+    const lines = layout([page])[0]!;
+    const at = (re: RegExp) => lines.find((l) => re.test(l.text))!;
+    const covered = (l: { y0: number; y1: number }) => plan.pages[0]!.keep.some((r) => r.y0 <= l.y0 && r.y1 >= l.y1 && r.x0 <= 0 && r.x1 >= 600);
+    // The heading is kept across the full width (logo and card art are not text), down to the period line.
+    expect(covered(at(/Billing Inquiries/))).toBe(true);
+    expect(covered(at(/Billing Period/))).toBe(true);
+    expect(plan.pages[0]!.keptText).not.toContain("145,955 as of 06/30/26");
+    expect(plan.pages[0]!.keep.some((r) => r.y0 <= at(/145,955/).y0 && r.y1 >= at(/145,955/).y1)).toBe(false);
+    expect(plan.pages[0]!.keep.some((r) => r.y0 <= at(/deducted/).y0 && r.y1 >= at(/deducted/).y1)).toBe(false);
+  });
+
   it("knows when a saved copy no longer shows the linked charges", () => {
     const l = new Ledger(new MemoryEventStore(new MemoryBackend(), "dev"), new HlcClock("dev"), "t");
     l.set("document", "stmt", { filename: "S.pdf", contentKind: "statement", statement: { transactions: [] } as never });
