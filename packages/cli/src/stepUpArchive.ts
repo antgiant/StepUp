@@ -5,6 +5,9 @@ import {
   STEPUP_INDEX_FILE,
   STEPUP_REIMBURSEMENTS_DIR,
   STEPUP_SYNCED_FILE,
+  diffStepUp,
+  writeHistoryFile,
+  type HistoryChange,
   listYears,
   projectReimbursement,
   readStepUpIndex,
@@ -92,12 +95,18 @@ export async function archiveSearchResults(results: unknown[]): Promise<void> {
       // Every fresh copy is noted (a few bytes), so the app knows how current StepUp's side is even when nothing changed.
       await ws.storage.write(ws.driveId, folders.dir, STEPUP_SYNCED_FILE, JSON.stringify({ at: seenAt, reimbursements: list.length, changed: changed.length }));
       if (changed.length === 0 && existing) continue;
+      // What StepUp changed, for the year's history. The first time a year is read there is nothing to compare to.
+      const was = (existing?.index.reimbursements ?? []) as StepUpReimbursement[];
+      const history: HistoryChange[] = existing
+        ? diffStepUp(was, changed.map((x) => x.p), seenAt)
+        : [{ id: `stepup:${seenAt}:baseline`, at: seenAt, source: "stepup", actor: "StepUp", kind: "note", subject: { kind: "year", id: label, label }, summary: `Started following StepUp: ${list.length} reimbursement(s) for ${label}` }];
       await forEachLimited(changed, async (x) => {
         await ws.storage.write(ws.driveId, folders.reimbursements, reimbursementFileName(x.p), JSON.stringify({ seenAt, result: x.raw }));
         entries.set(x.p.id, { ...x.p, hash: x.hash });
       });
       const index: StepUpIndex = { v: 1, year: label, savedAt: seenAt, reimbursements: [...entries.values()].sort((a, b) => a.number - b.number) };
       await ws.storage.write(ws.driveId, folders.dir, STEPUP_INDEX_FILE, JSON.stringify(index));
+      await writeHistoryFile(ws.storage, ws.driveId, year.folderId, "stepup", history, seenAt).catch(() => undefined);
       console.log(`[archive] ${label}: kept ${changed.length} changed reimbursement(s) of ${list.length} listed (${entries.size} on file).`);
     }
     await dropSingleFileArchive(ws);
