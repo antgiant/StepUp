@@ -11,6 +11,15 @@ export async function sha256Hex(blob: Blob): Promise<string> {
 const MAX_EDGE = 2400;
 
 /**
+ * The scale that keeps a picture within what a MAX_EDGE-sized photo holds (about 3:4, so 0.75 x edge squared pixels).
+ * Judging by area rather than by the long edge matters for a long screenshot: shrinking 1170 x 8000 to 2400 tall would
+ * leave it 350 pixels wide, with text too small for anyone or anything to read.
+ */
+export function fitScale(width: number, height: number, edge: number): number {
+  return Math.min(1, Math.sqrt((0.75 * edge * edge) / (width * height)));
+}
+
+/**
  * Phone photos are often several MB. Shrinks big photos to a still-readable JPEG before uploading; anything that
  * is not a large decodable image (PDFs, small images, formats the browser cannot draw) is returned unchanged.
  */
@@ -18,7 +27,7 @@ export async function prepareUpload(file: File): Promise<{ name: string; body: B
   if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 1_000_000) return { name: file.name, body: file };
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const scale = fitScale(bitmap.width, bitmap.height, MAX_EDGE);
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bitmap.width * scale);
     canvas.height = Math.round(bitmap.height * scale);

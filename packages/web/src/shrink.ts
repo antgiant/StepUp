@@ -1,5 +1,6 @@
 import { buildImagePdf } from "@step-up/shared/web";
 import { renderPdfPagesJpeg } from "./pdfText.js";
+import { fitScale } from "./files.js";
 
 export interface Shrunk {
   bytes: Uint8Array;
@@ -28,9 +29,8 @@ export async function shrinkToLimit(blob: Blob, kind: "pdf" | "image", limitByte
     throw new Error("This PDF is too large to shrink under the limit; split it into parts or scan it at a lower resolution.");
   }
   const bitmap = await createImageBitmap(blob);
-  const long = Math.max(bitmap.width, bitmap.height);
   for (const [edge, quality] of IMAGE_STEPS) {
-    const scale = Math.min(1, edge / long);
+    const scale = fitScale(bitmap.width, bitmap.height, edge);
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bitmap.width * scale);
     canvas.height = Math.round(bitmap.height * scale);
