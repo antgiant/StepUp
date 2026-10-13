@@ -1800,10 +1800,12 @@ function purchaseView(id: string, draft = false): string {
     ? `<section class="filing-banner"><div class="filing-head"><strong>${esc(filers.join(" and "))} ${filers.length > 1 ? "are" : "is"} filing this purchase with StepUp right now</strong><button id="refresh-now">Refresh</button></div>
         <p class="note">Wait for the run to finish before changing it; edits made now may not be picked up. This page refreshes by itself every minute.</p></section>`
     : "";
+  // A receipt that does not itself show payment is fine once a statement charge is linked to this purchase.
+  const provedByStatement = Object.values(state.additionalDocs).some((a) => a.ownerKind === "purchase" && a.ownerId === id && a.kind === "payment-proof" && a.transactionId);
   const tooBig = (doc?.sizeBytes ?? 0) > MAX_PROOF_BYTES;
   const receipt = {
     tools: doc?.driveItemId && workspace ? `<button data-read-receipt="${esc(id)}">Read receipt</button>${tooBig ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}` : "",
-    notes: `${tooBig ? `<p class="note warn">This receipt is ${((doc?.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}`,
+    notes: `${tooBig ? `<p class="note warn">This receipt is ${((doc?.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : (provedByStatement ? "" : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`)) : ""}`,
   };
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
