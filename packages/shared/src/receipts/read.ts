@@ -74,14 +74,28 @@ function readPayment(lines: string[], text: string): { evidence?: PaymentEvidenc
 /** Mail services and the like: they show up on a printed email (the sender's address, the page header) but are never who was paid. */
 const NOT_A_VENDOR = /^(www|mail|email|noreply|gmail|googlemail|google|yahoo|outlook|hotmail|live|msn|icloud|me|aol|proton|protonmail|comcast|verizon|att)$/i;
 
+/** "©1997-2026 Audible, Inc." at the foot of an email: who the message is from, which a greeting at the top can hide. */
+const COPYRIGHT = /(?:©|\(c\)|copyright)\s*\d{4}(?:\s*[-–]\s*\d{4})?\s+([A-Z][A-Za-z0-9&' -]{1,40}?)(?:,?\s+(?:Inc|LLC|L\.L\.C|Ltd|Corp|Co|Company)\b|,|\.\s|\s+All rights|$)/;
+
+/** A line that greets the reader ("Hi Travis,") or is the name under a greeting ("Your next listen is ready,\nTravis"). */
+function isGreeting(lines: string[], i: number): boolean {
+  const here = lines[i]!;
+  const before = lines[i - 1];
+  return /^(hi|hello|hey|dear|welcome)\b/i.test(here) || (before !== undefined && /,$/.test(before) && !/\s/.test(here) && !/^(hi|hello|hey|dear|welcome)\b/i.test(before));
+}
+
 function readVendor(lines: string[], text: string): string | undefined {
   const head = lines.slice(0, 10).join("\n");
   for (const m of head.matchAll(/(?<![\w.-])(?:[a-z0-9-]+\.)*([a-z0-9][a-z0-9-]{2,})\.(?:com|org|net|edu)\b/gi)) {
     if (NOT_A_VENDOR.test(m[1]!)) continue;
     return m[1]![0]!.toUpperCase() + m[1]!.slice(1).toLowerCase();
   }
-  const candidate = lines.slice(0, 6).find((l) => /^[A-Z][A-Za-z]{2}/.test(l) && l.length <= 40 && !/receipt|invoice|order|page|thank|date|total|tax|details|transaction|statement|summary|confirmation|account|billed|your |\d{3}|^[^A-Za-z]/i.test(l));
-  return candidate && text ? candidate : undefined;
+  for (const line of lines) {
+    const owner = COPYRIGHT.exec(line)?.[1]?.trim();
+    if (owner) return owner;
+  }
+  const at = lines.slice(0, 6).findIndex((l, i) => /^[A-Z][A-Za-z]{2}/.test(l) && l.length <= 40 && !isGreeting(lines, i) && !/receipt|invoice|order|page|thank|date|total|tax|details|transaction|statement|summary|confirmation|account|billed|your |\d{3}|^[^A-Za-z]/i.test(l));
+  return at >= 0 && text ? lines[at] : undefined;
 }
 
 /**

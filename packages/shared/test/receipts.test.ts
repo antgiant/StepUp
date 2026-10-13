@@ -103,4 +103,11 @@ describe("OCR confidence", () => {
     expect(parseStatementText(text).transactions[0]!.confidence).toBeGreaterThan(0.9);
     expect(parseStatementText(text, { confidencePenalty: 0.2 }).transactions[0]!.confidence).toBeLessThan(0.8);
   });
+
+  it("does not take the recipient's name under a greeting for the vendor", () => {
+    const audible = "Your next listen is ready,\nTravis\nOrder number: D01-3571323-5926648\nTitle Amount\nThe First Fowler $9.44\nSummary\nSubtotal: $23.18\nTotal paid: $3.18\n©1997-2026 Audible, Inc. Audible and the Audible logo are trademarks of Audible, Inc, or its affiliates.";
+    expect(readReceiptText(audible).vendor).toBe("Audible");
+    expect(readReceiptText("Thanks for your order,\nTravis\nTotal $5.00").vendor).not.toBe("Travis");
+    expect(readReceiptText("Hi Travis,\nAcme Tutoring\nTotal $5.00").vendor).toBe("Acme Tutoring");
+  });
 });
