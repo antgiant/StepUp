@@ -1596,12 +1596,12 @@ function itemForm(purchaseId: string, next: ReturnType<typeof suggestNextItem>):
   const categories = reference() ? [] : [...new Set(Object.values(state.items).map((i) => categoryLabel(i)).filter(Boolean))];
   return `<form id="item-form" class="grid" data-id="${esc(purchaseId)}">
     <label>Child<select name="childId" required>${children.map((c) => `<option value="${esc(c.id)}"${c.id === childId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-    <label>Description<input name="description" required value="${text("description", current?.description)}"></label>
+    <label class="wide">Description<input name="description" required value="${text("description", current?.description)}"></label>
     <label>Amount<input name="amount" inputmode="decimal" required value="${esc(current ? money(current.amountCents) : (draft["amount"] ?? money(next.amountCents)))}"></label>
-    <label>Category${categoryPicker(categoryText)}</label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
-    <label>Benefit message<input name="benefitMessage" required value="${text("benefitMessage", current?.benefitMessage)}"></label>
+    <label class="wide">Category${categoryPicker(categoryText)}</label><datalist id="cats">${categories.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <label class="wide">Benefit message<input name="benefitMessage" required value="${text("benefitMessage", current?.benefitMessage)}"></label>
     <label data-service-date${needsDate || !reference() ? "" : " hidden"}>Service date<input name="serviceDate" type="date" value="${text("serviceDate", current?.serviceDate)}"></label>
-    <label>Service provider${providerBox(current ? current.serviceProvider : (draft["serviceProvider"] ?? next.serviceProvider), categoryText)}</label>
+    <label class="wide">Service provider${providerBox(current ? current.serviceProvider : (draft["serviceProvider"] ?? next.serviceProvider), categoryText)}</label>
     ${saveIndicator("item-save-state")}</form>`;
 }
 
@@ -1759,24 +1759,27 @@ function purchaseView(id: string, draft = false): string {
   };
   const rows = items.map((i) => {
     const ev = evaluateItem(state, i.id, ctx());
-    return `<tr><td>${esc(state.children[i.childId ?? ""]?.name ?? "?")}</td><td>${esc(i.description)}</td><td class="num">${formatCents(i.amountCents)}</td>
-      <td class="num">${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " <small>est.</small>" : ""}</td><td>${esc(categoryLabel(i))}</td>
-      <td>${statusCell(i, ev)}</td>
-      <td>${markButton(i, ev)}<button data-dup="${esc(i.id)}">Duplicate</button></td></tr>`;
+    const who = state.children[i.childId ?? ""]?.name ?? "?";
+    const tax = i.taxShippingCents ? ` &middot; tax/shipping ${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " (est.)" : ""}` : "";
+    return `<li class="item-card"><div class="item-top"><strong>${esc(i.description)}</strong><span class="amt">${formatCents(i.amountCents)}</span></div>
+      <div class="item-meta">${esc(who)} &middot; ${esc(categoryLabel(i)) || "<span class=\"warn\">no category</span>"}${tax}</div>
+      <div class="item-status">${statusCell(i, ev)}</div>
+      <div class="actions">${markButton(i, ev)}<button data-dup="${esc(i.id)}">Duplicate</button></div></li>`;
   });
   if (draft) {
     return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>New purchase</h2>
   <p class="note">This purchase is saved as soon as you fill in a detail and move to the next field.</p>
+  <section class="panel"><h3 class="panel-title"><span class="step">1</span>Purchase details</h3>
   <form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
-    <label>Name<input name="name" placeholder="e.g. Math curriculum"></label>
-    <label>Vendor${storeBox("vendor", undefined)}</label>
+    <label class="wide">Name<input name="name" placeholder="e.g. Math curriculum"></label>
+    <label class="wide">Vendor${storeBox("vendor", undefined)}</label>
     <label>Date<input name="date" type="date"></label>
     <label>Invoice #<input name="invoiceNo"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal"></label>
-    ${saveIndicator()}</form>
-  ${documentation(id, undefined, "top", true)}${documentation(id, undefined, "bottom", true)}`;
+    ${saveIndicator()}</form></section>
+  ${documentation(id, undefined, "bottom", true)}`;
   }
   const categories = reference()
     ? reference()!.choices.map((c) => c.label)
@@ -1786,24 +1789,25 @@ function purchaseView(id: string, draft = false): string {
     ? `<section class="filing-banner"><div class="filing-head"><strong>${esc(filers.join(" and "))} ${filers.length > 1 ? "are" : "is"} filing this purchase with StepUp right now</strong><button id="refresh-now">Refresh</button></div>
         <p class="note">Wait for the run to finish before changing it; edits made now may not be picked up. This page refreshes by itself every minute.</p></section>`
     : "";
+  const receiptExtras = `${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}}
+  ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}}`;
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
-  <h2>${doc ? `Receipt: ${esc(doc.filename)}` : "Purchase (no file yet)"}</h2>
-  ${doc?.driveItemId && workspace ? `<p class="row"><button data-preview="${esc(doc.id)}">Preview receipt</button><button data-read-receipt="${esc(id)}">Read receipt</button>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}</p>${(doc.sizeBytes ?? 0) > MAX_PROOF_BYTES ? `<p class="note warn">This receipt is ${((doc.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}` : ""}
-  ${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`) : ""}
+  <div class="page-title"><h2>${esc(purchaseName(p))}</h2><p class="note">${doc ? `Receipt file: ${esc(doc.filename)}` : "No receipt file yet"}</p></div>
+  <section class="panel"><h3 class="panel-title"><span class="step">1</span>Purchase details</h3>
   <form id="purchase-form" class="grid" data-id="${esc(id)}">
-    <label>Name<input name="name" value="${esc(p.name)}" placeholder="${esc(purchaseName({ ...p, name: undefined }))}"></label>
-    <label>Vendor${storeBox("vendor", p.vendor)}</label>
+    <label class="wide">Name<input name="name" value="${esc(p.name)}" placeholder="${esc(purchaseName({ ...p, name: undefined }))}"></label>
+    <label class="wide">Vendor${storeBox("vendor", p.vendor)}</label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
     <label>Invoice #<input name="invoiceNo" value="${esc(p.invoiceNo)}"></label>
     <label>Receipt total<input name="orderTotal" inputmode="decimal" value="${money(p.orderTotalCents)}"></label>
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal" value="${money(p.taxShippingTotalCents)}"></label>
-    ${saveIndicator()}</form>
-  ${documentation(id, p.receiptDocumentId, "top")}
-  <h3>Items${remaining !== undefined ? ` <small>(${formatCents(remaining)} left to itemize)</small>` : ""}</h3>
-  ${items.length ? `<table><thead><tr><th>Child</th><th>Description</th><th>Amount</th><th>Tax/ship</th><th>Category</th><th>Status</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>` : "<p>No items yet.</p>"}
+    ${saveIndicator()}</form></section>
+  ${documentation(id, p.receiptDocumentId, "bottom", false, receiptExtras)}
+  <section class="panel"><h3 class="panel-title"><span class="step">3</span>Items${remaining !== undefined ? ` <small>${formatCents(remaining)} left to itemize</small>` : ""}</h3>
+  ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">No items yet. Add the first one below.</p>`}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
-  <h3>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Item" : "Add an item"}</h3>
+  <h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Item" : "Add an item"}</h4>
   ${children.length === 0 ? `<p class="warn">Add a child on the list page first.</p>` : ""}
   ${itemForm(id, next)}
   <p><button type="button" id="add-another"${itemEdit?.purchaseId === id && itemEdit.itemId ? "" : " disabled"}>Add another</button></p>
@@ -1811,8 +1815,8 @@ function purchaseView(id: string, draft = false): string {
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
       <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
     <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}
-  ${documentation(id, p.receiptDocumentId, "bottom")}
-  <hr><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p>`;
+  </section>
+  <section class="panel danger-zone"><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p></section>`;
 }
 
 /**
@@ -1820,7 +1824,7 @@ function purchaseView(id: string, draft = false): string {
  * paid for it; additional documentation is anything else that backs the purchase up (a card statement, an order email,
  * a letter). Each part has its own ways to add a file.
  */
-function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false): string {
+function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false, receiptExtras = ""): string {
   const state = ledger.state;
   const online = Boolean(workspace);
   const nameOf = (id: string | undefined) => {
@@ -1874,10 +1878,9 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ${others.length ? `<ul class="queue">${listOf(others)}</ul>` : `<p><small>None yet.</small></p>`}
     <p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
-  // Until there is a receipt, adding one comes first (above the items). After that, its details stay at the top of the
-  // screen and the controls to replace or move it sit down here with the rest of the documentation.
-  if (part === "top") return receiptId ? "" : `<section><h3>Receipt</h3>${receiptPart.replace("<h4>Receipt</h4>", "")}</section>`;
-  return `<section><h3>Documentation</h3>${receiptId ? receiptPart : ""}${proofPart}${extraPart}
+  // One "Documents" section: the receipt first, then proof of payment, then anything else. (`top` is no longer used.)
+  if (part === "top") return "";
+  return `<section class="panel"><h3 class="panel-title"><span class="step">2</span>Documents</h3>${receiptPart}${receiptId && !replacing ? receiptExtras : ""}${proofPart}${extraPart}
     ${online ? `<h4>Not for a purchase yet</h4><p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits in Unattached files on the list page until you attach it.</small></p>` : ""}</section>`;
 }
 
