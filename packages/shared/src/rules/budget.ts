@@ -21,7 +21,7 @@ export type BudgetStage = "paid" | "approved" | "pending" | "unfiled";
 /** Where an item sits against the award, and how many cents it counts for there. Denied (filed, not pending) items sit nowhere. */
 export function budgetStage(item: LedgerState["items"][string]): { stage: BudgetStage; cents: number } | undefined {
   const status = item.stepUpStatus ?? (item.submissionId ? "Submitted" : "");
-  if (status === "Paid") return { stage: "paid", cents: item.paidCents ?? item.approvedCents ?? requestedCents(item) };
+  if (status === "Paid" || status === "Paid (Adjusted)") return { stage: "paid", cents: item.paidCents ?? item.approvedCents ?? requestedCents(item) };
   if (APPROVED.has(status)) return { stage: "approved", cents: item.approvedCents ?? requestedCents(item) };
   if (PENDING.has(status)) return { stage: "pending", cents: requestedCents(item) };
   if (!isFiled(item)) return { stage: "unfiled", cents: requestedCents(item) };

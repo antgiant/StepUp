@@ -24,19 +24,20 @@ export function stepUpStatusOf(line: Pick<StepUpLine, "status" | "appealed">): s
 
 /**
  * What StepUp's line says about an item: status, amounts, message. An item StepUp holds at an amount that is neither the
- * item's amount nor its amount with tax and shipping is Adjusted, at whatever stage it is (denied items keep their status).
+ * item's amount nor its amount with tax and shipping is Adjusted ("Paid (Adjusted)" once paid), at whatever stage it is
+ * (denied items keep their status).
  */
 export function stepUpItemFields(line: StepUpLine, item?: Pick<LineItem, "amountCents" | "taxShippingCents">): Record<string, Json> {
   let status = stepUpStatusOf(line);
   const out: Record<string, Json> = {};
   if (status && status !== "Denied (Initial)" && status !== "Denied (Final)" && item && item.amountCents !== undefined) {
     const requested = (item.amountCents ?? 0) + (item.taxShippingCents ?? 0);
-    if (line.amountCents !== item.amountCents && line.amountCents !== requested) status = "Adjusted";
+    if (line.amountCents !== item.amountCents && line.amountCents !== requested) status = status === "Paid" ? "Paid (Adjusted)" : "Adjusted";
   }
   out["stepUpAmountCents"] = line.amountCents;
   if (status) out["stepUpStatus"] = status;
   if (status === "Approved" || status === "Adjusted") out["approvedCents"] = line.amountCents;
-  if (status === "Paid") out["paidCents"] = line.amountCents;
+  if (status === "Paid" || status === "Paid (Adjusted)") out["paidCents"] = line.amountCents;
   const said = [line.reason, line.comment && line.comment !== line.reason ? line.comment : ""].filter(Boolean).join(": ");
   if (said) out["stepUpMessage"] = said;
   return out;

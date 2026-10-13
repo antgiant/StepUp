@@ -37,12 +37,12 @@ describe("StepUp's list laid over a ledger year", () => {
     expect(l.state.items["i1"]?.stepUpStatus).toBe("Submitted");
   });
 
-  it("calls a payment of another amount Adjusted, and nothing is flushed for StepUp's events", async () => {
+  it("calls a payment of another amount Paid (Adjusted), and nothing is flushed for StepUp's events", async () => {
     const l = ledgerWithSubmittedItem(1_000_000);
     const r = projectReimbursement({ Id: "g", SequenceNumber: 7, SchoolYear: "2026-2027", LineItems: [{ LineItemNumber: "7-1", ExternalStatus: "Paid", ItemAmount: 8.5 }] })!;
     l.setOverlay((state) => stepUpOverlayEvents(state, [r], 2_000_000));
     l.loadKnown([]);
-    expect(l.state.items["i1"]).toMatchObject({ stepUpStatus: "Adjusted", approvedCents: 850 });
+    expect(l.state.items["i1"]).toMatchObject({ stepUpStatus: "Paid (Adjusted)", paidCents: 850 });
     expect(l.unflushedCount).toBe(2); // only the ledger's own
   });
 

@@ -15,7 +15,7 @@ import { stepUpItemFields, stepUpStatusOf } from "../stepup/overlay.js";
 const IMPORT_WALL = 1_600_000_000_000;
 const IMPORT_CLIENT = "legacy-import";
 const RECEIPT_KEYWORDS = ["invoice", "order", "receipt"];
-const STEPUP_STATUSES = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Appealed", "Denied (Initial)", "Denied (Final)"]);
+const STEPUP_STATUSES = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Paid (Adjusted)", "Appealed", "Denied (Initial)", "Denied (Final)"]);
 const UNFILED_READY = "Unfiled (Ready to Submit)";
 const UNFILED_MISSING = "Unfiled (Missing Things)";
 
@@ -401,7 +401,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
         // In a read-only view the sheet is the authority, so its status is shown exactly as written.
         statusOverride: viewing && status ? status : statusOverride,
         approvedCents: stepUpStatus === "Approved" || stepUpStatus === "Adjusted" ? reimbursed : undefined,
-        paidCents: stepUpStatus === "Paid" ? reimbursed : undefined,
+        paidCents: stepUpStatus === "Paid" || stepUpStatus === "Paid (Adjusted)" ? reimbursed : undefined,
         notes,
       }),
       "legacy.item"

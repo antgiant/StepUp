@@ -94,7 +94,7 @@ export function mapStepUpStatus(externalStatus: string, appealed: boolean): stri
 /**
  * Brings submitted items up to date from StepUp's reimbursements list: matches `{ReimbursementID}-{LineNumber}`,
  * sets the status, and records the paid/approved amount once it is final. Approved/Paid with an amount that is neither
- * the item's amount nor its requested total is "Adjusted" (an unexplained reduction). Returns how many items changed.
+ * the item's amount nor its requested total is "Adjusted" ("Paid (Adjusted)" once paid: an unexplained difference). Returns how many items changed.
  */
 export function applyStepUpStatuses(ledger: Ledger, apiItems: ApiLineItem[]): number {
   const byNumber = new Map(apiItems.filter((a) => a.LineItemNumber).map((a) => [a.LineItemNumber, a]));
@@ -110,7 +110,7 @@ export function applyStepUpStatuses(ledger: Ledger, apiItems: ApiLineItem[]): nu
     const amountCents = Number.isFinite(api.ItemAmount) ? Math.round(api.ItemAmount * 100) : undefined;
     const requested = (item.amountCents ?? 0) + (item.taxShippingCents ?? 0);
     // An item StepUp holds at an amount other than the ledger's is flagged as adjusted, whatever stage it is at.
-    if (["Submitted", "Approved", "Paid", "Appealed"].includes(status) && amountCents !== undefined && item.amountCents !== undefined && amountCents !== item.amountCents && amountCents !== requested) status = "Adjusted";
+    if (["Submitted", "Approved", "Paid", "Appealed"].includes(status) && amountCents !== undefined && item.amountCents !== undefined && amountCents !== item.amountCents && amountCents !== requested) status = status === "Paid" ? "Paid (Adjusted)" : "Adjusted";
 
     if (api.ReimbursementGuid && GUID.test(api.ReimbursementGuid) && sub.guid?.toLowerCase() !== api.ReimbursementGuid.toLowerCase()) {
       ledger.set("submission", sub.id, { guid: api.ReimbursementGuid.toLowerCase() }, { label: "submission.guidObserved" });
@@ -122,7 +122,7 @@ export function applyStepUpStatuses(ledger: Ledger, apiItems: ApiLineItem[]): nu
     if (item.stepUpStatus !== status) fields["stepUpStatus"] = status;
     if (amountCents !== undefined && item.stepUpAmountCents !== amountCents) fields["stepUpAmountCents"] = amountCents;
     if (amountCents !== undefined && (status === "Approved" || status === "Adjusted") && item.approvedCents !== amountCents) fields["approvedCents"] = amountCents;
-    if (amountCents !== undefined && status === "Paid") {
+    if (amountCents !== undefined && (status === "Paid" || status === "Paid (Adjusted)")) {
       if (item.paidCents !== amountCents) fields["paidCents"] = amountCents;
       if (item.approvedCents !== amountCents) fields["approvedCents"] = amountCents;
     }

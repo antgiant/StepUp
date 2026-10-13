@@ -115,6 +115,13 @@ describe("StepUp status sync", () => {
     expect(applyStepUpStatuses(l, [{ LineItemNumber: "R-1001-1", ExternalStatus: "Paid", Appealed: false, ItemAmount: 16.05 }])).toBe(0);
   });
 
+  it("labels a payment of another amount Paid (Adjusted), and counts it as paid", () => {
+    const { l, i1, i2 } = setup();
+    recordSubmitted(l, [i1, i2], { reimbursementId: "R-1002", submittedAt: "2026-10-21" });
+    applyStepUpStatuses(l, [{ LineItemNumber: "R-1002-2", ExternalStatus: "Paid", Appealed: false, ItemAmount: 12 }]);
+    expect(l.state.items[i2]).toMatchObject({ stepUpStatus: "Paid (Adjusted)", paidCents: 1200 });
+  });
+
   it("ignores items that were never submitted and lines it does not know", () => {
     const { l } = setup();
     expect(applyStepUpStatuses(l, [{ LineItemNumber: "R-9-1", ExternalStatus: "Paid", Appealed: false, ItemAmount: 1 }])).toBe(0);

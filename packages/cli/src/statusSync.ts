@@ -154,11 +154,11 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
       const total = Number.parseFloat(String(values[reimTotalIdx] ?? "NaN"));
       const matchesAmount = Math.abs(apiItem.ItemAmount - amount) < 0.01;
       const matchesTotal = Math.abs(apiItem.ItemAmount - total) < 0.01;
-      if (!matchesAmount && !matchesTotal) mappedStatus = "Adjusted";
+      if (!matchesAmount && !matchesTotal) mappedStatus = mappedStatus === "Paid" ? "Paid (Adjusted)" : "Adjusted";
     }
 
     // Statuses the app itself defines are added to the sheet's list when it lacks them (it only warns for anything else).
-    if (!validStatuses.has(mappedStatus) && (mappedStatus === "Appealed" || mappedStatus === "Paid")) {
+    if (!validStatuses.has(mappedStatus) && (mappedStatus === "Appealed" || mappedStatus === "Paid" || mappedStatus === "Paid (Adjusted)")) {
       if (!process.argv.includes("--dry-run")) await appendTableRows(excelRef, STATUSES_TABLE, [[mappedStatus]]);
       console.log(`[status sync] Added "${mappedStatus}" to ${STATUSES_TABLE}.`);
       validStatuses.add(mappedStatus);
@@ -180,7 +180,7 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
     // Only record an actual reimbursed amount once the item is in a finalized, paid-out state —
     // for "Submitted" (still pending) the API's ItemAmount just reflects the request, not a
     // real disbursement, and "Denied" items were never paid at all.
-    const isFinalizedAmount = mappedStatus === "Approved" || mappedStatus === "Paid" || mappedStatus === "Adjusted";
+    const isFinalizedAmount = mappedStatus === "Approved" || mappedStatus === "Paid" || mappedStatus === "Paid (Adjusted)" || mappedStatus === "Adjusted";
     if (isFinalizedAmount && Number.isFinite(apiItem.ItemAmount)) {
       const currentReimbursedAmount = String(values[reimbursedAmountIdx] ?? "").trim();
       if (currentReimbursedAmount !== String(apiItem.ItemAmount)) changes["Reimbursed Amount"] = apiItem.ItemAmount;

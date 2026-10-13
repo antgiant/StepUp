@@ -21,6 +21,7 @@ const STATUS_FILL: Record<string, string> = {
   Submitted: "FFDDEBF7",
   Approved: "FFC6E0B4",
   Adjusted: "FFFCE4D6",
+  "Paid (Adjusted)": "FFC9D9B3",
   Paid: "FFA9D08E",
   Appealed: "FFE4DFEC",
   "Denied (Initial)": "FFF8CBAD",
