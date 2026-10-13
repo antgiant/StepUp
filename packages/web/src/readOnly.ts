@@ -1,13 +1,13 @@
 /**
  * The read-only guarantee for a year viewed from Excel. The Excel year is drawn by the same screens as a ledger year, so
  * it looks the same; this is what makes it read-only. Whatever a screen draws, only looking around is kept: moving
- * between screens, previewing a file, filtering and pivoting, and refreshing or downloading what was read. Every other
+ * between screens, previewing a file, filtering and pivoting, and refreshing or downloading what was read, and choosing which file is the receipt when the workbook cannot say (the one thing the Excel view remembers, kept beside the workbook). Every other
  * button, file chooser and form field is removed or disabled, so a control added to a ledger screen later is read-only in
  * the Excel view without anyone having to remember. To let a new viewing control through, add it to READ_ONLY_KEEP.
  */
 export const READ_ONLY_KEEP = [
   "[data-go]", "[data-open]", "[data-statement]", "[data-preview]", "[data-preview-proof]", "[data-pcell]", "[data-pivot-reset]", "[data-drill-clear]",
-  "[data-clear='legacy-search']", "#legacy-refresh", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
+  "[data-clear='legacy-search']", "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
 ].join(",");
 
 export function enforceReadOnly(scope: ParentNode): void {

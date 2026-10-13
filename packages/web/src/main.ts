@@ -107,7 +107,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
-import { UNCLEAR_FILTER, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -260,6 +260,25 @@ const readOnly = (): boolean => Boolean(workspace?.legacy);
 function statusLabel(i: (typeof ledger.state.items)[string], ev?: ReturnType<typeof evaluateItem>): string {
   if (readOnly()) return i.statusOverride ?? i.stepUpStatus ?? (i.submissionId ? "Submitted" : "(no status)");
   return displayStatus(i, ev ?? evaluateItem(ledger.state, i.id, ctx()), ctx(), ledger.state.settings["year"]?.submissionDeadline);
+}
+
+/**
+ * For a year Excel owns, the one thing a person can change: which file is the receipt when the workbook's rows list
+ * several and do not say. The answer is kept beside the workbook; nothing in Excel changes.
+ */
+function receiptChoice(purchaseId: string): string {
+  const l = workspace?.legacy;
+  if (!l) return "";
+  const state = l.ledger.state;
+  const unclear = l.year.unclear.find((u) => u.purchaseId === purchaseId);
+  if (unclear) {
+    const byName = (name: string) => Object.values(state.documents).find((d) => d.filename === name);
+    return `<section><h4>Which file is the receipt?</h4>
+      <p class="note">The workbook lists these files on this purchase's rows and none is clearly the receipt. Pick the one that is. This is remembered beside the workbook; nothing in Excel changes.</p>
+      <ul class="queue">${unclear.candidates.map((name, n) => `<li class="q"><span>${esc(name)}</span><span class="actions">${byName(name)?.driveItemId ? `<button data-preview="${esc(byName(name)!.id)}">Preview</button>` : ""}<button data-legacy-pick="${esc(purchaseId)}" data-file-index="${n}">This is the receipt</button></span></li>`).join("")}</ul></section>`;
+  }
+  const picked = l.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && state.items[a.itemId]?.purchaseId === purchaseId);
+  return picked ? `<p class="note">You chose this file as the receipt. <button data-legacy-clear="${esc(purchaseId)}">Take my choice back</button></p>` : "";
 }
 
 /** Purchases whose workbook rows list several files without saying which is the receipt (a year Excel owns only). */
@@ -1918,9 +1937,9 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ? `<h4>Receipt</h4>
     <p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>
     ${state.documents[receiptId]?.driveItemId && online ? `<p class="row"><button class="primary" data-preview="${esc(receiptId)}">Preview</button></p>` : ""}
-    ${receipt.notes}
+    ${receipt.notes}${ro ? receiptChoice(purchaseId) : ""}
     <details class="more"><summary>More receipt options</summary><p class="row"><button data-replace-receipt="${esc(purchaseId)}">Replace Receipt</button><button data-receipt-to-extra="${esc(purchaseId)}">Move to additional documentation</button>${receipt.tools}</p></details>`
-    : ro ? `<h4>Receipt</h4>${unclearReceipt(purchaseId) ? `<p class="note warn">The workbook lists several files on this purchase's rows and none is clearly the receipt. They are all shown under additional documentation.</p>` : `<p class="warn">The workbook names no receipt file for this purchase.</p>`}`
+    : ro ? `<h4>Receipt</h4>${unclearReceipt(purchaseId) ? receiptChoice(purchaseId) : `<p class="warn">The workbook names no receipt file for this purchase.</p>`}`
     : `<h4>Receipt</h4>
     <p class="note">The one document that shows what you bought and what it cost: an order confirmation, invoice or store receipt.${receiptId ? " Whatever you choose here replaces the current receipt, which goes back to your unattached files." : ""}</p>
     ${receiptId ? `<p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>` : `<p class="warn">No receipt yet.</p>`}
@@ -2516,7 +2535,7 @@ root.addEventListener("click", async (ev) => {
     return;
   }
   if (workspace?.legacy) {
-    // A year viewed from Excel: only looking around and the connection controls do anything.
+    // A year viewed from Excel: only looking around, picking a receipt, and the connection controls do anything.
     const legacy = workspace;
     if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); persist(); status = "Read the workbook again."; }, "Reading the Excel workbook…");
     else if (t.id === "legacy-download") {
@@ -2526,10 +2545,16 @@ root.addEventListener("click", async (ev) => {
         Object.assign(document.createElement("a"), { href: url, download: file.name }).click();
         setTimeout(() => URL.revokeObjectURL(url), 10_000);
       }, "Building the spreadsheet…");
+    } else if (d["legacyPick"] || d["legacyClear"]) {
+      const id = d["legacyPick"] ?? d["legacyClear"]!;
+      const un = legacy.legacy!.year.unclear.find((u) => u.purchaseId === id);
+      const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
+      const candidates = un?.candidates ?? picked?.candidates;
+      if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
     } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
       // fall through to the shared handlers below
     } else return;
-    if (t.id === "legacy-refresh" || t.id === "legacy-download") return;
+    if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
   }
   if (d["pivotReset"] !== undefined) { resetPivots(); render(); return; }
   if (d["drillClear"] !== undefined) { clearDrill(); render(); return; }

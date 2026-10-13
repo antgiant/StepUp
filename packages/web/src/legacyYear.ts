@@ -2,7 +2,8 @@
  * A school year that is still kept in (and edited in) its Excel workbook, shown read-only.
  *
  * Excel is the authority for such a year, so nothing here is stored as truth: every open reads the workbook again and
- * derives the same ledger shape the rest of the app understands, in memory. Nothing is ever written back.
+ * derives the same ledger shape the rest of the app understands, in memory. The only thing written is a small file beside
+ * the workbook that remembers which file a person said is the receipt when the sheet could not tell.
  *
  * It is drawn by the same screens as a ledger year (main.ts), so the two look alike; `enforceReadOnly` there strips every
  * control that changes anything. What lives here is only reading the workbook, the banner, and the pivot tables that
@@ -12,10 +13,13 @@ import {
   StorageEventStore,
   LegacyLedger,
   deriveLegacyYear,
+  choiceKey,
   formatCents,
+  itemsOf,
   readLegacyWorkbook,
   readReceiptChoices,
   readReceiptFiles,
+  writeReceiptChoices,
   requestedCents,
   effectiveDate,
   budgetStage,
@@ -119,6 +123,26 @@ export async function refreshLegacy(ws: OpenWorkspace): Promise<boolean> {
   l.year = derived;
   l.ledger.replace(derived.result.events);
   return true;
+}
+
+/** Remembers which file is a purchase's receipt (beside the workbook). `file` undefined takes the answer back. */
+export async function chooseReceipt(ws: OpenWorkspace, candidates: readonly string[], file: string | undefined, purchaseId?: string): Promise<string | undefined> {
+  const l = ws.legacy;
+  if (!l) return undefined;
+  const itemIds = purchaseId ? itemsOf(l.ledger.state, purchaseId).map((i) => i.id) : [];
+  const choices = { ...l.year.choices };
+  if (file) choices[choiceKey(candidates)] = file;
+  else delete choices[choiceKey(candidates)];
+  await writeReceiptChoices(storage, ws.driveId, ws.year.folderId, choices);
+  const derived = deriveLegacyYear(l.year.input, choices);
+  l.year = derived;
+  l.ledger.replace(derived.result.events);
+  // A purchase's id comes from its receipt file, so choosing (or un-choosing) one gives it a new id.
+  for (const id of itemIds) {
+    const moved = l.ledger.state.items[id]?.purchaseId;
+    if (moved) return moved;
+  }
+  return purchaseId;
 }
 
 // ---- screens (plain HTML strings, like the rest of the app) -----------------------------------------------------
