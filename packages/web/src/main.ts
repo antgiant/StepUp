@@ -27,6 +27,7 @@ import {
   effectiveDate,
   newId,
   reallocateTax,
+  clearTaxTotal,
   observeActivity,
   yearSummary,
   emlToText,
@@ -1603,6 +1604,7 @@ function itemForm(purchaseId: string, next: ReturnType<typeof suggestNextItem>):
     <label class="wide">Benefit message<input name="benefitMessage" required value="${text("benefitMessage", current?.benefitMessage)}"></label>
     <label data-service-date${needsDate || !reference() ? "" : " hidden"}>Service date<input name="serviceDate" type="date" value="${text("serviceDate", current?.serviceDate)}"></label>
     <label class="wide">Service provider${providerBox(current ? current.serviceProvider : (draft["serviceProvider"] ?? next.serviceProvider), categoryText)}</label>
+    <label class="check wide"><input type="checkbox" name="includeTax"${(current ? current.includeTax !== false : draft["includeTax"] !== "0") ? " checked" : ""}> Include a share of the receipt's tax/shipping</label>
     ${saveIndicator("item-save-state")}</form>`;
 }
 
@@ -1653,11 +1655,14 @@ async function autosavePurchaseNow(form: HTMLFormElement, focusNext?: string): P
   const tax = toCents(val(form, "taxTotal"));
   if (total !== undefined && total !== saved["orderTotalCents"]) fields["orderTotalCents"] = total;
   if (tax !== undefined && tax !== saved["taxShippingTotalCents"]) fields["taxShippingTotalCents"] = tax;
-  if (Object.keys(fields).length === 0) return;
+  // Blanking a tax total that was set means it is not known again: the items go back to estimates.
+  const clearTax = !draft && tax === undefined && saved["taxShippingTotalCents"] !== undefined && val(form, "taxTotal") === "";
+  if (Object.keys(fields).length === 0 && !clearTax) return;
   if (draft && Object.values(fields).every((v) => v === "")) return;
   showSaveState("saving");
-  ledger.set("purchase", id, fields, { label: draft ? "purchase.created" : "purchase.edited" });
+  if (Object.keys(fields).length) ledger.set("purchase", id, fields, { label: draft ? "purchase.created" : "purchase.edited" });
   if (fields["taxShippingTotalCents"] !== undefined) reallocateTax(ledger, id);
+  if (clearTax) clearTaxTotal(ledger, id);
   if (Object.values(ledger.state.documents).some((d) => d.statement)) relinkAllStatements(ledger);
   try {
     await ledger.flush();
@@ -1691,6 +1696,8 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
   const dateShown = !dateField?.hidden;
   const raw = Object.fromEntries(["childId", "description", "amount", "categoryId", "benefitMessage", "serviceDate", "serviceProvider"].map((k) => [k, val(form, k)]));
   if (!dateShown) raw["serviceDate"] = "";
+  const includeTax = (form.elements.namedItem("includeTax") as HTMLInputElement | null)?.checked !== false;
+  raw["includeTax"] = includeTax ? "1" : "0";
   if (!itemId) writeItemDraft(purchaseId, raw); // kept on this device even while the form is incomplete
   const amountCents = toCents(raw["amount"]!);
   // An item is saved as soon as it has a child, a description and an amount. The category, benefit message and the rest
@@ -1704,10 +1711,11 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
     benefitMessage: raw["benefitMessage"] ?? "",
     serviceDate: raw["serviceDate"] ?? "",
     serviceProvider: raw["serviceProvider"] ?? "",
+    includeTax,
   };
   const existing = itemId ? ledger.state.items[itemId] : undefined;
   if (existing) {
-    const same = existing.childId === input.childId && existing.description === input.description && existing.amountCents === input.amountCents && (existing.categoryId ?? "") === input.categoryId && (existing.benefitMessage ?? "") === input.benefitMessage && (existing.serviceDate ?? "") === input.serviceDate && (existing.serviceProvider ?? "") === input.serviceProvider;
+    const same = existing.childId === input.childId && existing.description === input.description && existing.amountCents === input.amountCents && (existing.categoryId ?? "") === input.categoryId && (existing.benefitMessage ?? "") === input.benefitMessage && (existing.serviceDate ?? "") === input.serviceDate && (existing.serviceProvider ?? "") === input.serviceProvider && (existing.includeTax !== false) === input.includeTax;
     if (same) return;
   }
   showSaveState("saving", "", "item-save-state");
@@ -1781,7 +1789,7 @@ function purchaseView(id: string, draft = false): string {
   const rows = items.map((i) => {
     const ev = evaluateItem(state, i.id, ctx());
     const who = state.children[i.childId ?? ""]?.name ?? "?";
-    const tax = i.taxShippingCents ? ` &middot; tax/shipping ${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " (est.)" : ""}` : "";
+    const tax = i.includeTax === false ? " &middot; no tax/shipping" : i.taxShippingCents ? ` &middot; tax/shipping ${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " (est.)" : ""}` : "";
     return `<li class="item-card"><div class="item-top"><strong>${esc(i.description)}</strong><span class="amt">${formatCents(i.amountCents)}</span></div>
       <div class="item-meta">${esc(who)} &middot; ${esc(categoryLabel(i)) || "<span class=\"warn\">no category</span>"}${tax}</div>
       <div class="item-status">${statusCell(i, ev)}</div>
@@ -2157,7 +2165,7 @@ root.addEventListener("change", (ev) => {
     else if (assistControl === "card" || assistControl === "child" || assistControl === "vendor" || assistControl === "method") assistView[assistControl] = t.value;
     return render();
   }
-  if (t.type === "date" || t.tagName === "SELECT") autosaveFor(t);
+  if (t.type === "date" || t.tagName === "SELECT" || t.name === "includeTax") autosaveFor(t);
 });
 root.addEventListener("focusin", (ev) => {
   const t = ev.target as HTMLInputElement;

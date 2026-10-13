@@ -45,6 +45,8 @@ export interface NewItemInput {
   itemUrl?: string;
   notes?: string;
   taxShippingCents?: number;
+  /** False when none of the receipt's tax/shipping belongs to this item (e.g. it was bought tax-free). Default true. */
+  includeTax?: boolean;
   /** Per-item overrides of what the purchase supplies (StepUp takes these per item). */
   date?: string;
   invoiceNo?: string;
@@ -58,9 +60,10 @@ export interface NewItemInput {
  */
 export function addItem(ledger: Ledger, purchaseId: string, input: NewItemInput): string {
   const id = newId("item");
-  const estimated = input.taxShippingCents === undefined && input.amountCents !== undefined;
-  const taxShippingCents = input.taxShippingCents ?? (input.amountCents !== undefined ? estimatedTax(ledger.state, purchaseId, input.amountCents) : undefined);
-  ledger.set("item", id, clean({ ...input, purchaseId, taxShippingCents, taxShippingEstimated: estimated || undefined }), { label: "item.created" });
+  const noTax = input.includeTax === false;
+  const estimated = !noTax && input.taxShippingCents === undefined && input.amountCents !== undefined;
+  const taxShippingCents = noTax ? 0 : input.taxShippingCents ?? (input.amountCents !== undefined ? estimatedTax(ledger.state, purchaseId, input.amountCents) : undefined);
+  ledger.set("item", id, clean({ ...input, includeTax: noTax ? false : undefined, purchaseId, taxShippingCents, taxShippingEstimated: estimated || undefined }), { label: "item.created" });
   return id;
 }
 
@@ -85,7 +88,15 @@ export function updateItem(ledger: Ledger, itemId: string, input: NewItemInput):
   if (!item) return;
   const fields: Record<string, Json> = {};
   for (const [k, v] of Object.entries(input)) if (v !== undefined) fields[k] = v as Json;
-  if (input.amountCents !== undefined && input.amountCents !== item.amountCents && item.taxShippingEstimated !== false && input.taxShippingCents === undefined) {
+  const wasIncluded = item.includeTax !== false;
+  if (input.includeTax !== undefined) fields["includeTax"] = input.includeTax;
+  if (input.includeTax === false && wasIncluded) {
+    fields["taxShippingCents"] = 0;
+    fields["taxShippingEstimated"] = false;
+  } else if (input.includeTax === true && !wasIncluded) {
+    fields["taxShippingCents"] = estimatedTax(ledger.state, item.purchaseId ?? "", input.amountCents ?? item.amountCents ?? 0, itemId);
+    fields["taxShippingEstimated"] = true;
+  } else if (input.amountCents !== undefined && input.amountCents !== item.amountCents && wasIncluded && item.taxShippingEstimated !== false && input.taxShippingCents === undefined) {
     fields["taxShippingCents"] = estimatedTax(ledger.state, item.purchaseId ?? "", input.amountCents, itemId);
     fields["taxShippingEstimated"] = true;
   }
@@ -160,8 +171,27 @@ export function reallocateTax(ledger: Ledger, purchaseId: string): void {
   const purchase: Purchase | undefined = ledger.state.purchases[purchaseId];
   if (purchase?.taxShippingTotalCents === undefined) return;
   const items = itemsOf(ledger.state, purchaseId);
-  const parts = allocateProportionally(purchase.taxShippingTotalCents, items.map((i) => i.amountCents ?? 0));
-  items.forEach((item, n) => ledger.set("item", item.id, { taxShippingCents: parts[n]!, taxShippingEstimated: false }, { label: "item.taxAllocated" }));
+  // Only the items that include tax share it; the rest carry none. A receipt tax of 0 simply gives every item 0.
+  const taxed = items.filter((i) => i.includeTax !== false);
+  const parts = allocateProportionally(purchase.taxShippingTotalCents, taxed.map((i) => i.amountCents ?? 0));
+  let n = 0;
+  for (const item of items) {
+    const cents = item.includeTax === false ? 0 : parts[n++]!;
+    ledger.set("item", item.id, { taxShippingCents: cents, taxShippingEstimated: false }, { label: "item.taxAllocated" });
+  }
+}
+
+/**
+ * The receipt's tax/shipping total was blanked: it is unknown again, so each item that includes tax goes back to an
+ * estimate (kept within the receipt total) and the ones that do not include it stay at none.
+ */
+export function clearTaxTotal(ledger: Ledger, purchaseId: string): void {
+  if (ledger.state.purchases[purchaseId]?.taxShippingTotalCents === undefined) return;
+  ledger.set("purchase", purchaseId, { taxShippingTotalCents: null }, { label: "purchase.edited" });
+  for (const item of itemsOf(ledger.state, purchaseId)) {
+    const none = item.includeTax === false;
+    ledger.set("item", item.id, { taxShippingCents: none ? 0 : estimatedTax(ledger.state, purchaseId, item.amountCents ?? 0, item.id), taxShippingEstimated: !none }, { label: "item.taxEstimated" });
+  }
 }
 
 /**

@@ -106,7 +106,8 @@ export function materialize(raw: RawState): LedgerState {
     for (const [id, rec] of Object.entries(recs)) {
       if (isDeleted(rec)) continue;
       const obj: Record<string, unknown> = { id };
-      for (const [name, cell] of Object.entries(rec.fields)) obj[name] = cell.v;
+      // A field set to null has been cleared: it reads as never set.
+      for (const [name, cell] of Object.entries(rec.fields)) if (cell.v !== null) obj[name] = cell.v;
       target[id] = obj;
     }
   }

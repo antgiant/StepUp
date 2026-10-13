@@ -67,6 +67,8 @@ export interface LineItem {
   taxShippingCents?: number;
   /** True when taxShippingCents is an estimate rather than a value read from the receipt. */
   taxShippingEstimated?: boolean;
+  /** False when this item carries no tax/shipping from the receipt (so none of the receipt's tax is spread onto it). Unset means included. */
+  includeTax?: boolean;
   benefitMessage?: string;
   itemUrl?: string;
   preAuthId?: string;
