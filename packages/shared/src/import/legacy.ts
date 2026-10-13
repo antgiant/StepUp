@@ -8,6 +8,7 @@ import { parseCategoryLevels } from "../rules.js";
 import { categoryIdForPath } from "../reference/categories.js";
 import { hashString } from "../util/hash.js";
 import { childIdForName } from "../entry/actions.js";
+import type { StepUpReimbursement } from "../stepup/archive.js";
 
 /** Imports are stamped well in the past so any later human edit in the app always wins over imported values. */
 const IMPORT_WALL = 1_600_000_000_000;
@@ -49,6 +50,12 @@ export interface LegacyInput {
    * to additional documentation until a person picks), and each statement file is kept as a document.
    */
   mode?: "migrate" | "view";
+  /**
+   * StepUp's own list of the year's reimbursements (see stepup/archive.ts). In a view it fills what the sheet left blank
+   * (status, what StepUp said, amounts, the reimbursement's id) and adds reimbursements the sheet never recorded; with no
+   * rows at all it is the whole year.
+   */
+  stepUp?: StepUpReimbursement[];
 }
 
 export interface ImportReport {
@@ -170,6 +177,9 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
 
   const purchases = new Map<string, { id: string; date?: string; invoice?: string; vendor?: string }>();
   const submissionsSeen = new Set<string>();
+  /** `<reimbursement>-<line>` of a row that named both, to the item it became; and a submission's purchase. */
+  const lineToItem = new Map<string, string>();
+  const purchaseOfSubmission = new Map<string, string>();
   const additionalSeen = new Set<string>();
   const legacyStatusById = new Map<string, string>();
   /** Categories the old automation found to require a Service Date (learned from StepUp at submission time). */
@@ -396,7 +406,94 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
       "legacy.item"
     );
     report.itemsImported += 1;
+    const lineNo = str(v["Line Number"]);
+    if (reimbursementId && lineNo) lineToItem.set(`${reimbursementId}-${lineNo}`, itemId);
+    if (submissionId) purchaseOfSubmission.set(submissionId, purchase.id);
   });
+
+  // ---- what StepUp itself lists for the year
+  if (input.stepUp?.length) {
+    const before = materialize(foldEvents(events));
+    const known = (l: StepUpReimbursement["lines"][number]) =>
+      l.status === "Denied" ? (l.appealed ? "Denied (Final)" : "Denied (Initial)") : ["Submitted", "Approved", "Paid", "Appealed"].includes(l.status) ? l.status : undefined;
+    const said = (l: StepUpReimbursement["lines"][number]) => [l.reason, l.comment && l.comment !== l.reason ? l.comment : ""].filter(Boolean).join(": ") || undefined;
+    for (const r of [...input.stepUp].sort((a, b) => a.number - b.number)) {
+      const sid = `sub-${r.number}`;
+      let purchaseId = purchaseOfSubmission.get(sid);
+      let childId = r.student ? childIds.get(r.student.trim().toLowerCase()) : undefined;
+      if (!childId && r.student) {
+        childId = childIdForName(r.student);
+        childIds.set(r.student.trim().toLowerCase(), childId);
+        emit("child", childId, clean({ name: r.student }), "stepup.child");
+      }
+      const toAdd: StepUpReimbursement["lines"] = [];
+      for (const l of r.lines) {
+        const itemId = lineToItem.get(l.number);
+        if (!itemId) {
+          toAdd.push(l);
+          continue;
+        }
+        // The sheet is the authority for what it says; StepUp fills what it left blank.
+        const have = before.items[itemId];
+        const status = known(l);
+        const fields: Record<string, Json | undefined> = {
+          stepUpMessage: said(l),
+          stepUpStatus: status && !have?.stepUpStatus && !have?.statusOverride ? status : undefined,
+          approvedCents: status === "Approved" && have?.approvedCents === undefined ? l.amountCents : undefined,
+          paidCents: status === "Paid" && have?.paidCents === undefined ? l.amountCents : undefined,
+        };
+        if (Object.values(fields).some((x) => x !== undefined)) emit("item", itemId, clean(fields), "stepup.item");
+      }
+      if (purchaseOfSubmission.has(sid)) emit("submission", sid, { guid: r.id }, "stepup.submission");
+      if (toAdd.length === 0) continue;
+      if (!purchaseId) {
+        purchaseId = `purchase-stepup-${r.number}`;
+        const first = toAdd[0]!;
+        const receipt = r.receipts[0]?.fileName;
+        emit("purchase", purchaseId, clean({ vendor: first.vendor ?? first.provider ?? r.provider, date: first.purchaseDate, invoiceNo: first.invoiceNo, receiptDocumentId: receipt ? ensureDoc(receipt) : undefined }), "stepup.purchase");
+      }
+      if (!submissionsSeen.has(sid)) {
+        submissionsSeen.add(sid);
+        emit("submission", sid, clean({ reimbursementId: String(r.number), purchaseId, childId, submittedAt: r.submittedAt, guid: r.id }), "stepup.submission");
+      }
+      for (const l of toAdd) {
+        const status = known(l);
+        const path = l.category;
+        const lineNumber = Number(l.number.split("-").pop());
+        const tax = l.additionalCostsCents ?? 0;
+        emit(
+          "item",
+          `stepup-${l.number}`,
+          clean({
+            purchaseId,
+            childId,
+            description: l.name ?? (l.benefit ? l.benefit.slice(0, 80) : path[path.length - 1]),
+            serviceDate: l.serviceDate,
+            serviceProvider: l.provider,
+            vendor: l.vendor,
+            date: l.purchaseDate,
+            invoiceNo: l.invoiceNo,
+            categoryId: path.length ? categoryIdForPath(path) : undefined,
+            categoryPath: path.length ? path : undefined,
+            quantity: l.quantity,
+            amountCents: Math.max(0, l.amountCents - tax),
+            taxShippingCents: tax || undefined,
+            benefitMessage: l.benefit,
+            itemUrl: l.itemUrl,
+            submissionId: sid,
+            lineNumber: Number.isFinite(lineNumber) ? lineNumber : undefined,
+            stepUpStatus: status,
+            statusOverride: status ? undefined : l.status || undefined,
+            approvedCents: status === "Approved" ? l.amountCents : undefined,
+            paidCents: status === "Paid" ? l.amountCents : undefined,
+            stepUpMessage: said(l),
+          }),
+          "stepup.item"
+        );
+        report.itemsImported += 1;
+      }
+    }
+  }
 
   // A read-only view also lists every other file in the folder, so none is hidden just because no row names it.
   if (viewing) for (const f of input.files) if (!/\.xlsx?$/i.test(f.name)) ensureDoc(f.name);

@@ -34,6 +34,7 @@ export * from "./workspace/lock.js";
 export * from "./workspace/names.js";
 export * from "./verify/ledger.js";
 export * from "./stepup/shapes.js";
+export * from "./stepup/archive.js";
 export * from "./reference/categories.js";
 export * from "./reference/sync.js";
 export * from "./reference/snapshot.js";

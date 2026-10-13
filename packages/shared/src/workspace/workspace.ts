@@ -2,6 +2,11 @@ import type { StorageProvider } from "../storage/types.js";
 
 /** Everything this system adds to a year folder lives under this subfolder; its presence marks a year as ledger-based. */
 export const LEDGER_DIR = "_ledger";
+/**
+ * StepUp's own record of the year's reimbursements (see stepup/archive.ts). It sits in every year's folder, Excel years
+ * included, and is deliberately not `_ledger`: a year with `_ledger` is a ledger year, this is just reference data.
+ */
+export const STEPUP_DIR = "_stepup";
 export const LEDGER_SUBDIRS = ["events", "documents", "inbox", "reports"] as const;
 /**
  * A year still kept in Excel is viewed read-only. The one thing written beside its workbook is this small file of
@@ -13,7 +18,8 @@ export const YEAR_FOLDER_RE = /^\d{4}-\d{4}$/;
 const TRACKING_WORKBOOK_RE = /(tracking|gardiner).*\.xlsx$/i;
 const OFFICE_LOCK_RE = /^~\$/;
 
-export type YearKind = "ledger" | "legacy-excel" | "empty";
+/** "stepup": no ledger and no workbook, only what StepUp itself lists for the year (a new person's history). */
+export type YearKind = "ledger" | "legacy-excel" | "stepup" | "empty";
 
 export interface YearInfo {
   label: string;
@@ -26,6 +32,8 @@ export interface YearInfo {
   workbookModified?: string;
   /** How many tracking workbook copies the folder holds (the others are ignored). */
   workbookCopies?: number;
+  /** The year folder holds StepUp's own list of its reimbursements (`_stepup`). */
+  hasStepUp?: boolean;
 }
 
 export interface YearFolders {
@@ -48,10 +56,12 @@ export async function listYears(storage: StorageProvider, driveId: string, rootI
     const copies = files.filter((f) => TRACKING_WORKBOOK_RE.test(f.name) && !OFFICE_LOCK_RE.test(f.name));
     const workbook = [...copies].sort((a, b) => (b.modified ?? "").localeCompare(a.modified ?? "") || a.name.localeCompare(b.name))[0];
     const hasLedger = inside.some((c) => c.isFolder && c.name === LEDGER_DIR);
+    const hasStepUp = inside.some((c) => c.isFolder && c.name === STEPUP_DIR);
     years.push({
       label: child.name,
       folderId: child.id,
-      kind: hasLedger ? "ledger" : workbook ? "legacy-excel" : "empty",
+      kind: hasLedger ? "ledger" : workbook ? "legacy-excel" : hasStepUp ? "stepup" : "empty",
+      ...(hasStepUp ? { hasStepUp } : {}),
       looseFileCount: files.length,
       workbookName: workbook?.name,
       ...(workbook?.modified ? { workbookModified: workbook.modified } : {}),
