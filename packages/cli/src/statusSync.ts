@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+import { messageOf } from "@step-up/shared";
 import { stepUpShapeOk } from "./drift.js";
 import { getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef } from "./graph/onedrive.js";
 
@@ -9,6 +10,7 @@ const STATUSES_TABLE = "Table3";
 const API_URL_PATTERN = /reimbursementapi-prod\.stepupforstudents\.org\/api\/reimbursements\/V2\/search/i;
 const THROTTLE_MS = 2 * 60 * 60 * 1000;
 const STATE_FILE = path.resolve(process.cwd(), ".cache", "last-status-sync.json");
+const CAPTURE_FILE = path.resolve(process.cwd(), ".cache", "stepup-search-responses.json");
 
 interface ApiLineItem {
   LineItemNumber: string;
@@ -56,6 +58,49 @@ async function setLastSyncAt(timestamp: number): Promise<void> {
 }
 
 /**
+ * Keeps every reimbursement StepUp's list returns exactly as sent (one entry per reimbursement, newest sighting wins), so
+ * the real field names - the reason on a denied item, the reimbursement's id - can be read from real data instead of
+ * guessed. Written to .cache (gitignored): it can hold names and amounts. Best effort; never fails a sync.
+ */
+export async function captureSearchResponse(body: { Results?: unknown[] }): Promise<number> {
+  try {
+    let saved: Record<string, unknown> = {};
+    try {
+      saved = JSON.parse(await readFile(CAPTURE_FILE, "utf-8")) as Record<string, unknown>;
+    } catch {
+      /* first capture */
+    }
+    let n = 0;
+    for (const r of body.Results ?? []) {
+      const rec = r as Record<string, unknown>;
+      const key = String(rec["Id"] ?? rec["ReimbursementId"] ?? rec["SequenceNumber"] ?? JSON.stringify(rec).slice(0, 80));
+      saved[key] = { capturedAt: new Date().toISOString(), result: rec };
+      n++;
+    }
+    await mkdir(path.dirname(CAPTURE_FILE), { recursive: true });
+    await writeFile(CAPTURE_FILE, JSON.stringify(saved, null, 2), "utf-8");
+    return n;
+  } catch {
+    return 0;
+  }
+}
+
+/** Capture only: watches the reimbursements list and keeps what it returns, applying nothing anywhere. */
+export function attachSearchCapture(page: Page): void {
+  page.on("response", async (response) => {
+    if (!API_URL_PATTERN.test(response.url())) return;
+    try {
+      const body = (await response.json()) as ApiResponse;
+      if (!body.Results?.length) return;
+      const n = await captureSearchResponse(body);
+      console.log(`\n[capture] Kept ${n} reimbursement(s) from the list in .cache/stepup-search-responses.json.`);
+    } catch (err) {
+      console.log(`\n[capture] Failed: ${(err as Error).message}`);
+    }
+  });
+}
+
+/**
  * Matches every Table1 row that has both a Reimbursement ID and Line Number (i.e. was already
  * submitted) against the API response by exact `{ReimbursementID}-{LineNumber}` match, and
  * updates Status where StepUp's current status maps to something different than what's stored.
@@ -85,6 +130,7 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
   const amountIdx = headers.indexOf("Amount");
   const reimTotalIdx = headers.indexOf("Reim. $");
   const reimbursedAmountIdx = headers.indexOf("Reimbursed Amount");
+  const notesIdx = headers.indexOf("Notes");
   if (reimbIdx === -1 || lineNumIdx === -1 || statusIdx === -1 || amountIdx === -1 || reimTotalIdx === -1 || reimbursedAmountIdx === -1) {
     throw new Error(
       "Table1 is missing one of Reimbursement ID / Line Number / Status / Amount / Reim. $ / Reimbursed Amount columns."
@@ -140,6 +186,16 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
       if (currentReimbursedAmount !== String(apiItem.ItemAmount)) changes["Reimbursed Amount"] = apiItem.ItemAmount;
     }
 
+    // What StepUp said about the item (a denial reason) goes on the end of the row's own notes, once.
+    // Only for items StepUp turned down or paid differently, which is where it explains itself.
+    const explained = mappedStatus.startsWith("Denied") || mappedStatus === "Adjusted";
+    const said = explained ? messageOf(apiItem as unknown as Record<string, unknown>) : undefined;
+    if (said && notesIdx !== -1) {
+      const line = `StepUp: ${said}`;
+      const current = String(values[notesIdx] ?? "").trim();
+      if (!current.includes(line)) changes.Notes = current ? `${current}\n${line}` : line;
+    }
+
     if (Object.keys(changes).length === 0) continue;
 
     await updateTableRowByIndex(excelRef, TABLE1, rowIndex, values, headers, changes);
@@ -171,10 +227,16 @@ export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): vo
 export function attachStatusSyncListenerWith(page: Page, apply: (body: ApiResponse) => Promise<number>): void {
   page.on("response", async (response) => {
     if (!API_URL_PATTERN.test(response.url())) return;
+    let body: ApiResponse | undefined;
+    try {
+      body = (await response.json()) as ApiResponse;
+      if (body.Results?.length) await captureSearchResponse(body);
+    } catch {
+      return;
+    }
     if (Date.now() - (await getLastSyncAt()) < THROTTLE_MS) return;
 
     try {
-      const body = (await response.json()) as ApiResponse;
       if (!body.Results || body.Results.length === 0) return;
       if (!stepUpShapeOk("reimbursements-search", body)) return;
       const updated = await apply(body);

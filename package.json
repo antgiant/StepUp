@@ -11,6 +11,7 @@
     "discover": "tsx packages/cli/src/discover.ts",
     "inspect": "tsx packages/cli/src/inspectPages.ts",
     "start": "tsx packages/cli/src/main.ts",
+    "statuses": "tsx packages/cli/src/statuses.ts",
     "plan": "tsx packages/cli/src/planReimbursements.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
