@@ -224,6 +224,8 @@ export interface StatementTransaction {
   kind: "purchase" | "credit" | "payment" | "fee";
   /** How sure we are the line was read correctly (0..1); low ones are flagged for a person to check. */
   confidence: number;
+  /** A person corrected or added this row, so it is trusted and kept when the statement is read again. */
+  edited?: boolean;
 }
 
 export interface StatementData {
@@ -231,5 +233,7 @@ export interface StatementData {
   last4?: string;
   periodStart?: string;
   periodEnd?: string;
+  /** The period was worked out from the first and last charge because the statement did not state one. */
+  periodInferred?: boolean;
   transactions: StatementTransaction[];
 }

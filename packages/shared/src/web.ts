@@ -40,6 +40,7 @@ export * from "./statements/redact.js";
 export * from "./pdf/imagePdf.js";
 export * from "./imaging/blur.js";
 export * from "./statements/match.js";
+export * from "./statements/edit.js";
 export * from "./graph/client.js";
 export * from "./storage/index.js";
 export * from "./graph/onedrive.js";

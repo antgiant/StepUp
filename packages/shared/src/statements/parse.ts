@@ -46,8 +46,19 @@ export function parseStatementText(text: string, opts: ParseOptions = {}): Parse
   if (!hasPeriod) warnings.push("Could not find the statement period; dates without a year are assumed to be in " + refYear + ".");
   const { rows, unparsedLines } = readRows(lines, { refYear, refMonth, hasPeriod, penalty: opts.confidencePenalty });
   const transactions = rows.map((r) => r.txn);
+  if (!hasPeriod) {
+    const span = inferPeriod(transactions);
+    if (span) return { ...header, ...span, periodInferred: true, transactions, unparsedLines, warnings: [...warnings, "The period was worked out from the first and last charge; please check it."] };
+  }
   if (transactions.length === 0) warnings.push("No transactions were found. The statement can still be attached by hand.");
   return { ...header, transactions, unparsedLines, warnings };
+}
+
+/** The earliest and latest charge date: a stand-in period for a statement that does not print one. */
+export function inferPeriod(transactions: Array<{ date: string }>): { periodStart: string; periodEnd: string } | undefined {
+  if (transactions.length === 0) return undefined;
+  const dates = transactions.map((t) => t.date).sort();
+  return { periodStart: dates[0]!, periodEnd: dates[dates.length - 1]! };
 }
 
 /** Positive = charge. Credits are written -12.00, (12.00), 12.00- or 12.00 CR depending on the issuer. */

@@ -162,11 +162,11 @@ export function linkConfidentMatches(ledger: Ledger, statementDocId: string, mat
 
 /** Stores what was read from a statement on its document (private data, kept in the year's ledger only). */
 export function saveStatement(ledger: Ledger, docId: string, data: StatementData): void {
-  const { issuer, last4, periodStart, periodEnd, transactions } = data;
+  const { issuer, last4, periodStart, periodEnd, periodInferred, transactions } = data;
   ledger.set(
     "document",
     docId,
-    { contentKind: "statement", statement: { ...(issuer ? { issuer } : {}), ...(last4 ? { last4 } : {}), ...(periodStart ? { periodStart } : {}), ...(periodEnd ? { periodEnd } : {}), transactions } as never },
+    { contentKind: "statement", statement: { ...(issuer ? { issuer } : {}), ...(last4 ? { last4 } : {}), ...(periodStart ? { periodStart } : {}), ...(periodEnd ? { periodEnd } : {}), ...(periodInferred ? { periodInferred } : {}), transactions } as never },
     { label: "statement.parsed" }
   );
 }
