@@ -109,10 +109,12 @@ export async function renderRedactedPdf(file: Blob, plan: RedactionPlan, scale =
       for (const r of plan.pages[n - 1]?.keep ?? []) {
         const [ax, ay] = viewport.convertToViewportPoint(r.x0, r.y0) as [number, number];
         const [bx, by] = viewport.convertToViewportPoint(r.x1, r.y1) as [number, number];
-        const x = Math.max(0, Math.floor(Math.min(ax, bx)));
-        const y = Math.max(0, Math.floor(Math.min(ay, by)));
-        const w = Math.min(result.width - x, Math.ceil(Math.abs(bx - ax)));
-        const h = Math.min(result.height - y, Math.ceil(Math.abs(by - ay)));
+        // Clamp both edges to the page (a kept strip can run off it): clamping only the origin would stretch it.
+        const clamp = (v: number, max: number) => Math.min(max, Math.max(0, v));
+        const x = clamp(Math.floor(Math.min(ax, bx)), result.width);
+        const y = clamp(Math.floor(Math.min(ay, by)), result.height);
+        const w = clamp(Math.ceil(Math.max(ax, bx)), result.width) - x;
+        const h = clamp(Math.ceil(Math.max(ay, by)), result.height) - y;
         if (w > 0 && h > 0) ctx.drawImage(source, x, y, w, h, x, y, w, h);
       }
       // Read the finished page again, exactly as it will be sent: what OCR can read here is what anyone can read.
