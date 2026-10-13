@@ -38,6 +38,7 @@ import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reim
 import { attachCategoryTreeListener, type Cache } from "../categorySync.js";
 import { nodesFromCache } from "../categoryNodes.js";
 import { attachStatusSyncListenerWith, type ApiResponse } from "../statusSync.js";
+import { syncStatusesAcrossYears } from "../yearSync.js";
 import type { FilingStore } from "./store.js";
 
 const REFERENCE_FILE = path.resolve(process.cwd(), "packages/web/public/reference/categories.json");
@@ -223,6 +224,10 @@ export class LedgerStore implements FilingStore {
     console.log(`[category] StepUp lists "${newPath}" where we had "${oldPath}". Items were updated; run "npm run reference:build" to refresh the shared list.`);
   }
 
+  get yearLabel(): string {
+    return this.opened.year.label;
+  }
+
   /** Applies a reimbursements-list response (from the live page or a saved capture): statuses, amounts, messages, ids. */
   async applyStatusResponse(body: ApiResponse): Promise<number> {
     const results = (body.Results ?? []) as unknown as Array<Record<string, unknown> & { LineItems?: Array<Record<string, unknown>> }>;
@@ -235,7 +240,8 @@ export class LedgerStore implements FilingStore {
   }
 
   attachListeners(page: Page): void {
-    attachStatusSyncListenerWith(page, (body) => this.applyStatusResponse(body));
+    // StepUp's list covers every school year; each goes to its own year's ledger or workbook.
+    attachStatusSyncListenerWith(page, (body) => syncStatusesAcrossYears(body, this));
     // StepUp's own category list, as it is observed, becomes edits in this year's ledger (the old Table5 sync).
     attachCategoryTreeListener(page, (cache) => this.recordCategories(cache));
     // Pre-authorization status is not part of the ledger yet (plan: Pre-Auth is its own flow), so it is not synced here.

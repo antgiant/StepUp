@@ -20,7 +20,8 @@ import {
   type ScholarshipMismatch,
   type Table1Row,
 } from "../reimbursements.js";
-import { attachStatusSyncListener, syncStatusesFromApiResponse, type ApiResponse } from "../statusSync.js";
+import { attachStatusSyncListenerWith, syncStatusesFromApiResponse, type ApiResponse } from "../statusSync.js";
+import { syncStatusesAcrossYears } from "../yearSync.js";
 import type { FilingStore } from "./store.js";
 
 const TABLE1 = "Table1";
@@ -130,7 +131,8 @@ export class ExcelStore implements FilingStore {
   }
 
   attachListeners(page: Page): void {
-    attachStatusSyncListener(page, this.excelRef);
+    // StepUp's list covers every school year; each goes to its own year's ledger or workbook.
+    attachStatusSyncListenerWith(page, (body) => syncStatusesAcrossYears(body, this));
     attachCategoryTreeListener(page, this.excelRef);
     attachPreauthSyncListener(page, this.excelRef);
   }

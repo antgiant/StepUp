@@ -13,6 +13,7 @@ import { getClientId } from "./clientId.js";
 import { getSignedInName } from "./graph/auth.js";
 import { attachSearchCapture } from "./statusSync.js";
 import { archiveSearchResults } from "./stepUpArchive.js";
+import { syncStatusesAcrossYears } from "./yearSync.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -22,7 +23,7 @@ import path from "node:path";
  *   npm run statuses                               the spreadsheet in .env
  *   npm run statuses -- --ledger=2026-2027         that year's ledger
  *   npm run statuses -- --capture-only             keep StepUp's raw list responses in .cache/ and write nothing
- *   npm run statuses -- --from-capture [--ledger=Y]  apply the last capture to the spreadsheet / ledger; no browser or login
+ *   npm run statuses -- --from-capture             apply the last capture to every year's ledger and workbook; no browser or login
  *   add --dry-run to the spreadsheet form to list what would change without writing
  *
  * You log in to StepUp in the browser that opens, then open the Reimbursements list (scroll through it so every page
@@ -47,11 +48,9 @@ async function applyCapture(): Promise<void> {
   const file = path.resolve(process.cwd(), ".cache", "stepup-search-responses.json");
   const saved = JSON.parse(await readFile(file, "utf-8")) as Record<string, { result: unknown }>;
   const results = Object.values(saved).map((v) => v.result);
-  const store = await chooseStore();
-  console.log(`Applying ${results.length} captured reimbursement(s) to ${store.describe}...`);
+  console.log(`Applying ${results.length} captured reimbursement(s) to every year's ledger and workbook...`);
   await archiveSearchResults(results);
-  const changed = await store.applyStatusResponse({ Results: results as never });
-  await store.finish();
+  const changed = await syncStatusesAcrossYears({ Results: results as never });
   console.log(`Updated ${changed} row(s).`);
 }
 

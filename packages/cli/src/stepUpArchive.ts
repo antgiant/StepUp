@@ -4,6 +4,7 @@ import {
   STEPUP_DIR,
   STEPUP_INDEX_FILE,
   STEPUP_REIMBURSEMENTS_DIR,
+  STEPUP_SYNCED_FILE,
   listYears,
   projectReimbursement,
   readStepUpIndex,
@@ -25,14 +26,19 @@ import { locateWorkspace } from "./storage/index.js";
  */
 const CONCURRENCY = 6;
 
-interface Workspace { storage: StorageProvider; driveId: string; years: Map<string, YearInfo> }
+export interface Workspace { storage: StorageProvider; driveId: string; rootId: string; years: Map<string, YearInfo> }
 let workspace: Promise<Workspace> | undefined;
 const folderIds = new Map<string, { dir: string; reimbursements: string }>();
-const warned = new Set<string>();
 
 async function open(): Promise<Workspace> {
   const { storage, driveId, rootId } = await locateWorkspace();
-  return { storage, driveId, years: new Map((await listYears(storage, driveId, rootId)).map((y) => [y.label, y])) };
+  return { storage, driveId, rootId, years: new Map((await listYears(storage, driveId, rootId)).map((y) => [y.label, y])) };
+}
+
+/** The workspace and its year folders as of this run (listed once). */
+export async function workspaceYears(): Promise<Workspace> {
+  workspace ??= open();
+  return workspace;
 }
 
 async function foldersFor(ws: Workspace, year: YearInfo): Promise<{ dir: string; reimbursements: string }> {
@@ -70,18 +76,22 @@ export async function archiveSearchResults(results: unknown[]): Promise<void> {
       byYear.set(p.schoolYear, list);
     }
     for (const [label, list] of [...byYear].sort(([a], [b]) => a.localeCompare(b))) {
-      const year = ws.years.get(label);
+      let year = ws.years.get(label);
       if (!year) {
-        if (!warned.has(label)) console.log(`[archive] There is no ${label} folder, so ${list.length} reimbursement(s) from that year are not kept. Create the folder to keep them.`);
-        warned.add(label);
-        continue;
+        // A year StepUp has reimbursements for gets its folder, so its history has somewhere to live.
+        const folderId = await ws.storage.ensureFolder(ws.driveId, ws.rootId, label);
+        year = { label, folderId, kind: "empty", looseFileCount: 0 };
+        ws.years.set(label, year);
+        console.log(`[archive] Created the ${label} folder.`);
       }
       const folders = await foldersFor(ws, year);
       const existing = await readStepUpIndex(ws.storage, ws.driveId, folders.dir);
       const entries = new Map<string, StepUpIndexEntry>((existing?.index.reimbursements ?? []).map((e) => [e.id, e]));
       const changed = list.filter((x) => entries.get(x.p.id)?.hash !== x.hash);
-      if (changed.length === 0 && existing) continue;
       const seenAt = new Date().toISOString();
+      // Every fresh copy is noted (a few bytes), so the app knows how current StepUp's side is even when nothing changed.
+      await ws.storage.write(ws.driveId, folders.dir, STEPUP_SYNCED_FILE, JSON.stringify({ at: seenAt, reimbursements: list.length, changed: changed.length }));
+      if (changed.length === 0 && existing) continue;
       await forEachLimited(changed, async (x) => {
         await ws.storage.write(ws.driveId, folders.reimbursements, reimbursementFileName(x.p), JSON.stringify({ seenAt, result: x.raw }));
         entries.set(x.p.id, { ...x.p, hash: x.hash });

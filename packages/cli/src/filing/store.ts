@@ -10,6 +10,8 @@ import type { ReimbursementGroup, ResolveAmbiguousMainReceipt, ScholarshipMismat
  */
 export interface FilingStore {
   readonly kind: "excel" | "ledger";
+  /** For a ledger store: the school year it is open on. */
+  readonly yearLabel?: string;
   readonly describe: string;
 
   /** Rows that are ready to file, shaped like the old Table1 rows. */
