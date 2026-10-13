@@ -19,6 +19,7 @@ import {
   readLegacyWorkbook,
   readReceiptChoices,
   readReceiptFiles,
+  readStepUpReimbursements,
   writeReceiptChoices,
   requestedCents,
   effectiveDate,
@@ -40,25 +41,34 @@ import type { OpenWorkspace } from "./workspace.js";
 export interface LegacyState {
   year: LegacyYear;
   ledger: LegacyLedger;
-  workbook: DriveItemRef & { webUrl?: string; eTag?: string };
+  /** Absent for a year that is only StepUp's own list (no workbook, no ledger). */
+  workbook?: DriveItemRef & { webUrl?: string; eTag?: string };
   folder: DriveItemRef;
   /** When Excel was last read, for the banner. */
   readAt: number;
 }
 
-const refs = (driveId: string, year: YearInfo, book: { id: string; name: string; eTag?: string; webUrl?: string }) => ({
-  workbook: { driveId, itemId: book.id, name: book.name, isFolder: false, webUrl: book.webUrl, eTag: book.eTag },
+const refs = (driveId: string, year: YearInfo, book?: { id: string; name: string; eTag?: string; webUrl?: string }) => ({
+  ...(book ? { workbook: { driveId, itemId: book.id, name: book.name, isFolder: false, webUrl: book.webUrl, eTag: book.eTag } } : {}),
   folder: { driveId, itemId: year.folderId, name: year.label, isFolder: true } satisfies DriveItemRef,
 });
+
+/** StepUp's own list for the year, or nothing: it only ever adds to what the workbook says, so it never blocks opening. */
+const readStepUp = (driveId: string, year: YearInfo) => readStepUpReimbursements(storage, driveId, year.folderId).catch(() => []);
 
 /** Reads the workbook and receipts folder and builds a workspace around the in-memory, read-only ledger. */
 export async function openLegacyWorkspace(pointer: Pointer, years: YearInfo[], year: YearInfo, clientId: string): Promise<OpenWorkspace> {
   const { driveId } = pointer;
-  if (!year.workbookName) throw new Error(`${year.label} has no tracking workbook to read.`);
-  const book = await storage.find(driveId, year.folderId, year.workbookName);
-  if (!book) throw new Error(`${year.workbookName} was not found.`);
+  const book = year.workbookName ? await storage.find(driveId, year.folderId, year.workbookName) : undefined;
+  if (year.workbookName && !book) throw new Error(`${year.workbookName} was not found.`);
   const r = refs(driveId, year, book);
-  const [input, choices] = await Promise.all([readLegacyWorkbook(storage, r.workbook, r.folder, year.label), readReceiptChoices(storage, driveId, year.folderId)]);
+  const stepUp = await readStepUp(driveId, year);
+  if (!r.workbook && stepUp.length === 0) throw new Error(`${year.label} has no tracking workbook and nothing from StepUp to read.`);
+  const [read, choices] = await Promise.all([
+    r.workbook ? readLegacyWorkbook(storage, r.workbook, r.folder, year.label) : readReceiptFiles(storage, r.folder).then((files) => ({ yearLabel: year.label, rows: [], children: [], paymentMethods: [], files })),
+    readReceiptChoices(storage, driveId, year.folderId),
+  ]);
+  const input = { ...read, stepUp };
   const derived = deriveLegacyYear(input, choices);
   const ledger = new LegacyLedger(derived.result.events);
   return {
@@ -78,7 +88,7 @@ export async function openLegacyWorkspace(pointer: Pointer, years: YearInfo[], y
 /** Builds the read-only workspace from what was last read out of Excel (no network). Call `revalidate` next. */
 export function openLegacyFromCache(pointer: Pointer, years: YearInfo[], year: YearInfo, clientId: string, rec: NonNullable<WorkspaceCache["legacy"]>): OpenWorkspace {
   const { driveId } = pointer;
-  const r = refs(driveId, year, { id: rec.workbook.itemId, name: rec.workbook.name, eTag: rec.workbook.eTag, webUrl: rec.workbook.webUrl });
+  const r = refs(driveId, year, rec.workbook ? { id: rec.workbook.itemId, name: rec.workbook.name, eTag: rec.workbook.eTag, webUrl: rec.workbook.webUrl } : undefined);
   const derived = deriveLegacyYear(rec.input, rec.choices);
   const ledger = new LegacyLedger(derived.result.events);
   return {
@@ -103,22 +113,28 @@ export async function refreshLegacy(ws: OpenWorkspace): Promise<boolean> {
   // A copy saved more recently since the last look takes over as the authoritative one.
   const latest = ws.years.find((y) => y.label === ws.year.label);
   if (latest) ws.year = latest;
-  const wantName = latest?.workbookName ?? l.workbook.name;
-  const [book, choices, files] = await Promise.all([
-    storage.find(driveId, ws.year.folderId, wantName),
+  const wantName = latest?.workbookName ?? l.workbook?.name;
+  const [book, choices, files, stepUp] = await Promise.all([
+    wantName ? storage.find(driveId, ws.year.folderId, wantName) : Promise.resolve(undefined),
     readReceiptChoices(storage, driveId, ws.year.folderId),
     readReceiptFiles(storage, l.folder),
+    readStepUp(driveId, ws.year),
   ]);
-  if (!book) throw new Error(`${wantName} was not found.`);
-  const unchanged = book.eTag !== undefined && book.eTag === l.workbook.eTag && book.id === l.workbook.itemId;
-  if (!unchanged) l.workbook = { ...l.workbook, itemId: book.id, name: book.name };
-  const input = unchanged ? { ...l.year.input, files } : await readLegacyWorkbook(storage, l.workbook, l.folder, ws.year.label);
+  if (wantName && !book) throw new Error(`${wantName} was not found.`);
+  let input: LegacyYear["input"];
+  if (book && l.workbook) {
+    const unchanged = book.eTag !== undefined && book.eTag === l.workbook.eTag && book.id === l.workbook.itemId;
+    if (!unchanged) l.workbook = { ...l.workbook, itemId: book.id, name: book.name };
+    input = { ...(unchanged ? l.year.input : await readLegacyWorkbook(storage, l.workbook, l.folder, ws.year.label)), files, stepUp };
+    l.workbook.eTag = book.eTag;
+    l.workbook.webUrl = book.webUrl;
+  } else {
+    input = { ...l.year.input, files, stepUp };
+  }
   const derived = deriveLegacyYear(input, choices);
   const before = JSON.stringify(l.year.result.events);
   const after = JSON.stringify(derived.result.events);
   l.readAt = Date.now();
-  l.workbook.eTag = book.eTag;
-  l.workbook.webUrl = book.webUrl;
   if (before === after) return false;
   l.year = derived;
   l.ledger.replace(derived.result.events);
@@ -153,6 +169,11 @@ const money = (c: number | undefined) => (c === undefined ? "" : formatCents(c))
 export function legacyBanner(ws: OpenWorkspace): string {
   const l = ws.legacy!;
   const at = new Date(l.readAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (!l.workbook) {
+    const n = l.year.input.stepUp?.length ?? 0;
+    return `<p class="note banner">Showing <strong>${esc(ws.year.label)}</strong> from StepUp's own list of your reimbursements (${n}), read-only. There is no tracking workbook or ledger for this year, so receipts, tax and notes are only what StepUp holds.
+      Last read ${esc(at)}. <button id="legacy-refresh">Refresh</button></p>`;
+  }
   const copies = (ws.year.workbookCopies ?? 1) > 1 ? `, the most recently edited of ${ws.year.workbookCopies} copies` : "";
   const edited = ws.year.workbookModified ? ` (edited ${esc(new Date(ws.year.workbookModified).toLocaleDateString())})` : "";
   return `<p class="note banner">Showing <strong>${esc(ws.year.label)}</strong> from its Excel workbook, read-only: <em>${esc(l.workbook.name)}</em>${edited}${copies}. Excel is the source of truth: this page reads it again whenever you open it.

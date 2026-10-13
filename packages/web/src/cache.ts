@@ -16,7 +16,8 @@ export interface WorkspaceCache {
   legacy?: {
     input: LegacyYear["input"];
     choices: LegacyYear["choices"];
-    workbook: { itemId: string; name: string; eTag?: string; webUrl?: string };
+    /** Absent for a year that is only StepUp's own list. */
+    workbook?: { itemId: string; name: string; eTag?: string; webUrl?: string };
     readAt: number;
   };
   savedAt: number;

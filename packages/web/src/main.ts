@@ -1020,7 +1020,7 @@ function connectionBar(): string {
   const who = esc(account.name);
   const signedIn = storage.kind === "browser" ? "Stored on this device only." : `Signed in as ${who}.`;
   if (!workspace) return `<p class="note">${signedIn}</p>`;
-  const options = workspace.years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel").map((y) => `<option value="${esc(y.label)}"${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}${y.kind === "legacy-excel" ? " (Excel, read-only)" : ""}</option>`).join("");
+  const options = workspace.years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel" || y.kind === "stepup").map((y) => `<option value="${esc(y.label)}"${y.label === workspace!.year.label ? " selected" : ""}>${esc(y.label)}${y.kind === "legacy-excel" ? " (Excel, read-only)" : y.kind === "stepup" ? " (StepUp history, read-only)" : ""}</option>`).join("");
   const refresh = workspace.legacy ? "" : `<button id="check-files">Refresh data</button>`;
   return `<p class="note">${signedIn} Year <select id="year-pick" style="width:auto">${options}</select>
     ${refresh} ${storage.invite ? `<button id="share">Share</button>` : ""}</p>`;
@@ -2537,7 +2537,7 @@ root.addEventListener("click", async (ev) => {
   if (workspace?.legacy) {
     // A year viewed from Excel: only looking around, picking a receipt, and the connection controls do anything.
     const legacy = workspace;
-    if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); persist(); status = "Read the workbook again."; }, "Reading the Excel workbook…");
+    if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); persist(); status = legacy.legacy?.workbook ? "Read the workbook again." : "Read StepUp's list again."; }, legacy.legacy?.workbook ? "Reading the Excel workbook…" : "Reading StepUp's list…");
     else if (t.id === "legacy-download") {
       await guarded(async () => {
         const file = await legacySpreadsheet(legacy);

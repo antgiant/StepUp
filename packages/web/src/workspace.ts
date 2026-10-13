@@ -117,7 +117,8 @@ export interface OpenWorkspace {
  */
 async function yearsOf(driveId: string, rootId: string): Promise<YearInfo[]> {
   const years = await listYears(storage, driveId, rootId);
-  return storage.kind === "onedrive" ? years : years.map((y) => (y.kind === "legacy-excel" ? { ...y, kind: "empty" as const } : y));
+  // Excel's workbook needs OneDrive's Excel service; elsewhere such a year is StepUp's own list if there is one, else empty.
+  return storage.kind === "onedrive" ? years : years.map((y) => (y.kind === "legacy-excel" ? { ...y, kind: y.hasStepUp ? ("stepup" as const) : ("empty" as const) } : y));
 }
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
@@ -126,15 +127,20 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const ledgerYears = years.filter((y) => y.kind === "ledger");
   const want = yearLabel ?? pointer.year;
   // A year still kept in Excel is viewed from the workbook, read-only; it is never opened as a ledger.
-  const excelYear = years.find((y) => y.kind === "legacy-excel" && y.label === want);
+  const excelYear = years.find((y) => (y.kind === "legacy-excel" || y.kind === "stepup") && y.label === want);
   if (excelYear) return openLegacyWorkspace(pointer, years, excelYear, clientId);
   const year = ledgerYears.find((y) => y.label === want) ?? ledgerYears[ledgerYears.length - 1];
-  if (!year) throw new NoLedgerYearError(pointer);
+  if (!year) {
+    // A new person's folder may hold nothing but StepUp's list of their past years: show the newest of those.
+    const history = years.filter((y) => y.kind === "stepup").pop();
+    if (history) return openLegacyWorkspace(pointer, years, history, clientId);
+    throw new NoLedgerYearError(pointer);
+  }
   const folders = (await openLedgerFolders(storage, pointer.driveId, year.folderId))!;
   const store = new StorageEventStore(storage, pointer.driveId, folders.eventsId, clientId);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   await ledger.refresh();
-  const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, years.filter((y) => y.kind !== "empty"), year.label, clientId);
+  const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel"), year.label, clientId);
   return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carried };
 }
 
@@ -224,12 +230,12 @@ async function carryOver(pointer: Pointer, ledger: Ledger, years: YearInfo[], cu
  * what is missing, so it is safe to run again. The caller flushes the ledger.
  */
 export async function copyFromPreviousYear(ws: OpenWorkspace, clientId: string): Promise<CarryResult> {
-  const ledgerYears = ws.years.filter((y) => y.kind !== "empty");
+  const ledgerYears = ws.years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel");
   return carryOver(ws.pointer, ws.ledger, ledgerYears, ws.year.label, clientId, true);
 }
 
 /** True when an earlier school year exists to copy from. */
-export const hasEarlierYear = (ws: OpenWorkspace): boolean => ws.years.some((y) => y.kind !== "empty" && y.label < ws.year.label);
+export const hasEarlierYear = (ws: OpenWorkspace): boolean => ws.years.some((y) => (y.kind === "ledger" || y.kind === "legacy-excel") && y.label < ws.year.label);
 
 /** Builds the workspace from what this browser remembered: no network, so the first paint is instant. Call `revalidate` next. */
 export function openFromCache(pointer: Pointer, clientId: string, rec: WorkspaceCache, years: YearInfo[] = rec.years): OpenWorkspace | undefined {
@@ -264,9 +270,9 @@ export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
 export function snapshotFor(ws: OpenWorkspace, reference?: CategoryReference): WorkspaceCache {
   const l = ws.legacy;
   if (l) {
-    const { itemId, name, eTag, webUrl } = l.workbook;
-    const workbook = { itemId, name, ...(eTag ? { eTag } : {}), ...(webUrl ? { webUrl } : {}) };
-    return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: "", logs: [], legacy: { input: l.year.input, choices: l.year.choices, workbook, readAt: l.readAt }, savedAt: Date.now() };
+    const book = l.workbook;
+    const workbook = book ? { itemId: book.itemId, name: book.name, ...(book.eTag ? { eTag: book.eTag } : {}), ...(book.webUrl ? { webUrl: book.webUrl } : {}) } : undefined;
+    return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: "", logs: [], legacy: { input: l.year.input, choices: l.year.choices, ...(workbook ? { workbook } : {}), readAt: l.readAt }, savedAt: Date.now() };
   }
   return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: ws.eventsId, logs: ws.store.exportCache(), ...(reference ? { snapshot: reference } : {}), savedAt: Date.now() };
 }
