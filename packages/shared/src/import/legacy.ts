@@ -13,7 +13,7 @@ import { childIdForName } from "../entry/actions.js";
 const IMPORT_WALL = 1_600_000_000_000;
 const IMPORT_CLIENT = "legacy-import";
 const RECEIPT_KEYWORDS = ["invoice", "order", "receipt"];
-const STEPUP_STATUSES = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Denied (Initial)", "Denied (Final)"]);
+const STEPUP_STATUSES = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Appealed", "Denied (Initial)", "Denied (Final)"]);
 const UNFILED_READY = "Unfiled (Ready to Submit)";
 const UNFILED_MISSING = "Unfiled (Missing Things)";
 

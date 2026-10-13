@@ -80,6 +80,7 @@ export function mapStepUpStatus(externalStatus: string, appealed: boolean): stri
     case "Submitted":
     case "Approved":
     case "Paid":
+    case "Appealed":
       return externalStatus;
     case "Denied":
       return appealed ? "Denied (Final)" : "Denied (Initial)";

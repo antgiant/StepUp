@@ -12,7 +12,8 @@ export interface ChildBudget {
   remainingCents: number;
 }
 
-const PENDING = new Set(["Submitted", "Re-Submitted"]);
+// An appealed item is back awaiting a decision, so it holds its money like a submitted one.
+const PENDING = new Set(["Submitted", "Re-Submitted", "Appealed"]);
 const APPROVED = new Set(["Approved", "Adjusted"]);
 
 export type BudgetStage = "paid" | "approved" | "pending" | "unfiled";

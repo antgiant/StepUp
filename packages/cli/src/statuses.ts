@@ -12,6 +12,7 @@ import { acquireStepUpLock } from "./stepupLock.js";
 import { getClientId } from "./clientId.js";
 import { getSignedInName } from "./graph/auth.js";
 import { attachSearchCapture } from "./statusSync.js";
+import { archiveSearchResults, useArchiveYear } from "./stepUpArchive.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -48,6 +49,7 @@ async function applyCapture(): Promise<void> {
   const results = Object.values(saved).map((v) => v.result);
   const store = await chooseStore();
   console.log(`Applying ${results.length} captured reimbursement(s) to ${store.describe}...`);
+  await archiveSearchResults(results);
   const changed = await store.applyStatusResponse({ Results: results as never });
   await store.finish();
   console.log(`Updated ${changed} row(s).`);

@@ -98,6 +98,7 @@ describe("StepUp status sync", () => {
   it("maps statuses and amounts", () => {
     expect(mapStepUpStatus("Denied", true)).toBe("Denied (Final)");
     expect(mapStepUpStatus("Denied", false)).toBe("Denied (Initial)");
+    expect(mapStepUpStatus("Appealed", true)).toBe("Appealed");
     expect(mapStepUpStatus("Weird", false)).toBeUndefined();
   });
 

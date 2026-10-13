@@ -154,7 +154,7 @@ function norm(s: string): string {
   return s.replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
-const SUBMITTED_LIKE = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Denied (Initial)", "Denied (Final)"]);
+const SUBMITTED_LIKE = new Set(["Submitted", "Re-Submitted", "Approved", "Adjusted", "Paid", "Appealed", "Denied (Initial)", "Denied (Final)"]);
 
 /** True when the only thing standing between this item and "ready" is a person marking it so. */
 export function awaitingReview(evaluation: Evaluation): boolean {

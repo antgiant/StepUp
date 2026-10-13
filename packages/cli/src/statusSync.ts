@@ -2,13 +2,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { messageOf } from "@step-up/shared";
+import { archiveSearchResults } from "./stepUpArchive.js";
 import { stepUpShapeOk } from "./drift.js";
-import { getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef } from "./graph/onedrive.js";
+import { appendTableRows, getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef } from "./graph/onedrive.js";
 
 const TABLE1 = "Table1";
 const STATUSES_TABLE = "Table3";
 const API_URL_PATTERN = /reimbursementapi-prod\.stepupforstudents\.org\/api\/reimbursements\/V2\/search/i;
-const THROTTLE_MS = 2 * 60 * 60 * 1000;
 const STATE_FILE = path.resolve(process.cwd(), ".cache", "last-status-sync.json");
 const CAPTURE_FILE = path.resolve(process.cwd(), ".cache", "stepup-search-responses.json");
 
@@ -36,19 +36,12 @@ export function mapApiStatus(externalStatus: string, appealed: boolean): string 
       return "Approved";
     case "Paid":
       return "Paid";
+    case "Appealed":
+      return "Appealed";
     case "Denied":
       return appealed ? "Denied (Final)" : "Denied (Initial)";
     default:
       return undefined;
-  }
-}
-
-async function getLastSyncAt(): Promise<number> {
-  try {
-    const raw = await readFile(STATE_FILE, "utf-8");
-    return (JSON.parse(raw) as { lastSyncAt?: number }).lastSyncAt ?? 0;
-  } catch {
-    return 0;
   }
 }
 
@@ -93,6 +86,7 @@ export function attachSearchCapture(page: Page): void {
       const body = (await response.json()) as ApiResponse;
       if (!body.Results?.length) return;
       const n = await captureSearchResponse(body);
+      await archiveSearchResults(body.Results);
       console.log(`\n[capture] Kept ${n} reimbursement(s) from the list in .cache/stepup-search-responses.json.`);
     } catch (err) {
       console.log(`\n[capture] Failed: ${(err as Error).message}`);
@@ -163,6 +157,12 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
       if (!matchesAmount && !matchesTotal) mappedStatus = "Adjusted";
     }
 
+    // Statuses the app itself defines are added to the sheet's list when it lacks them (it only warns for anything else).
+    if (!validStatuses.has(mappedStatus) && (mappedStatus === "Appealed" || mappedStatus === "Paid")) {
+      if (!process.argv.includes("--dry-run")) await appendTableRows(excelRef, STATUSES_TABLE, [[mappedStatus]]);
+      console.log(`[status sync] Added "${mappedStatus}" to ${STATUSES_TABLE}.`);
+      validStatuses.add(mappedStatus);
+    }
     if (!validStatuses.has(mappedStatus)) {
       if (!warnedInvalidStatuses.has(mappedStatus)) {
         console.log(
@@ -214,16 +214,11 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
 
 /**
  * Passively watches for StepUp's reimbursements-list API response, which loads automatically
- * during normal navigation, and syncs Status from it — throttled to once per 2 hours so normal
- * page reloads don't hammer the spreadsheet with redundant writes.
- *
- * This same endpoint also fires on the home page with an empty/near-empty result set (some
- * "recent activity" widget, distinct from the real Reimbursements list page) — an empty response
- * must NOT start the throttle window, or it silently blocks the next, actually-populated response
- * for 2 hours. Only a response with real data to sync counts as a sync.
+ * during normal navigation, and syncs from it every time a fresh copy arrives (an identical repeat is skipped).
  *
  * As of 2026-10 a single response (about 6 MB: every reimbursement of every school year, 732 of them) carries all the
- * data, so there is no need to visit the Reimbursements list page; the dashboard's own request is enough.
+ * data, so there is no need to visit the Reimbursements list page; the dashboard's own request is enough. Each copy is
+ * also kept whole with the ledger (see stepUpArchive.ts). An empty response is ignored.
  */
 export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): void {
   attachStatusSyncListenerWith(page, (body) => syncStatusesFromApiResponse(excelRef, body));
@@ -231,25 +226,34 @@ export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): vo
 
 /** Same throttled listener, with the way the statuses get applied supplied by the caller (spreadsheet or ledger). */
 export function attachStatusSyncListenerWith(page: Page, apply: (body: ApiResponse) => Promise<number>): void {
+  let queue: Promise<void> = Promise.resolve();
+  let lastApplied = "";
   page.on("response", async (response) => {
     if (!API_URL_PATTERN.test(response.url())) return;
     let body: ApiResponse | undefined;
     try {
       body = (await response.json()) as ApiResponse;
-      if (body.Results?.length) await captureSearchResponse(body);
     } catch {
       return;
     }
-    if (Date.now() - (await getLastSyncAt()) < THROTTLE_MS) return;
-
-    try {
-      if (!body.Results || body.Results.length === 0) return;
-      if (!stepUpShapeOk("reimbursements-search", body)) return;
-      const updated = await apply(body);
-      await setLastSyncAt(Date.now());
-      console.log(`\n[status sync] Updated ${updated} row(s) from the reimbursements list.`);
-    } catch (err) {
-      console.log(`\n[status sync] Failed: ${(err as Error).message}`);
-    }
+    // An empty response (nothing to sync) is ignored. Every real one is applied, in the order it arrived.
+    if (!body.Results?.length) return;
+    const fresh = body;
+    queue = queue.then(async () => {
+      try {
+        // The dashboard can ask for the same list twice in a row; the second copy has nothing new.
+        const sig = JSON.stringify(fresh.Results);
+        if (sig === lastApplied) return;
+        if (!stepUpShapeOk("reimbursements-search", fresh)) return;
+        await captureSearchResponse(fresh);
+        await archiveSearchResults(fresh.Results);
+        const updated = await apply(fresh);
+        lastApplied = sig;
+        await setLastSyncAt(Date.now());
+        console.log(`\n[status sync] Updated ${updated} row(s) from the reimbursements list.`);
+      } catch (err) {
+        console.log(`\n[status sync] Failed: ${(err as Error).message}`);
+      }
+    });
   });
 }
