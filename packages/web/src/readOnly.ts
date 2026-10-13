@@ -7,7 +7,7 @@
  */
 export const READ_ONLY_KEEP = [
   "[data-go]", "[data-open]", "[data-statement]", "[data-preview]", "[data-preview-proof]", "[data-pcell]", "[data-pivot-reset]", "[data-drill-clear]",
-  "[data-clear='legacy-search']", "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
+  "[data-clear='legacy-search']", "[data-clear='history-search']", "[data-history-more]", "[id^='history-']", "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
 ].join(",");
 
 export function enforceReadOnly(scope: ParentNode): void {

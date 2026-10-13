@@ -1,5 +1,10 @@
 import {
   stepUpStatusUrl,
+  ledgerHistory,
+  readHistoryFiles,
+  type HistoryChange,
+  type HistoryReadCache,
+  type HistorySource,
   type LineItem,
   type StorageAccount,
   type LedgerEvent,
@@ -107,7 +112,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
-import { UNCLEAR_FILTER, chooseReceipt, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
+import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -638,13 +643,13 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
   }, `Uploading to ${storage.label}…`);
 }
 
-type View = { name: "queue" } | { name: "summary" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
+type View = { name: "queue" } | { name: "summary" } | { name: "history" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
 /** A refresh keeps the screen it was on: the browser hands back the history entry's state, which holds the view and how far it was scrolled. */
 const restored = (() => {
   try {
     const saved = history.state as { view?: View; scroll?: number } | null;
     const v = saved?.view;
-    const known = v && ((v.name === "queue" || v.name === "summary" || v.name === "statements") || ((v.name === "purchase" || v.name === "statement") && typeof v.id === "string"));
+    const known = v && ((v.name === "queue" || v.name === "summary" || v.name === "history" || v.name === "statements") || ((v.name === "purchase" || v.name === "statement") && typeof v.id === "string"));
     return known ? { view: v, scroll: typeof saved?.scroll === "number" ? saved.scroll : undefined } : undefined;
   } catch {
     return undefined;
@@ -1263,6 +1268,67 @@ function purchaseListing(): string {
     <ul class="queue" id="legacy-list">${items.join("")}</ul>`;
 }
 
+// ---- History: every change, from every source (ledger events, StepUp's list, the Excel workbook)
+const historyFiles: HistoryReadCache = new Map();
+const historyUi: { year?: string; loading: boolean; fromFiles: HistoryChange[]; error?: string; source: "" | HistorySource; search: string; limit: number } = { loading: false, fromFiles: [], source: "", search: "", limit: 200 };
+
+/** Reads the changes kept for StepUp and Excel (small files that never change, so a refresh reads only new ones). */
+async function loadHistory(): Promise<void> {
+  const ws = workspace;
+  if (!ws || historyUi.loading) return;
+  historyUi.loading = true;
+  historyUi.year = ws.year.label;
+  try {
+    historyUi.fromFiles = await readHistoryFiles(storage, ws.driveId, ws.year.folderId, historyFiles);
+    historyUi.error = undefined;
+  } catch (err) {
+    historyUi.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    historyUi.loading = false;
+  }
+  if (view.name === "history") render();
+}
+
+/** All changes, newest first: the ledger's (from its event log, when this year has one) with what StepUp and Excel did. */
+function allHistory(): HistoryChange[] {
+  const own = workspace && !workspace.legacy ? ledgerHistory(workspace!.store.cachedEvents(), ledger.state) : [];
+  return [...own, ...historyUi.fromFiles].sort((a, b) => b.at.localeCompare(a.at));
+}
+
+function historyList(): string {
+  const q = historyUi.search.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = allHistory().filter((c) => (!historyUi.source || c.source === historyUi.source)
+    && q.every((w) => `${c.summary} ${c.actor ?? ""} ${c.subject.label ?? ""} ${(c.details ?? []).map((d) => `${d.field} ${d.from ?? ""} ${d.to ?? ""}`).join(" ")}`.toLowerCase().includes(w)));
+  if (all.length === 0) return `<p class="note">${historyUi.loading ? "Reading the history…" : "Nothing has changed yet that matches."}</p>`;
+  const shown = all.slice(0, historyUi.limit);
+  const sources: Record<HistorySource, string> = { ledger: "Ledger", stepup: "StepUp", excel: "Excel" };
+  const purchaseFor = (c: HistoryChange): string | undefined => c.subject.purchaseId
+    ?? (c.subject.kind === "reimbursement" ? Object.values(ledger.state.submissions).find((s) => s.reimbursementId === c.subject.id)?.purchaseId : undefined);
+  let day = "";
+  const rows = shown.map((c) => {
+    const when = new Date(c.at);
+    const d = when.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    const head = d !== day ? `<h3 class="history-day">${esc(d)}</h3>` : "";
+    day = d;
+    const p = purchaseFor(c);
+    const what = p && ledger.state.purchases[p] ? `<button class="link" data-open="${esc(p)}">${esc(c.summary)}</button>` : esc(c.summary);
+    const details = (c.details ?? []).map((x) => `<li><strong>${esc(x.field)}</strong>: ${x.from !== undefined ? `${esc(x.from)} &rarr; ` : ""}${esc(x.to ?? "")}</li>`).join("");
+    return `${head}<li class="q history-row"><div><span class="badge history-${c.source}">${esc(sources[c.source])}</span> ${what}
+      <br><small>${esc(when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}${c.actor ? ` &middot; ${esc(c.actor)}` : ""}</small>${details ? `<ul class="history-details">${details}</ul>` : ""}</div></li>`;
+  });
+  return `<ul class="queue history-list">${rows.join("")}</ul>${all.length > shown.length ? `<p class="row"><button data-history-more="1">Show more (${all.length - shown.length} older)</button></p>` : ""}`;
+}
+
+function historyView(): string {
+  if (workspace && historyUi.year !== workspace.year.label && !historyUi.loading) void loadHistory();
+  const sel = (v: string, label: string) => `<option value="${v}"${historyUi.source === v ? " selected" : ""}>${label}</option>`;
+  return `<h2>History</h2>
+    <p class="note">Every change, from every source: what was done in this app, what StepUp itself changed, and what changed in the Excel workbook. Newest first.</p>
+    <p class="row">${clearableSearch("history-search", "Search the history")}<select id="history-source" aria-label="Source" style="width:auto">${sel("", "All sources")}${sel("ledger", "Ledger")}${sel("stepup", "StepUp")}${sel("excel", "Excel")}</select></p>
+    ${historyUi.error ? `<p class="warn">StepUp's and Excel's changes could not be read: ${esc(historyUi.error)}</p>` : ""}
+    <div id="history-list">${historyList()}</div>`;
+}
+
 function summaryView(): string {
   const state = ledger.state;
   const s = yearSummary(state, ctx());
@@ -1624,7 +1690,7 @@ async function autoReadReceipts(items: Array<{ docId: string; purchaseId?: strin
 
 function tabs(): string {
   const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") || (name === "statements" && view.name === "statement") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
-  return `<div class="tabs">${tab("queue", readOnly() ? "Purchases" : "Needs attention")}${tab("statements", "Proof of payment")}${tab("summary", "Summary")}</div>`;
+  return `<div class="tabs">${tab("queue", readOnly() ? "Purchases" : "Needs attention")}${tab("statements", "Proof of payment")}${tab("summary", "Summary")}${tab("history", "History")}</div>`;
 }
 
 /**
@@ -2193,6 +2259,13 @@ function filterLegacyList(restore = false): void {
 root.addEventListener("input", (ev) => {
   const t = ev.target as HTMLInputElement;
   if (t.id === "legacy-search") return filterLegacyList();
+  if (t.id === "history-search") {
+    historyUi.search = t.value;
+    historyUi.limit = 200;
+    const box = root.querySelector<HTMLElement>("#history-list");
+    if (box) box.innerHTML = historyList();
+    return;
+  }
   if (t.dataset?.["combo"] !== undefined) {
     if (t.name === "categoryId") categoryChanged(t);
     else if (t.name === "serviceProvider") t.dataset["picked"] = "";
@@ -2460,14 +2533,14 @@ function render(): void {
   const l = workspace?.legacy;
   if (l) {
     // A year Excel still owns: the ledger's own screens, read-only (see enforceReadOnly).
-    const page = view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : view.name === "purchase" ? purchaseView(view.id) : queueView();
+    const page = view.name === "summary" ? summaryView() : view.name === "history" ? historyView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : view.name === "purchase" ? purchaseView(view.id) : queueView();
     root.innerHTML = header() + tabs() + legacyBanner(workspace!) + previewPanel() + page + footer();
     enforceReadOnly(root);
     filterLegacyList(true);
     afterRender(scrollBack);
     return;
   }
-  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
+  const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "history" ? historyView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body + footer();
   filterLegacyList(true);
   scheduleClaimPoll();
@@ -2513,6 +2586,7 @@ window.addEventListener("popstate", (ev) => {
 
 function go(next: View): void {
   restoreScroll = undefined;
+  if (next.name === "history") historyUi.year = undefined; // each visit looks for anything new
   const from = view;
   view = next;
   remember(true, from);
@@ -2556,11 +2630,12 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
+    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
   }
+  if (d["historyMore"] !== undefined) { historyUi.limit += 200; render(); return; }
   if (d["pivotReset"] !== undefined) { resetPivots(); render(); return; }
   if (d["drillClear"] !== undefined) { clearDrill(); render(); return; }
   if (d["pcell"] !== undefined) {
@@ -2572,7 +2647,7 @@ root.addEventListener("click", async (ev) => {
     root.querySelector(".drill")?.scrollIntoView({ block: "start" });
     return;
   }
-  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
+  if (d["go"]) { ev.preventDefault(); go(d["go"] === "summary" ? { name: "summary" } : d["go"] === "history" ? { name: "history" } : d["go"] === "statements" ? { name: "statements" } : { name: "queue" }); }
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
     if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");
@@ -3111,6 +3186,13 @@ root.addEventListener("submit", async (ev) => {
 
 root.addEventListener("change", async (ev) => {
   const input = ev.target as HTMLInputElement;
+  if (input.id === "history-source") {
+    historyUi.source = (input as unknown as HTMLSelectElement).value as "" | HistorySource;
+    historyUi.limit = 200;
+    const box = root.querySelector<HTMLElement>("#history-list");
+    if (box) box.innerHTML = historyList();
+    return;
+  }
   if (["legacy-status", "legacy-child", "legacy-vendor", "legacy-sort"].includes(input.id)) {
     filterLegacyList();
     return;

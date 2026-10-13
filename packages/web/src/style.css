@@ -254,3 +254,11 @@ details.more > summary { font-weight: 500; color: var(--muted); font-size: .9rem
 details.more.inline { margin: 0; flex: 1 1 100%; }
 details.more > .row { margin: 8px 0 0; }
 details.more.inline > button.danger { margin-top: 8px; }
+
+/* History tab */
+.history-day { margin: 18px 0 6px; font-size: 1rem; }
+.history-row .badge { margin-right: 6px; }
+.history-ledger { border: 1px solid var(--accent); }
+.history-stepup { border: 1px solid var(--ok); }
+.history-excel { border: 1px solid var(--warn); }
+.history-details { margin: 6px 0 0; padding-left: 18px; font-size: 0.9em; }

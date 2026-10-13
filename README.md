@@ -150,6 +150,15 @@ Everything year-specific lives in `.env`, not code:
 - Update `ONEDRIVE_EXCEL_URL` and `ONEDRIVE_FILES_FOLDER_URL` to that year's workbook/folder share links.
 - Rerun `npm run discover` to confirm the table/column names still match what `packages/cli/src/reimbursements.ts` expects (`Table1`, `Status`, `Documentation File 1-6`, etc.) — if StepUp's site changed its field IDs or your spreadsheet's columns were renamed, `packages/cli/src/` would need updating too, but the links themselves never require a code change.
 
+## History
+
+The web app's **History** tab shows every change, from every source: what was done in the app (from the ledger's event log),
+what StepUp itself changed (a status, an amount, a reason; recorded by the CLI whenever a fresh copy of its list differs from
+what was kept), and what changed in the Excel workbook (by a person, or by the status sync; recorded from before-and-after
+readings). StepUp's and Excel's changes are kept as small files in `<year>/_history/`. The workbook is followed from the first
+sync that reads it, so edits made before then are not in the history. Only workbooks with a Table1 are followed (not the
+2023-2024 Gardiner sheet).
+
 ## Notes on data safety
 
 - Applicant/child PII in the strict sense (SSNs, addresses, DOBs — none of which this spreadsheet actually stores) is never printed. Item descriptions, dollar amounts, vendor names, and filenames *are* printed to the terminal where relevant (e.g. to confirm an item match) — the same information already visible in your own spreadsheet, needed for the tool to be usable.
