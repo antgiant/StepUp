@@ -199,3 +199,7 @@ html { overscroll-behavior-y: none; }
 .confirm-modal h2 { margin: 0 0 8px; font-size: 1.1rem; }
 .confirm-modal p { margin: 0 0 16px; overflow-wrap: anywhere; }
 .confirm-modal .actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* The manual-linking helper: charges for a purchase, or purchases for a charge. */
+.assist { padding: 12px 16px; margin: 8px 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.assist .queue > li { box-shadow: none; }

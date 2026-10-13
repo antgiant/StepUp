@@ -40,6 +40,12 @@ import {
   editStatementDetails,
   editTransaction,
   statementDisplayName,
+  chargesForPurchase,
+  purchasesForCharge,
+  sortCandidates,
+  type AssistSort,
+  type ChargeCandidate,
+  type PurchaseCandidate,
   addTransaction,
   removeTransaction,
   mergeReread,
@@ -144,6 +150,13 @@ let replacingReceipt: string | undefined;
 let editingTxn: string | undefined;
 /** The item the add-an-item form is working on: once its required details are filled in it exists and edits update it. */
 let itemEdit: { purchaseId: string; itemId?: string } | undefined;
+/**
+ * The manual-linking helper: the charge (on a statement) or the purchase it is open for, and how its list is ordered and
+ * narrowed. Opening it for something else starts the ordering and filters over.
+ */
+let assist: { kind: "txn"; docId: string; txnId: string } | { kind: "purchase"; purchaseId: string } | undefined;
+let assistView: { sort: AssistSort; card: string; child: string; vendor: string; method: string; noProof: boolean } = { sort: "best", card: "", child: "", vendor: "", method: "", noProof: false };
+const resetAssistView = () => { assistView = { sort: "best", card: "", child: "", vendor: "", method: "", noProof: false }; };
 const itemDraftKey = (purchaseId: string) => `stepup.itemdraft.${purchaseId}`;
 function readItemDraft(purchaseId: string): Record<string, string> {
   try {
@@ -1229,6 +1242,67 @@ const purchaseLabel = (id: string) => {
 
 function statementsView(): string {
   const state = ledger.state;
+const ASSIST_LIMIT = 25;
+const assistDays = (n: number | undefined) =>
+  n === undefined ? "no receipt date" : n === 0 ? "same day" : n > 0 ? `${n} day${n === 1 ? "" : "s"} after the receipt` : `${-n} day${n === -1 ? "" : "s"} before the receipt`;
+const assistAmount = (cents: number | undefined) =>
+  cents === undefined ? "purchase has no total yet" : cents === 0 ? "exact amount" : `charge is ${formatCents(Math.abs(cents))} ${cents > 0 ? "more" : "less"}`;
+
+function assistSelect(name: string, label: string, options: Array<[string, string]>, value: string): string {
+  return `<label>${label}<select data-assist="${name}">${options.map(([v, l]) => `<option value="${esc(v)}"${v === value ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
+}
+
+const assistSortSelect = () =>
+  assistSelect("sort", "Sort by", [["best", "Best match (date and amount)"], ["date", "Closest date"], ["amount", "Closest dollar amount"]], assistView.sort);
+
+/** The helper for one charge on a statement: purchases it could have paid for, ordered and filtered as chosen. */
+function purchaseAssist(docId: string, txnId: string): string {
+  const state = ledger.state;
+  const all = purchasesForCharge(state, docId, txnId);
+  const unique = (xs: string[]) => [...new Set(xs.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const children = unique(all.flatMap((c) => c.childIds)).map((id) => [id, state.children[id]?.name ?? id] as [string, string]);
+  const vendors = unique(all.map((c) => c.vendor)).map((v) => [v, v] as [string, string]);
+  const methods = unique(all.map((c) => c.methodId ?? "")).map((id) => [id, state.paymentMethods[id]?.label ?? id] as [string, string]);
+  const shown = all.filter((c) =>
+    (!assistView.child || c.childIds.includes(assistView.child)) &&
+    (!assistView.vendor || c.vendor === assistView.vendor) &&
+    (!assistView.method || c.methodId === assistView.method) &&
+    (!assistView.noProof || !c.hasProof));
+  const list = sortCandidates(shown, assistView.sort);
+  const row = (c: PurchaseCandidate) => `<li class="q"><span><strong>${esc(purchaseLabel(c.purchaseId))}</strong>${c.date ? ` <small>${esc(c.date)}</small>` : ""}${c.hasProof ? ` <small class="ok">has proof already</small>` : ""}${c.vendorHit ? ` <small class="ok">vendor looks right</small>` : ""}<br>
+    <small${c.beforeReceipt ? ` class="warn"` : ""}>${esc(assistAmount(c.amountDiffCents))} &middot; ${esc(assistDays(c.dayDiff))}${c.childIds.length ? ` &middot; ${esc(c.childIds.map((id) => state.children[id]?.name ?? id).join(", "))}` : ""}</small></span>
+    <span class="actions"><button data-link="${esc(c.purchaseId)}" data-txn="${esc(txnId)}" data-doc="${esc(docId)}">Link</button></span></li>`;
+  return `<div class="assist"><p class="row">${assistSortSelect()}
+    ${children.length > 1 ? assistSelect("child", "Child", [["", "Any child"], ...children], assistView.child) : ""}
+    ${vendors.length > 1 ? assistSelect("vendor", "Vendor", [["", "Any vendor"], ...vendors], assistView.vendor) : ""}
+    ${methods.length > 1 ? assistSelect("method", "Paid with", [["", "Any card"], ...methods], assistView.method) : ""}
+    <label class="check"><input type="checkbox" data-assist="noProof"${assistView.noProof ? " checked" : ""}> Only purchases without proof yet</label>
+    <button type="button" data-assist-close="1">Close</button></p>
+    ${list.length ? `<ul class="queue">${list.slice(0, ASSIST_LIMIT).map(row).join("")}</ul>${list.length > ASSIST_LIMIT ? `<p class="note">Showing the first ${ASSIST_LIMIT} of ${list.length}. Narrow it with the filters above.</p>` : ""}`
+      : `<p class="note">No purchases${shown.length < all.length ? " match those filters" : " to choose from yet"}.</p>`}
+    <p class="note">A payment does not normally show before its receipt, so purchases dated after the charge are listed last. They can still be right (a receipt dated at shipping, or billing ahead).</p></div>`;
+}
+
+/** The helper for one purchase: charges on any statement that could have paid for it, ordered and filtered as chosen. */
+function chargeAssist(purchaseId: string): string {
+  const all = chargesForPurchase(ledger.state, purchaseId);
+  if (all.length === 0) return "";
+  if (assist?.kind !== "purchase" || assist.purchaseId !== purchaseId) {
+    return `<p class="row"><button data-assist-purchase="${esc(purchaseId)}">Link a charge from a statement</button> <small>${all.length} unlinked charge(s) on your proof of payment.</small></p>`;
+  }
+  const cards = new Map(all.map((c) => [c.cardKey, c.cardLabel]));
+  const shown = all.filter((c) => !assistView.card || c.cardKey === assistView.card);
+  const list = sortCandidates(shown, assistView.sort);
+  const row = (c: ChargeCandidate) => `<li class="q"><span><strong>${esc(c.date)} &middot; ${formatCents(c.amountCents)}</strong> ${esc(c.descriptor)}${c.vendorHit ? ` <small class="ok">looks like this vendor</small>` : ""}<br>
+    <small${c.beforeReceipt ? ` class="warn"` : ""}>${esc(assistAmount(c.amountDiffCents))} &middot; ${esc(assistDays(c.dayDiff))} &middot; ${esc(c.cardLabel)}</small></span>
+    <span class="actions"><button data-link="${esc(purchaseId)}" data-txn="${esc(c.transactionId)}" data-doc="${esc(c.documentId)}">Link</button></span></li>`;
+  return `<div class="assist"><h4>Link a charge from a statement</h4><p class="row">${assistSortSelect()}
+    ${cards.size > 1 ? assistSelect("card", "Card", [["", "Any card"], ...[...cards].map(([k, l]) => [k, l] as [string, string])], assistView.card) : ""}
+    <button type="button" data-assist-close="1">Close</button></p>
+    ${list.length ? `<ul class="queue">${list.slice(0, ASSIST_LIMIT).map(row).join("")}</ul>${list.length > ASSIST_LIMIT ? `<p class="note">Showing the first ${ASSIST_LIMIT} of ${list.length}. Narrow it with the card filter.</p>` : ""}` : `<p class="note">No charges on that card.</p>`}
+    <p class="note">A payment does not normally show before its receipt, so charges dated before it are listed last. They can still be right (a receipt dated at shipping, or billing ahead).</p></div>`;
+}
+
   const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && !d.archived);
   const linkedBy = (docId: string) => new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId));
   const row = (d: (typeof docs)[number]) => {
@@ -1311,7 +1385,9 @@ function statementReview(id: string): string {
     const m = matches.get(t.id);
     const cands = [m?.best, ...(m?.alternatives ?? [])].filter(Boolean).slice(0, 3);
     const buttons = cands.map((c) => `<button data-link="${esc(c!.purchaseId)}" data-txn="${esc(t.id)}" data-doc="${esc(id)}" title="${esc(c!.reasons.join(", "))}">Link to ${esc(purchaseLabel(c!.purchaseId))} <small>${Math.round(c!.confidence * 100)}%</small></button>`).join(" ");
-    return `<tr>${base}<td>${buttons || `<small>No matching purchase yet</small>`}</td></tr>`;
+    const open = assist?.kind === "txn" && assist.docId === id && assist.txnId === t.id;
+    const find = open ? "" : `<button data-assist-txn="${esc(t.id)}" data-doc="${esc(id)}">Find a purchase</button>`;
+    return `<tr>${base}<td>${buttons || `<small>No matching purchase yet</small>`}${buttons && find ? "<br>" : " "}${find}</td></tr>${open ? `<tr><td colspan="4">${purchaseAssist(id, t.id)}</td></tr>` : ""}`;
   });
   const charges = data.transactions.filter((t) => t.kind === "purchase");
   const splits = matchSplitCharges(state, id, data);
@@ -1777,6 +1853,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
 /**
  * A search box with a list under it that narrows as you type (every word must appear somewhere in the row). Each row
  * leads with `title`, the part that tells options apart, with `detail` smaller beneath. Picking a row puts its `value`
+    ${chargeAssist(purchaseId)}
  * in the box. `free` lets any text be kept, for names that are not in the list.
  */
 function searchBox(name: string, value: string | undefined, rows: Array<{ value: string; title: string; detail?: string }>, o: { placeholder: string; required?: boolean; empty: string }): string {
@@ -2020,6 +2097,13 @@ root.addEventListener("focusin", (ev) => {
 function pickRow(li: HTMLElement): void {
   const input = li.closest(".combo")!.querySelector<HTMLInputElement>("input")!;
   input.value = li.dataset["value"]!;
+  const assistControl = t.dataset?.["assist"];
+  if (assistControl !== undefined) {
+    if (assistControl === "noProof") assistView.noProof = t.checked;
+    else if (assistControl === "sort") assistView.sort = (["best", "date", "amount"].includes(t.value) ? t.value : "best") as AssistSort;
+    else if (assistControl === "card" || assistControl === "child" || assistControl === "vendor" || assistControl === "method") assistView[assistControl] = t.value;
+    return render();
+  }
   input.dataset["picked"] = "1";
   closeCombo(input);
   if (input.name === "categoryId") categoryChanged(input);
@@ -2624,7 +2708,22 @@ root.addEventListener("click", async (ev) => {
   } else if (d["archiveDoc"]) {
     const linkedCount = Number(d["linked"] ?? 0);
     const name = ledger.state.documents[d["archiveDoc"]]?.filename ?? "this file";
+  } else if (d["assistTxn"]) {
+    resetAssistView();
+    assist = { kind: "txn", docId: d["doc"]!, txnId: d["assistTxn"] };
+    render();
+    return;
+  } else if (d["assistPurchase"]) {
+    resetAssistView();
+    assist = { kind: "purchase", purchaseId: d["assistPurchase"] };
+    render();
+    return;
+  } else if (d["assistClose"]) {
+    assist = undefined;
+    render();
+    return;
     const message = linkedCount
+    if (assist?.kind === "txn") assist = undefined;
       ? `${linkedCount} charge(s) on ${name} are linked as proof for purchases. The links stay, and you can restore the file later.`
       : `${name} will be hidden and moved to the "${ARCHIVE_FOLDER}" folder. It is not deleted; you can restore it later.`;
     if (await confirmModal("Archive this file?", message, "Archive")) {
