@@ -24,6 +24,8 @@ export interface RedactionPlan {
   keptTransactions: number;
   /** True when the top of the first page (issuer, card, period, who it is for) is left visible. */
   headerKept: boolean;
+  /** The text of the heading and footer lines that stay visible, so the output check can tell them from a leak. */
+  regionText: string[];
   /** Charges that were meant to stay but were not found on any page (so they would be blacked out). */
   missing: string[];
   warnings: string[];
@@ -33,6 +35,8 @@ export interface RedactionPlan {
 export const SENSITIVE = /\d{4}[- ]?\d{4}|(?:ending|account|acct|card)\D{0,15}\d{4}|x{3,}[- ]?\d{4}|\*{3,}[- ]?\d{4}/i;
 /** How much of the first page, from the top, can count as its header. */
 const HEADER_BAND = 0.35;
+/** How much of each page, from the bottom, can count as its footer. */
+const FOOTER_BAND = 0.2;
 const MONEY = /\d[\d,]*\.\d{2}\b/;
 const BALANCE_WORDS = /balance|payment due|due date|credit limit|credit line|available|minimum|new charges|previous|rewards|points|late fee|interest/i;
 const COLUMN_HEADER = /date.*(description|merchant|details|transaction).*amount/i;
@@ -50,10 +54,10 @@ function isFirstPageAnchor(text: string): boolean {
 
 const FAR = 100000;
 
-/** The full-width strips from the top of the page down to `bottom`, leaving out the given lines (and what is level with them). */
-function regionRects(bottom: number, hidden: Rect[], pad: number): Rect[] {
-  const cuts = hidden.map((r) => ({ x0: r.x0 - pad, x1: r.x1 + pad, y0: Math.max(bottom, r.y0 - pad), y1: r.y1 + pad })).filter((r) => r.y1 > bottom);
-  const ys = [...new Set([bottom, FAR, ...cuts.flatMap((c) => [c.y0, c.y1].filter((y) => y > bottom && y < FAR))])].sort((a, b) => a - b);
+/** The full-width strips between `bottom` and `top`, leaving out the given lines (and what is level with them). */
+function regionRects(bottom: number, top: number, hidden: Rect[], pad: number): Rect[] {
+  const cuts = hidden.map((r) => ({ x0: r.x0 - pad, x1: r.x1 + pad, y0: Math.max(bottom, r.y0 - pad), y1: Math.min(top, r.y1 + pad) })).filter((r) => r.y1 > r.y0);
+  const ys = [...new Set([bottom, top, ...cuts.flatMap((c) => [c.y0, c.y1].filter((y) => y > bottom && y < top))])].sort((a, b) => a - b);
   const out: Rect[] = [];
   for (let i = 0; i + 1 < ys.length; i++) {
     const [y0, y1] = [ys[i]!, ys[i + 1]!];
@@ -65,6 +69,21 @@ function regionRects(bottom: number, hidden: Rect[], pad: number): Rect[] {
       x = Math.max(x, c.x1);
     }
     out.push({ x0: x, y0, x1: FAR, y1 });
+  }
+  return out;
+}
+
+/** Per page, the line numbers in its bottom band (not charges): where a footer can be. */
+function pageFeet(flat: Array<{ page: number; line: PositionedLine }>, texts: string[], rowLines: Set<number>, pageCount: number): Map<number, number[]> {
+  void texts;
+  const out = new Map<number, number[]>();
+  for (let page = 0; page < pageCount; page++) {
+    const ns = flat.map((f, n) => ({ f, n })).filter((x) => x.f.page === page);
+    if (!ns.length) continue;
+    const topY = Math.max(...ns.map((x) => x.f.line.y1));
+    const bottomY = Math.min(...ns.map((x) => x.f.line.y0));
+    const ceiling = bottomY + FOOTER_BAND * (topY - bottomY);
+    out.set(page, ns.filter((x) => x.f.line.y1 <= ceiling && !rowLines.has(x.n)).map((x) => x.n));
   }
   return out;
 }
@@ -139,11 +158,34 @@ export function planRedaction(pages: PositionedLine[][], opts: RedactionOptions)
     const last = Math.min(...anchors.map((n) => flat[n]!.line.y0));
     const bottom = last - pad;
     const inRegion = flat.map((f, n) => n).filter((n) => flat[n]!.page === page && flat[n]!.line.y1 > last && !rowLines.has(n));
-    const hidden = inRegion.filter((n) => !repeats(n) && !(page === 0 && isFirstPageAnchor(texts[n]!)) && (MONEY.test(texts[n]!) || BALANCE_WORDS.test(texts[n]!)));
+    const hidden = [...inRegion, ...flat.map((_, n) => n).filter((n) => flat[n]!.page === page && flat[n]!.line.y1 > last && rowLines.has(n) && !keepIdx.has(n))].filter((n) => !repeats(n) && !(page === 0 && isFirstPageAnchor(texts[n]!)) && (MONEY.test(texts[n]!) || BALANCE_WORDS.test(texts[n]!)));
     for (const n of inRegion) if (!hidden.includes(n)) { keepIdx.add(n); regionIdx.add(n); }
-    regionKeeps.push({ page, rects: regionRects(bottom, hidden.map((n) => flat[n]!.line), pad) });
+    regionKeeps.push({ page, rects: regionRects(bottom, FAR, hidden.map((n) => flat[n]!.line), pad) });
   }
   const headerKept = regionKeeps.length > 0;
+
+  // The footer, the same way: a line at the bottom of the page that repeats on other pages is kept whole, with the area
+  // around it (logos, rules), from the page's bottom edge up to the highest such line.
+  const feet = pageFeet(flat, texts, rowLines, pages.length);
+  const footSeen = new Map<string, Set<number>>();
+  for (const [page, ns] of feet) for (const n of ns) {
+    const key = headingKey(texts[n]!);
+    if (key) (footSeen.get(key) ?? footSeen.set(key, new Set()).get(key)!).add(page);
+  }
+  for (const [page, ns] of feet) {
+    const anchors = ns.filter((n) => {
+      const key = headingKey(texts[n]!);
+      return key !== undefined && (footSeen.get(key)?.size ?? 0) > 1;
+    });
+    if (!anchors.length) continue;
+    const highest = Math.max(...anchors.map((n) => flat[n]!.line.y1));
+    const top = highest + pad;
+    const inRegion = flat.map((_, n) => n).filter((n) => flat[n]!.page === page && flat[n]!.line.y0 < highest);
+    const hidden = inRegion.filter((n) => !anchors.includes(n) && (rowLines.has(n) ? !keepIdx.has(n) : MONEY.test(texts[n]!) || BALANCE_WORDS.test(texts[n]!)));
+    for (const n of inRegion) if (!hidden.includes(n)) { keepIdx.add(n); regionIdx.add(n); }
+    regionKeeps.push({ page, rects: regionRects(-FAR, top, hidden.map((n) => flat[n]!.line), pad) });
+  }
+  const regionText = [...regionIdx].sort((a, b) => a - b).map((n) => texts[n]!);
 
   // The column headings directly above the first kept row on each page, so the rows can be read.
   for (const n of [...keepIdx]) {
@@ -165,9 +207,13 @@ export function planRedaction(pages: PositionedLine[][], opts: RedactionOptions)
 
   // A page with nothing kept is solid black: never worth sending. `matched` also drops pages that only repeat a heading.
   const hasCharge = out.map(() => false);
-  for (const n of keepIdx) if (rows.some((r) => r.index === n)) hasCharge[flat[n]!.page] = true;
+  const hasOwn = out.map(() => false); // something of the page's own, not just a heading or footer repeated from page one
+  for (const n of keepIdx) {
+    if (rows.some((r) => r.index === n)) hasCharge[flat[n]!.page] = true;
+    if (!regionIdx.has(n)) hasOwn[flat[n]!.page] = true;
+  }
   out.forEach((p, i) => {
-    if (p.keep.length === 0 || (opts.pages === "matched" && i > 0 && !hasCharge[i])) p.omit = true;
+    if (p.keep.length === 0 || (i > 0 && !hasOwn[i]) || (opts.pages === "matched" && i > 0 && !hasCharge[i])) p.omit = true;
   });
   if (out.length && out.every((p) => p.omit)) out[0]!.omit = false; // nothing found: keep one page so the failure is visible
 
@@ -175,7 +221,7 @@ export function planRedaction(pages: PositionedLine[][], opts: RedactionOptions)
   const warnings: string[] = [];
   if (keptIds.size === 0) warnings.push("None of the linked charges were found in this PDF, so every line would be blacked out.");
   if (!hasPeriodLine) warnings.push("The statement period was not found; the copy will not show which period it covers.");
-  return { pages: out, keptTransactions: keptIds.size, headerKept, missing, warnings };
+  return { pages: out, keptTransactions: keptIds.size, headerKept, regionText, missing, warnings };
 }
 
 export interface RedactionCheck {
@@ -191,12 +237,20 @@ export interface RedactionCheck {
  * Checks the finished copy by reading it again (OCR of the output pages): every kept charge must be legible, and nothing
  * else that looks like money or an account number may be. A regression guard, not a replacement for looking at the pages.
  */
-export function checkRedactionOutput(pageTexts: string[], kept: Pick<StatementTransaction, "descriptor" | "amountCents">[], opts: { headerKept?: boolean } = {}): RedactionCheck {
+export function checkRedactionOutput(pageTexts: string[], kept: Pick<StatementTransaction, "descriptor" | "amountCents">[], opts: { headerKept?: boolean; regionText?: string[] } = {}): RedactionCheck {
   const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
   const expected = new Set(kept.map((k) => money(k.amountCents)));
   const amounts = (t: string) => [...t.matchAll(/\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2}/g)].map((m) => m[0].replace(/,/g, ""));
   // Lines that are meant to be readable are not leaks: the heading on every page (card digits and all) and the kept
   // charges' own lines (with whatever else is printed on them, such as the points or cash back earned by that charge).
+  // OCR of a kept heading or footer line is not a leak: every number in it must be one the plan kept, and most of its words too.
+  const tokens = (t: string) => t.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const known = new Set((opts.regionText ?? []).flatMap(tokens));
+  const isKept = (line: string) => {
+    const ts = tokens(line);
+    if (!ts.length || !known.size) return false;
+    return ts.every((t) => !/\d/.test(t) || known.has(t)) && ts.filter((t) => known.has(t)).length / ts.length >= 0.7;
+  };
   const outside: string[] = [];
   const found = new Set<string>();
   for (const page of pageTexts) {
@@ -209,7 +263,7 @@ export function checkRedactionOutput(pageTexts: string[], kept: Pick<StatementTr
     lines.forEach((line, i) => {
       const here = amounts(line);
       here.forEach((a) => found.add(a));
-      if (i < from || here.some((a) => expected.has(a))) return;
+      if (i < from || here.some((a) => expected.has(a)) || isKept(line)) return;
       outside.push(line);
     });
   }

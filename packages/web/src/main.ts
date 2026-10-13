@@ -357,7 +357,7 @@ async function buildRedaction(docId: string, keep: ReadonlySet<string>, pages: "
   if (bytes.byteLength > MAX_PROOF_BYTES) throw new Error("The redacted copy is over StepUp's 5 MB limit.");
   const missing = new Set(plan.missing);
   const keptTxns = (ledger.state.documents[docId]?.statement?.transactions ?? []).filter((t) => keep.has(t.id) && !missing.has(t.id));
-  return { bytes, plan, check: checkRedactionOutput(ocrTexts, keptTxns, { headerKept: plan.headerKept }) };
+  return { bytes, plan, check: checkRedactionOutput(ocrTexts, keptTxns, { headerKept: plan.headerKept, regionText: plan.regionText }) };
 }
 
 /** Uploads a redacted copy next to its statement and makes it the one that is sent. */
@@ -601,7 +601,20 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
 }
 
 type View = { name: "queue" } | { name: "summary" } | { name: "statements" } | { name: "statement"; id: string } | { name: "purchase"; id: string; draft?: boolean };
-let view: View = { name: "queue" };
+/** A refresh keeps the screen it was on: the browser hands back the history entry's state, which holds the view and how far it was scrolled. */
+const restored = (() => {
+  try {
+    const saved = history.state as { view?: View; scroll?: number } | null;
+    const v = saved?.view;
+    const known = v && ((v.name === "queue" || v.name === "summary" || v.name === "statements") || ((v.name === "purchase" || v.name === "statement") && typeof v.id === "string"));
+    return known ? { view: v, scroll: typeof saved?.scroll === "number" ? saved.scroll : undefined } : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+let view: View = restored?.view ?? { name: "queue" };
+/** Where to scroll once the restored screen has its data, so a refresh puts you back where you were reading. */
+let restoreScroll = restored?.scroll;
 const root = document.getElementById("app")!;
 
 /** Spinner shown while we wait on the storage provider. Lives outside #app so re-rendering never removes it. */
@@ -1833,21 +1846,35 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ${receiptId ? `<p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>` : `<p class="warn">No receipt yet.</p>`}
     ${adders("receipt")}${pick("receipt", receiptId ? "Replace the receipt with this" : "Use as the receipt")}
     ${receiptId ? `<p><button data-cancel-replace="1">Keep the current receipt</button></p>` : ""}`;
-  const extraPart = draft
-    ? `<h4>Additional documentation</h4><p class="note">Save the purchase details above (or add a receipt) first; then you can add more documentation here.</p>`
-    : `<h4>Additional documentation</h4>
-    <p class="note">Anything else that backs this purchase up and is not the receipt itself: a card statement showing the payment, an email, a letter. It is optional, and you can add several.</p>
-    ${extras.length ? `<ul class="queue">${[...new Map(extras.map((a) => [a.documentId, a])).values()].map((a) => {
-      const hasCharge = a.kind === "payment-proof" && extras.some((x) => x.documentId === a.documentId && x.transactionId);
-      const canPreview = state.documents[a.documentId ?? ""]?.driveItemId && online;
-      return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`;
-    }).join("")}</ul><p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>` : `<p><small>None yet.</small></p>`}
+  // Proof of payment (a card statement showing the charge) is called out on its own, like the receipt; everything else
+  // that backs the purchase up stays under additional documentation.
+  const isProof = (a: { kind?: string; documentId?: string }) => a.kind === "payment-proof" || state.documents[a.documentId ?? ""]?.contentKind === "statement";
+  const listOf = (rows: typeof extras) => [...new Map(rows.map((a) => [a.documentId, a])).values()].map((a) => {
+    const hasCharge = a.kind === "payment-proof" && extras.some((x) => x.documentId === a.documentId && x.transactionId);
+    const canPreview = state.documents[a.documentId ?? ""]?.driveItemId && online;
+    return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`;
+  }).join("");
+  const proofs = extras.filter(isProof);
+  const others = extras.filter((a) => !isProof(a));
+  const saveFirst = (what: string) => `<p class="note">Save the purchase details above (or add a receipt) first; then you can add ${what} here.</p>`;
+  const proofPart = draft
+    ? `<h4>Proof of payment</h4>${saveFirst("proof of payment")}`
+    : `<h4>Proof of payment</h4>
+    <p class="note">The card or bank statement showing what was paid for this purchase. Link the charge below, and a copy that shows only that charge is what gets sent.</p>
+    ${proofs.length ? `<ul class="queue">${listOf(proofs)}</ul>` : `<p class="warn">No proof of payment yet.</p>`}
     ${chargeAssist(purchaseId)}
+    ${adders("additional")}${pick("additional", "Use as proof of payment")}`;
+  const extraPart = draft
+    ? `<h4>Additional documentation</h4>${saveFirst("more documentation")}`
+    : `<h4>Additional documentation</h4>
+    <p class="note">Anything else that backs this purchase up and is neither the receipt nor the proof of payment: an email, a letter. It is optional, and you can add several.</p>
+    ${others.length ? `<ul class="queue">${listOf(others)}</ul>` : `<p><small>None yet.</small></p>`}
+    <p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
   // Until there is a receipt, adding one comes first (above the items). After that, its details stay at the top of the
   // screen and the controls to replace or move it sit down here with the rest of the documentation.
   if (part === "top") return receiptId ? "" : `<section><h3>Receipt</h3>${receiptPart.replace("<h4>Receipt</h4>", "")}</section>`;
-  return `<section><h3>Documentation</h3>${receiptId ? receiptPart : ""}${extraPart}
+  return `<section><h3>Documentation</h3>${receiptId ? receiptPart : ""}${proofPart}${extraPart}
     ${online ? `<h4>Not for a purchase yet</h4><p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits in Unattached files on the list page until you attach it.</small></p>` : ""}</section>`;
 }
 
@@ -2295,6 +2322,19 @@ root.addEventListener("click", (ev) => {
 root.addEventListener("change", (ev) => { if (isFileInput(ev.target)) filePickerClosed(); }, true);
 root.addEventListener("cancel", (ev) => { if (isFileInput(ev.target)) filePickerClosed(); }, true);
 
+let previewShown = false;
+let scrollBeforePreview: number | undefined;
+
+/** Scroll adjustments that need the new page in place: back from a preview, or back to where a refresh left off. */
+function afterRender(scrollBack: number | undefined): void {
+  if (scrollBack !== undefined) {
+    window.scrollTo({ top: scrollBack });
+  } else if (restoreScroll !== undefined && workspace) {
+    window.scrollTo({ top: restoreScroll });
+    restoreScroll = undefined;
+  }
+}
+
 function render(): void {
   if (filePickerOpen) {
     renderDeferred = true;
@@ -2305,6 +2345,11 @@ function render(): void {
     return;
   }
   const onboarding = account && !workspace;
+  // Closing a preview puts the page back where it was when the preview was opened, instead of leaving it at the top.
+  const showingPreview = Boolean(preview || redactionDraft);
+  if (showingPreview && !previewShown) scrollBeforePreview = window.scrollY;
+  const scrollBack = !showingPreview && previewShown ? scrollBeforePreview : undefined;
+  previewShown = showingPreview;
   const l = workspace?.legacy;
   if (l) {
     // A year Excel still owns: its own read-only screens, and none of the editing ones (see legacyYear.ts).
@@ -2313,12 +2358,14 @@ function render(): void {
     const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : legacyQueueView(l);
     root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page + footer();
     filterLegacyList(true);
+    afterRender(scrollBack);
     return;
   }
   const body = onboarding ? onboardingView() : view.name === "queue" ? queueView() : view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : purchaseView(view.id, view.draft);
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body + footer();
   filterLegacyList(true);
   scheduleClaimPoll();
+  afterRender(scrollBack);
   if (scrollToMark) {
     scrollToMark = false;
     requestAnimationFrame(() => root.querySelector(".preview .hl")?.scrollIntoView({ block: "center", behavior: "smooth" }));
@@ -2335,9 +2382,20 @@ function remember(push: boolean, from?: View): void {
   } catch { /* history unavailable: back simply leaves the app */ }
 }
 remember(false);
+let scrollSaver: ReturnType<typeof setTimeout> | undefined;
+window.addEventListener("scroll", () => {
+  if (restoreScroll !== undefined) return; // still waiting to go back to where the refresh left off
+  if (scrollSaver) clearTimeout(scrollSaver);
+  scrollSaver = setTimeout(() => {
+    try {
+      history.replaceState({ view, scroll: window.scrollY }, "");
+    } catch { /* history unavailable or rate limited: a refresh just opens at the top */ }
+  }, 250);
+}, { passive: true });
 window.addEventListener("popstate", (ev) => {
   const saved = ev.state as { view?: View; scroll?: number } | null;
   const back = saved?.view;
+  restoreScroll = undefined;
   view = back && typeof back.name === "string" ? back : { name: "queue" };
   replacingReceipt = undefined;
   itemEdit = undefined;
@@ -2348,6 +2406,7 @@ window.addEventListener("popstate", (ev) => {
 });
 
 function go(next: View): void {
+  restoreScroll = undefined;
   const from = view;
   view = next;
   remember(true, from);

@@ -215,6 +215,25 @@ describe("redaction modes and output check", () => {
     expect(plan.pages[0]!.keep.some((r) => r.y0 <= at(/deducted/).y0 && r.y1 >= at(/deducted/).y1)).toBe(false);
   });
 
+  it("keeps a footer that repeats on every page, and the check does not call it a leak", () => {
+    const foot = (n: number) => ["Customer Service 1-855-473-4583", `Account number ending in: 7859   Page ${n} of 2`];
+    const body = (rows: string[]) => ["Citi Double Cash Card", "Billing Period: 06/20/26-07/21/26", "Trans Date Post Date Description Amount", ...rows, ...Array.from({ length: 12 }, (_, i) => `Body line ${i}`)];
+    const page1 = [...body(["09/18 09/19 AMZN Mktp US*2K4 Amzn.com/bill WA 54.28"]), ...foot(1)];
+    const page2 = [...body(["10/02 10/03 STAR LEARNING CO 12.00"]), ...foot(2)];
+    const plan = planRedaction(layout([page1, page2]), { keepTransactionIds: new Set([id(/AMZN/), id(/STAR LEARNING/)]) });
+    const lines = layout([page1, page2]);
+    for (const [pg, n] of [[0, 1], [1, 2]] as const) {
+      const f = lines[pg]!.find((l) => /Account number ending/.test(l.text))!;
+      expect(plan.pages[pg]!.keep.some((r) => r.y0 <= f.y0 && r.y1 >= f.y1 && r.x0 <= 0 && r.x1 >= 600)).toBe(true);
+      expect(plan.pages[pg]!.keptText).toContain(foot(n)[1]!.replace(/\s+/g, " "));
+    }
+    expect(plan.pages[0]!.keptText).not.toContain("Body line 3");
+    const kept = [{ descriptor: "AMZN", amountCents: 5428 }];
+    const out = ["Citi\nTrans Date Description Amount\n09/18 AMZN 54.28\nCustomer Service 1-855-473-4583\nAccount number ending in: 7859 Page 1 of 2"];
+    expect(checkRedactionOutput(out, kept, { headerKept: true }).leaks.length).toBeGreaterThan(0);
+    expect(checkRedactionOutput(out, kept, { headerKept: true, regionText: plan.regionText }).leaks).toEqual([]);
+  });
+
   it("knows when a saved copy no longer shows the linked charges", () => {
     const l = new Ledger(new MemoryEventStore(new MemoryBackend(), "dev"), new HlcClock("dev"), "t");
     l.set("document", "stmt", { filename: "S.pdf", contentKind: "statement", statement: { transactions: [] } as never });
