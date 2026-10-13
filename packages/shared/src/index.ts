@@ -46,6 +46,7 @@ export * from "./pdf/imagePdf.js";
 export * from "./imaging/blur.js";
 export * from "./statements/match.js";
 export * from "./statements/edit.js";
+export * from "./statements/assist.js";
 export * from "./entry/mapping.js";
 export * from "./submit/plan.js";
 export * from "./submit/filing.js";

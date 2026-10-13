@@ -11,6 +11,9 @@ import {
   matchStatement,
   parseAmount,
   parseStatementText,
+  chargesForPurchase,
+  purchasesForCharge,
+  sortCandidates,
   relinkAllStatements,
   saveStatement,
   unlinkTransaction,
@@ -297,5 +300,31 @@ describe("dates when matching and when linking by hand", () => {
     expect(before.best!.reasons.join()).toMatch(/before the receipt date/);
     // Far earlier than that is some other purchase.
     expect(matchStatement(l.state, "stmt", stmt("08/01 08/01 ACME BOOKS 40.00"))[0]!.best).toBeUndefined();
+  });
+
+  it("lists every charge for a purchase, nearest first, with charges before the receipt last", () => {
+    const l = newLedger();
+    const p = createPurchase(l, { vendor: "Acme Books", date: "2026-09-20", orderTotalCents: 4000 });
+    const data = stmt("09/19 09/19 OTHER 40.00\n09/21 09/22 FAR AWAY 90.00\n09/21 09/22 ACME BOOKS 41.50\n10/10 10/10 ACME BOOKS 40.00");
+    l.set("document", "stmt", { contentKind: "statement", filename: "Oct.pdf", statement: data as never });
+    const all = chargesForPurchase(l.state, p);
+    const names = (xs: typeof all) => xs.map((c) => `${c.date} ${c.amountCents}`);
+    expect(names(sortCandidates(all, "best"))).toEqual(["2026-09-21 4150", "2026-10-10 4000", "2026-09-21 9000", "2026-09-19 4000"]);
+    expect(names(sortCandidates(all, "date")).at(-1)).toBe("2026-09-19 4000");
+    expect(names(sortCandidates(all, "amount"))[0]).toBe("2026-10-10 4000");
+    expect(all.find((c) => c.date === "2026-09-19")).toMatchObject({ beforeReceipt: true, dayDiff: -1 });
+  });
+
+  it("lists purchases for a charge and leaves out charges that are already linked", () => {
+    const l = newLedger();
+    const a = createPurchase(l, { vendor: "Acme Books", date: "2026-09-20", orderTotalCents: 4000 });
+    createPurchase(l, { vendor: "Other", date: "2026-09-21", orderTotalCents: 100 });
+    const data = stmt("09/21 09/22 ACME BOOKS 40.00");
+    l.set("document", "stmt", { contentKind: "statement", statement: data as never });
+    const t = data.transactions[0]!.id;
+    const found = sortCandidates(purchasesForCharge(l.state, "stmt", t), "best");
+    expect(found[0]).toMatchObject({ purchaseId: a, amountDiffCents: 0, dayDiff: 2, vendorHit: true });
+    linkConfidentMatches(l, "stmt", matchStatement(l.state, "stmt", data));
+    expect(chargesForPurchase(l.state, a)).toEqual([]);
   });
 });

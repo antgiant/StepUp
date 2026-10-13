@@ -108,15 +108,20 @@ interface Clusterable {
   statement?: StatementData;
 }
 
+/** Which card or bank a statement is for: a stable key to group and filter by, and the words to show. */
+export function statementCard(s: StatementData | undefined): { key: string; label: string } {
+  const issuer = s?.issuer?.trim();
+  const last4 = s?.last4?.trim();
+  if (!s) return { key: "~unread", label: "Not read yet" };
+  if (!issuer && !last4) return { key: "~unknown", label: "Card not identified" };
+  return { key: `${(issuer ?? "").toLowerCase()}|${last4 ?? ""}`, label: [issuer ?? "Card", last4 ? `ending ${last4}` : ""].filter(Boolean).join(" ") };
+}
+
 /** Groups statements by issuer and last four digits, each group oldest first. Statements not read yet are last. */
 export function clusterStatements<T extends Clusterable>(docs: T[]): StatementGroup<T>[] {
   const groups = new Map<string, StatementGroup<T>>();
   for (const d of docs) {
-    const s = d.statement;
-    const issuer = s?.issuer?.trim();
-    const last4 = s?.last4?.trim();
-    const key = !s ? "~unread" : issuer || last4 ? `${(issuer ?? "").toLowerCase()}|${last4 ?? ""}` : "~unknown";
-    const label = !s ? "Not read yet" : issuer || last4 ? [issuer ?? "Card", last4 ? `ending ${last4}` : ""].filter(Boolean).join(" ") : "Card not identified";
+    const { key, label } = statementCard(d.statement);
     const g = groups.get(key) ?? { label, key, items: [] };
     g.items.push(d);
     groups.set(key, g);
