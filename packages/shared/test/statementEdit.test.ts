@@ -112,3 +112,14 @@ describe("groupBoxesIntoRows (OCR of a screenshot of a table)", () => {
     expect(groupBoxesIntoRows([box("a", 0, 0, 10, 20), box("b", 0, 25, 10, 45)])).toHaveLength(2);
   });
 });
+
+describe("statementDisplayName", () => {
+  const st = (o: object) => ({ transactions: [], ...o });
+  it("puts the card and period before the file name", async () => {
+    const { statementDisplayName } = await import("../src/statements/edit.js");
+    expect(statementDisplayName({ id: "d", filename: "June2026.pdf", statement: st({ issuer: "Citi", last4: "1234", periodStart: "2026-05-01", periodEnd: "2026-06-01" }) })).toBe("Citi 1234 (May 1 - June 1) - June2026");
+    expect(statementDisplayName({ id: "d", filename: "June2026.pdf" })).toBe("June2026.pdf");
+    const named = { id: "d", filename: "Citi 1234 (May 1 - June 1) - June2026.pdf", statement: st({ issuer: "Citi", last4: "1234", periodStart: "2026-05-01", periodEnd: "2026-06-01" }) };
+    expect(statementDisplayName(named)).toBe(named.filename);
+  });
+});

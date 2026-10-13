@@ -39,6 +39,7 @@ import {
   clusterStatements,
   editStatementDetails,
   editTransaction,
+  statementDisplayName,
   addTransaction,
   removeTransaction,
   mergeReread,
@@ -1235,14 +1236,14 @@ function statementsView(): string {
     const linked = linkedBy(d.id);
     const period = d.statement?.periodStart && d.statement.periodEnd ? `${d.statement.periodStart} to ${d.statement.periodEnd}${d.statement.periodInferred ? " (estimated)" : ""}` : "period not found";
     const summary = d.statement ? `${period} &middot; ${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
-    return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${d.statement ? summary : esc(summary)}</small></div>
+    return `<li class="q"><div><strong>${esc(statementDisplayName(d))}</strong><br><small>${d.statement ? summary : esc(summary)}</small></div>
       <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button><button class="danger" data-archive-doc="${esc(d.id)}" data-linked="${linked.size}" title="Hide this file (added by mistake). You can restore it.">Archive</button></div></li>`;
   };
   const groups = clusterStatements(docs);
   const rows = groups.map((g) => `<h3>${esc(g.label)} <small>(${g.items.length})</small></h3><ul class="queue">${g.items.map(row).join("")}</ul>`);
   const archivedStatements = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && d.archived);
   const archivedList = archivedStatements.length
-    ? `<details><summary>Archived proof of payment (${archivedStatements.length})</summary><ul class="queue">${archivedStatements.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
+    ? `<details><summary>Archived proof of payment (${archivedStatements.length})</summary><ul class="queue">${archivedStatements.map((d) => `<li class="q"><span>${esc(statementDisplayName(d))}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
   return `<h2>Proof of payment</h2>
     <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment): it is read on this device as soon as it is added, charges are matched to your purchases, and the confident matches are linked for you. Statements are grouped by card or bank, oldest first.</span></p>
@@ -1255,9 +1256,9 @@ function statementReview(id: string): string {
   const doc = state.documents[id];
   if (!doc) return `<p>That proof of payment no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
-  const head = `<p><a href="#" data-go="statements">&larr; All proof of payment</a></p><h2>${esc(doc.filename ?? id)}</h2>
+  const head = `<p><a href="#" data-go="statements">&larr; All proof of payment</a></p><h2>${esc(doc.contentKind === "statement" ? statementDisplayName(doc) : doc.filename ?? id)}</h2>
     <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>
-    ${doc.driveItemId && workspace ? `<form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc((doc.filename ?? "").replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form>` : ""}`;
+    ${doc.driveItemId && workspace ? `<form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc(statementDisplayName(doc).replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form>` : ""}`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Every page that shows something</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -1730,7 +1731,10 @@ function purchaseView(id: string, draft = false): string {
 function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false): string {
   const state = ledger.state;
   const online = Boolean(workspace);
-  const nameOf = (id: string | undefined) => esc(state.documents[id ?? ""]?.filename ?? "file");
+  const nameOf = (id: string | undefined) => {
+    const d = state.documents[id ?? ""];
+    return esc(d ? (d.contentKind === "statement" ? statementDisplayName(d) : d.filename ?? "file") : "file");
+  };
   const extras = Object.values(state.additionalDocs).filter((a) => a.ownerKind === "purchase" && a.ownerId === purchaseId);
   const used = new Set<string>([...Object.values(state.purchases).flatMap((q) => (q.receiptDocumentId ? [q.receiptDocumentId] : [])), ...Object.values(state.additionalDocs).flatMap((a) => (a.documentId ? [a.documentId] : []))]);
   const hasCopy = new Set(Object.values(state.documents).flatMap((d) => (d.derivedFrom ? [d.derivedFrom] : [])));
@@ -1741,7 +1745,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
         <button id="start-scan" data-for-purchase="${esc(purchaseId)}" data-role="${role}">Scan (several pages)</button></p>`
     : `<p class="note">Connect a folder to add files.</p>`;
   const pick = (role: DocRole, label: string) => loose.length
-    ? `<details><summary>Use a file you already added (${loose.length})</summary><ul class="queue">${loose.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}" data-role="${role}">${label}</button></span></li>`).join("")}</ul></details>`
+    ? `<details><summary>Use a file you already added (${loose.length})</summary><ul class="queue">${loose.map((d) => `<li class="q"><span>${esc(d.contentKind === "statement" ? statementDisplayName(d) : d.filename ?? d.id)}</span><span class="actions">${d.driveItemId && online ? `<button data-preview="${esc(d.id)}">Preview</button>` : ""}<button data-use-doc="${esc(d.id)}" data-purchase="${esc(purchaseId)}" data-role="${role}">${label}</button></span></li>`).join("")}</ul></details>`
     : "";
   const replacing = replacingReceipt === purchaseId;
   const receiptPart = receiptId && !replacing

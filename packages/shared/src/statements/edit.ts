@@ -126,3 +126,28 @@ export function clusterStatements<T extends Clusterable>(docs: T[]): StatementGr
   const rank = (g: StatementGroup<T>) => (g.key === "~unread" ? 2 : g.key === "~unknown" ? 1 : 0);
   return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 }
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** "2026-05-01" as "May 1"; with the year ("May 1, 2025") when asked. Anything unparseable comes back as it was. */
+function shortDate(iso: string, withYear: boolean): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  const month = m ? MONTHS[Number(m[2]) - 1] : undefined;
+  return m && month ? `${month} ${Number(m[3])}${withYear ? `, ${m[1]}` : ""}` : iso;
+}
+
+/**
+ * How to show a proof-of-payment file so the right one is obvious when choosing by hand:
+ * "Citi 1234 (May 1 - June 1) - June2026". Parts that were not read are left out, and a file name that already
+ * starts with the card is not prefixed twice.
+ */
+export function statementDisplayName(d: Clusterable): string {
+  const base = (d.filename ?? d.id).replace(/\.[^.]+$/, "");
+  const s = d.statement;
+  const card = [s?.issuer?.trim(), s?.last4?.trim()].filter(Boolean).join(" ");
+  const years = s?.periodStart && s.periodEnd ? s.periodStart.slice(0, 4) !== s.periodEnd.slice(0, 4) : false;
+  const period = s?.periodStart && s.periodEnd ? `${shortDate(s.periodStart, years)} - ${shortDate(s.periodEnd, years)}` : "";
+  const prefix = [card, period ? `(${period})` : ""].filter(Boolean).join(" ");
+  if (!prefix || base.toLowerCase().startsWith(prefix.toLowerCase())) return d.filename ?? d.id;
+  return `${prefix} - ${base}`;
+}
