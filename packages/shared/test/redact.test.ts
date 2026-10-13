@@ -8,6 +8,8 @@ import {
   createPurchase,
   parseStatementText,
   planRedaction,
+  locateCharges,
+  staleRedactions,
   positionedLines,
   type PositionedLine,
   type RulesContext,
@@ -46,10 +48,11 @@ describe("planRedaction", () => {
   const parsed = parseStatementText(text);
   const id = (re: RegExp) => parsed.transactions.find((t) => re.test(t.descriptor))!.id;
 
-  it("keeps only the issuer, the period, the headings and the chosen charges", () => {
+  it("keeps only the header, the headings and the chosen charges", () => {
     const plan = planRedaction(layout([PAGE1, PAGE2]), { keepTransactionIds: new Set([id(/AMZN/), id(/STAR LEARNING/)]) });
     expect(plan.pages[0]!.keptText).toEqual([
       "CHASE FREEDOM UNLIMITED VISA",
+      "Account ending in 4242",
       "Statement Period: 09/15/2026 - 10/14/2026",
       "Trans Date Post Date Description Amount",
       "09/18 09/19 AMZN Mktp US*2K4 Amzn.com/bill WA 54.28",
@@ -63,7 +66,8 @@ describe("planRedaction", () => {
   it("never keeps an account number, balances, rewards, payments, interest or unrelated charges", () => {
     const plan = planRedaction(layout([PAGE1, PAGE2]), { keepTransactionIds: new Set([id(/AMZN/), id(/PAYMENT/), id(/INTEREST/)]) });
     const kept = plan.pages.flatMap((p) => p.keptText).join("\n");
-    for (const secret of ["4242", "Balance", "Rewards", "PAYMENT THANK YOU", "INTEREST", "PHARMACY", "3456"]) expect(kept).not.toContain(secret);
+    expect(kept).toContain("Account ending in 4242"); // the header is shown as it is
+    for (const secret of ["Balance", "Rewards", "PAYMENT THANK YOU", "INTEREST", "PHARMACY", "3456"]) expect(kept).not.toContain(secret);
     expect(plan.keptTransactions).toBe(1); // payments and fees can't be kept even when asked
   });
 
@@ -140,13 +144,49 @@ describe("redaction modes and output check", () => {
   const id = (re: RegExp) => parsed.transactions.find((t) => re.test(t.descriptor))!.id;
   const three: string[] = ["PAGE 1 line", "PAGE 2 line", "PAGE 3"];
 
-  it("can leave out pages that have no kept charge, but always keeps the first", () => {
+  it("always leaves out a page that would be entirely black, and in matched mode pages with no kept charge", () => {
     const pagesText = [PAGE1, PAGE2, ["Nothing here", "09/30 09/30 SOME ROW 1.00"]];
     const all = planRedaction(layout(pagesText), { keepTransactionIds: new Set([id(/AMZN/)]) });
-    expect(all.pages.map((p) => p.omit)).toEqual([undefined, undefined, undefined]);
+    expect(all.pages.map((p) => p.omit)).toEqual([undefined, true, true]);
     const matched = planRedaction(layout(pagesText), { keepTransactionIds: new Set([id(/AMZN/)]), pages: "matched" });
     expect(matched.pages.map((p) => p.omit)).toEqual([undefined, true, true]);
     void three;
+  });
+
+  it("keeps the header at the top of the first page, but never a line with an amount or a balance", () => {
+    const page = ["Chase", "Account Number: 4000 1234 5678 9012", "JANE Q CARDHOLDER", "New Balance $1,812.44", "Statement Period: 09/15/2026 - 10/14/2026", "Trans Date Post Date Description Amount", "09/18 09/19 AMZN Mktp US*2K4 Amzn.com/bill WA 54.28", ...Array.from({ length: 8 }, (_, i) => `Footer line ${i}`)];
+    const plan = planRedaction(layout([page]), { keepTransactionIds: new Set([id(/AMZN/)]) });
+    const kept = plan.pages[0]!.keptText;
+    expect(plan.headerKept).toBe(true);
+    expect(kept).toContain("Chase");
+    expect(kept).toContain("Account Number: 4000 1234 5678 9012");
+    expect(kept).toContain("JANE Q CARDHOLDER");
+    expect(kept).not.toContain("New Balance $1,812.44");
+  });
+
+  it("locates a charge on its page", () => {
+    const found = locateCharges(layout([PAGE1, PAGE2]), new Set([id(/AMZN/)]));
+    expect(found).toHaveLength(1);
+    expect(found[0]!.page).toBe(0);
+  });
+
+  it("does not call the kept header's card digits a leak", () => {
+    const kept = [{ descriptor: "AMZN", amountCents: 5428 }];
+    const out = ["Chase\nAccount Number: 4000 1234 5678 9012\nTrans Date Description Amount\n09/18 AMZN 54.28"];
+    expect(checkRedactionOutput(out, kept).leaks.length).toBeGreaterThan(0);
+    expect(checkRedactionOutput(out, kept, { headerKept: true }).leaks).toEqual([]);
+    expect(checkRedactionOutput(["Chase\nTrans Date Description Amount\n09/18 AMZN 54.28\n4000 1234 5678 9012"], kept, { headerKept: true }).leaks.length).toBeGreaterThan(0);
+  });
+
+  it("knows when a saved copy no longer shows the linked charges", () => {
+    const l = new Ledger(new MemoryEventStore(new MemoryBackend(), "dev"), new HlcClock("dev"), "t");
+    l.set("document", "stmt", { filename: "S.pdf", contentKind: "statement", statement: { transactions: [] } as never });
+    l.set("additionalDoc", "a1", { ownerKind: "purchase", ownerId: "p1", documentId: "stmt", kind: "payment-proof", transactionId: "t1" });
+    expect(staleRedactions(l.state)).toEqual([{ documentId: "stmt", keep: ["t1"] }]);
+    l.set("document", "stmt-r", { derivedFrom: "stmt", redacted: true, redactedKeeps: ["t1"] });
+    expect(staleRedactions(l.state)).toEqual([]);
+    l.set("additionalDoc", "a2", { ownerKind: "purchase", ownerId: "p2", documentId: "stmt", kind: "payment-proof", transactionId: "t2" });
+    expect(staleRedactions(l.state)).toEqual([{ documentId: "stmt", keep: ["t1", "t2"] }]);
   });
 
   it("the finished copy passes when kept charges are legible and nothing else is", () => {

@@ -104,6 +104,8 @@ export interface DocumentRec {
   derivedFrom?: string;
   /** True for a copy with everything not needed as proof blacked out; it is what gets sent to StepUp instead of its original. */
   redacted?: boolean;
+  /** For a redacted copy: the statement charges it leaves visible, sorted, so a change in what is linked shows the copy is out of date. */
+  redactedKeeps?: string[];
   /** True for a smaller copy made to fit StepUp's size limit; the purchase uses it instead of `derivedFrom`. */
   shrunk?: boolean;
   /** Where it came from: dropped in the year folder the old way, uploaded through the app, or imported from a legacy workbook. */
