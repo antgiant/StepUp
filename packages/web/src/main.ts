@@ -915,7 +915,7 @@ function header(): string {
         ${workspace && storage.kind !== "browser" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
         ${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}
       </div></details>`}</nav></header>
-    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn">${esc(status)}</p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
+    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn notice" role="status">${esc(status)} <button id="dismiss-status">Dismiss</button></p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
 
 /** "Since you were last here": what other people and the command line did while this browser was away. */
@@ -2107,6 +2107,7 @@ window.addEventListener("popstate", (ev) => {
   replacingReceipt = undefined;
   itemEdit = undefined;
   preview = undefined;
+  status = "";
   render();
   window.scrollTo({ top: saved?.scroll ?? 0 });
 });
@@ -2117,6 +2118,7 @@ function go(next: View): void {
   remember(true, from);
   replacingReceipt = undefined;
   itemEdit = undefined;
+  status = ""; // a notice belongs to the screen it was shown on
   render();
   // A new page opens at its top, not wherever the previous one was scrolled to.
   window.scrollTo({ top: 0 });
@@ -2154,7 +2156,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
+    } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
@@ -2352,6 +2354,7 @@ root.addEventListener("click", async (ev) => {
   } else if (d["statement"]) {
     const from = view;
     view = { name: "statement", id: d["statement"] };
+    status = "";
     remember(true, from);
     render();
     window.scrollTo({ top: 0 });
@@ -2486,6 +2489,9 @@ root.addEventListener("click", async (ev) => {
   } else if (d["preview"]) {
     await guarded(() => openPreview(d["preview"]!), "Downloading the receipt…");
     window.scrollTo({ top: 0 });
+  } else if (t.id === "dismiss-status") {
+    status = "";
+    render();
   } else if (t.id === "close-preview") {
     preview = undefined;
     render();
