@@ -114,6 +114,8 @@ export interface DocumentRec {
   paymentEvidenceConfidence?: number;
   /** The line of the receipt that showed payment (what the confidence is based on). */
   paymentEvidenceSnippet?: string;
+  /** What was read from the file when it was added, kept so a purchase started from it begins filled in. Suggestions only. */
+  reading?: { vendor?: string; date?: string; invoiceNo?: string; orderTotalCents?: number; taxShippingTotalCents?: number };
 }
 
 export type AdditionalDocKind = "payment-proof" | "refund" | "explanation" | "preauth" | "other";

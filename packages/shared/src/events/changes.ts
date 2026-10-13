@@ -24,6 +24,7 @@ const WORDS: Record<string, (n: number) => string> = {
   "document.uploaded": (n) => `added ${n} file(s)`,
   "document.redacted": (n) => `made ${n} redacted copy(ies)`,
   "document.shrunk": (n) => `made ${n} smaller copy(ies) of receipts`,
+  "document.read": (n) => `read ${n} receipt(s)`,
   "statement.parsed": (n) => `read ${n} statement(s)`,
   "statement.rowEdited": (n) => `corrected ${n} statement row(s)`,
   "statement.rowAdded": (n) => `added ${n} statement row(s)`,

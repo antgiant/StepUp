@@ -446,6 +446,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
     let attached = 0;
     let marked = 0;
     const markedIds: string[] = [];
+    const receiptReads: Array<{ docId: string; purchaseId?: string }> = [];
     const dupes: string[] = [];
     for (const [i, file] of files.entries()) {
       note(`Preparing ${file.name} (${i + 1} of ${files.length})…`);
@@ -464,9 +465,12 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
         attachToPurchase(purchaseId, result.documentId, role);
         attached++;
       }
+      // A receipt (on a purchase, or unattached) is read as soon as it is added; extra documentation is not.
+      if (!asStatement && result.status === "uploaded" && result.documentId && (!purchaseId || role === "receipt")) receiptReads.push({ docId: result.documentId, ...(purchaseId ? { purchaseId } : {}) });
     }
     if (attached || marked) await ledger.flush();
-    const readNotes = markedIds.length ? await autoReadStatements(markedIds) : [];
+    const readNotes = [...(markedIds.length ? await autoReadStatements(markedIds) : []), ...(receiptReads.length ? await autoReadReceipts(receiptReads) : [])];
+    if (receiptReads.length) await ledger.flush();
     persist();
     status = [
       asStatement ? (marked ? `Added ${marked} file(s) as proof of payment.` : "") : "",
@@ -1293,10 +1297,10 @@ async function shrinkReceipt(purchaseId: string): Promise<void> {
 }
 
 /** Fills only the blank fields of a purchase from its receipt, and records whether the receipt itself shows payment. */
-async function readReceipt(purchaseId: string): Promise<void> {
+async function readReceipt(purchaseId: string, opts: { quiet?: boolean } = {}): Promise<string> {
   const p = ledger.state.purchases[purchaseId];
   const docId = p?.receiptDocumentId;
-  if (!p || !docId) return;
+  if (!p || !docId) return "";
   const { text, ocr } = await documentText(docId);
   const r = readReceiptText(text);
   const names: Record<string, string> = { vendor: "vendor", date: "date", invoiceNo: "invoice #", orderTotalCents: "total", taxShippingTotalCents: "tax/shipping" };
@@ -1316,7 +1320,7 @@ async function readReceipt(purchaseId: string): Promise<void> {
   }
   // Values already saved are never replaced silently (they may have been typed by hand), but a re-read that finds
   // something different is offered, so a wrong earlier reading can be corrected.
-  if (differs.length && confirm(`The receipt now reads differently from what is saved:\n\n${differs.map((k) => `${names[k]}: ${show(k, saved[k])} \u2192 ${show(k, read[k])}`).join("\n")}\n\nReplace the saved values?`)) {
+  if (differs.length && !opts.quiet && confirm(`The receipt now reads differently from what is saved:\n\n${differs.map((k) => `${names[k]}: ${show(k, saved[k])} \u2192 ${show(k, read[k])}`).join("\n")}\n\nReplace the saved values?`)) {
     for (const k of differs) fields[k] = read[k]!;
   }
   if (Object.keys(fields).length) ledger.set("purchase", purchaseId, fields, { label: "purchase.readFromReceipt" });
@@ -1325,11 +1329,46 @@ async function readReceipt(purchaseId: string): Promise<void> {
   await ledger.flush();
   const filled = Object.keys(fields).map((k) => names[k]);
   const proof = r.paymentEvidence ? (r.paymentEvidence.confidence >= 0.8 ? " The receipt shows payment, so it counts as proof." : " It does not clearly show payment; a statement may be needed.") : " No sign of payment was found on it.";
-  if (text.trim().length < 10) status = `No text could be read from this file${ocr ? " (even with OCR)" : ""}. Fill in the details by hand.`;
-  else if (Object.keys(read).length === 0 && !r.paymentEvidence) status = "The text was read, but no vendor, date, order number or total could be found in it. Fill in the details by hand.";
-  else if (filled.length) status = `Filled in ${filled.join(", ")}${ocr ? " (read by OCR: please check)" : ""}.${proof}`;
-  else if (differs.length) status = `Kept the saved ${differs.map((k) => names[k]).join(", ")}.${proof}`;
-  else status = `Everything it could read (${Object.keys(read).map((k) => names[k]).join(", ") || "payment"}) is already filled in.${proof}`;
+  if (text.trim().length < 10) return `No text could be read from this file${ocr ? " (even with OCR)" : ""}. Fill in the details by hand.`;
+  if (Object.keys(read).length === 0 && !r.paymentEvidence) return "The text was read, but no vendor, date, order number or total could be found in it. Fill in the details by hand.";
+  if (filled.length) return `Filled in ${filled.join(", ")}${ocr ? " (read by OCR: please check)" : ""}.${proof}`;
+  if (differs.length) return `Kept the saved ${differs.map((k) => names[k]).join(", ")}.${proof}`;
+  return `Everything it could read (${Object.keys(read).map((k) => names[k]).join(", ") || "payment"}) is already filled in.${proof}`;
+}
+
+/**
+ * Reads files that were just added as receipts, so nothing has to be pressed. On a purchase the blank fields are filled
+ * in; an unattached file keeps what was read so that starting a purchase from it begins filled in. One failure never
+ * stops the rest. Returns one sentence per file.
+ */
+async function autoReadReceipts(items: Array<{ docId: string; purchaseId?: string }>): Promise<string[]> {
+  const out: string[] = [];
+  for (const [i, { docId, purchaseId }] of items.entries()) {
+    const name = ledger.state.documents[docId]?.filename ?? "file";
+    note(`Reading ${name} (${i + 1} of ${items.length})…`);
+    try {
+      if (purchaseId && ledger.state.purchases[purchaseId]?.receiptDocumentId === docId) {
+        out.push(`${name}: ${await readReceipt(purchaseId, { quiet: true })}`);
+        continue;
+      }
+      const { text, ocr } = await documentText(docId);
+      const r = readReceiptText(text);
+      const reading = {
+        ...(r.vendor ? { vendor: r.vendor } : {}),
+        ...(r.date ? { date: r.date } : {}),
+        ...(r.invoiceNo ? { invoiceNo: r.invoiceNo } : {}),
+        ...(r.totalCents !== undefined ? { orderTotalCents: r.totalCents } : {}),
+        ...(r.taxShippingCents !== undefined ? { taxShippingTotalCents: r.taxShippingCents } : {}),
+      };
+      ledger.set("document", docId, { reading, ...(r.paymentEvidence ? { paymentEvidenceConfidence: r.paymentEvidence.confidence, paymentEvidenceSnippet: r.paymentEvidence.snippet } : {}) } as never, { label: "document.read" });
+      await ledger.flush();
+      const found = Object.keys(reading).length;
+      out.push(found ? `${name}: read ${found} detail(s)${ocr ? " by OCR (check them)" : ""}; they will fill in when you start a purchase.` : `${name}: nothing could be read from it.`);
+    } catch (err) {
+      out.push(`${name} could not be read (${err instanceof Error ? err.message : err}). You can fill in the details by hand.`);
+    }
+  }
+  return out;
 }
 
 function tabs(): string {
@@ -2270,7 +2309,14 @@ root.addEventListener("click", async (ev) => {
   else if (d["start"]) {
     const doc = ledger.state.documents[d["start"]];
     const hints = fileNameHints(doc?.filename ?? "");
-    const id = startPurchaseFromDocument(ledger, d["start"], { vendor: hints.vendor, date: hints.date });
+    const read = doc?.reading;
+    const id = startPurchaseFromDocument(ledger, d["start"], {
+      vendor: read?.vendor ?? hints.vendor,
+      date: read?.date ?? hints.date,
+      ...(read?.invoiceNo ? { invoiceNo: read.invoiceNo } : {}),
+      ...(read?.orderTotalCents !== undefined ? { orderTotalCents: read.orderTotalCents } : {}),
+      ...(read?.taxShippingTotalCents !== undefined ? { taxShippingTotalCents: read.taxShippingTotalCents } : {}),
+    });
     await guarded(() => ledger.flush(), `Saving to ${storage.label}…`);
     go({ name: "purchase", id });
   } else if (d["attach"]) {
@@ -2357,7 +2403,7 @@ root.addEventListener("click", async (ev) => {
     await guarded(() => shrinkReceipt(d["shrink"]!), "Making a smaller copy…");
     persist();
   } else if (d["readReceipt"]) {
-    await guarded(() => readReceipt(d["readReceipt"]!), "Reading the receipt…");
+    await guarded(async () => { status = await readReceipt(d["readReceipt"]!); }, "Reading the receipt…");
     persist();
   } else if (d["readStatement"]) {
     await guarded(async () => {
