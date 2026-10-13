@@ -123,14 +123,16 @@ describe("matchStatement", () => {
     expect(matchStatement(l.state, "stmt", data, { aliases: { zzq: ["amazon"] } })[0]).toMatchObject({ best: { purchaseId: p }, auto: true });
   });
 
-  it("does not match across a different card, or a charge before the purchase", () => {
+  it("does not match across a different card, or a charge long before the purchase", () => {
     const { l, amazon } = setup();
     l.set("paymentMethod", "visa", { last4: ["9999"] });
     const data = parseStatementText(STATEMENT);
     const m = matchStatement(l.state, "stmt", data).find((x) => x.best?.purchaseId === amazon);
     expect(m?.auto).toBe(false);
-    const early = parseStatementText("Statement Period 09/01/2026 - 09/30/2026\n09/01 09/01 AMAZON 54.28");
+    const early = parseStatementText("Statement Period 08/01/2026 - 08/31/2026\n08/01 08/01 AMAZON 54.28");
     expect(matchStatement(l.state, "stmt", early).find((x) => x.best?.purchaseId === amazon)).toBeUndefined();
+    const slightlyEarly = parseStatementText("Statement Period 09/01/2026 - 09/30/2026\n09/01 09/01 AMAZON 54.28");
+    expect(matchStatement(l.state, "stmt", slightlyEarly).find((x) => x.best?.purchaseId === amazon)).toMatchObject({ auto: false });
   });
 
   it("gives a purchase to only one automatic match, and does not stay ambiguous", () => {
@@ -276,5 +278,24 @@ describe("one order, several charges", () => {
     l.set("additionalDoc", "x", { ownerKind: "purchase", ownerId: p, documentId: "stmt", kind: "payment-proof", transactionId: "t" });
     const data = parseStatementText("Statement Period 10/01/2026 - 10/31/2026\n10/03 10/04 STAR LEARNING 20.00\n10/09 10/10 STAR LEARNING 40.00");
     expect(matchSplitCharges(l.state, "stmt", data)).toEqual([]);
+  });
+});
+
+describe("dates when matching and when linking by hand", () => {
+  const stmt = (rows: string) => parseStatementText(`Statement Period 09/15/2026 - 10/14/2026\n${rows}`);
+
+  it("accepts a charge a few days after the receipt, and only ever suggests one dated before it", () => {
+    const l = newLedger();
+    l.set("document", "stmt", { contentKind: "statement" });
+    const p = createPurchase(l, { vendor: "Acme Books", date: "2026-09-20", orderTotalCents: 4000 });
+    const after = matchStatement(l.state, "stmt", stmt("09/26 09/27 ACME BOOKS 40.00"))[0]!;
+    expect(after).toMatchObject({ best: { purchaseId: p }, auto: true }); // 7 days late still counts as the same purchase
+    expect(matchStatement(l.state, "stmt", stmt("09/20 09/20 ACME BOOKS 40.00"))[0]).toMatchObject({ best: { purchaseId: p }, auto: true }); // same day
+    // Charged before the receipt date (billed ahead, or a receipt dated at shipping): offered, never applied by itself.
+    const before = matchStatement(l.state, "stmt", stmt("09/18 09/19 ACME BOOKS 40.00"))[0]!;
+    expect(before).toMatchObject({ best: { purchaseId: p, beforeReceipt: true }, auto: false });
+    expect(before.best!.reasons.join()).toMatch(/before the receipt date/);
+    // Far earlier than that is some other purchase.
+    expect(matchStatement(l.state, "stmt", stmt("08/01 08/01 ACME BOOKS 40.00"))[0]!.best).toBeUndefined();
   });
 });

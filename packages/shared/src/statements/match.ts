@@ -8,6 +8,12 @@ export interface MatchOptions {
   tolerance?: (totalCents: number) => number;
   /** Receipt date -> posting date: how many days after the purchase a charge may appear. Default 30. */
   maxLagDays?: number;
+  /**
+   * How many days before the receipt date a charge may appear. Payment normally follows the receipt, but a receipt can be
+   * dated at shipping or invoicing after the card was charged, or billed ahead of a service. Such a match is only ever
+   * suggested, never linked automatically. Default 30.
+   */
+  maxLeadDays?: number;
   /** At or above this a match is applied without asking. Default 0.85. */
   autoThreshold?: number;
   /** Learned descriptor -> vendor words (e.g. `amzn: ["amazon"]`), so "AMZN Mktp" matches vendor "Amazon". */
@@ -18,6 +24,8 @@ export interface Candidate {
   purchaseId: string;
   confidence: number;
   reasons: string[];
+  /** The charge is dated before the receipt: plausible, but a person confirms it. */
+  beforeReceipt?: boolean;
 }
 
 export interface TransactionMatch {
@@ -30,9 +38,11 @@ export interface TransactionMatch {
 }
 
 const DAY = 86_400_000;
-const days = (iso: string) => Math.floor(Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) / DAY);
+/** A charge this many days (or fewer) after the receipt counts as the same purchase: banks post a few days late, more over a weekend. */
+const DATE_MATCH_DAYS = 7;
+export const days = (iso: string) => Math.floor(Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) / DAY);
 const STOP = new Set(["the", "inc", "llc", "ltd", "co", "com", "www", "pos", "purchase", "debit", "card", "payment", "online", "store", "mktp", "mktplace"]);
-const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w));
+export const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w));
 
 /** What a card would have been charged for a purchase: the receipt total if known, else its items with tax/shipping. */
 export function purchaseTotalCents(state: LedgerState, p: Purchase): number | undefined {
@@ -42,17 +52,18 @@ export function purchaseTotalCents(state: LedgerState, p: Purchase): number | un
   return sum > 0 ? sum : undefined;
 }
 
-function purchaseDate(state: LedgerState, p: Purchase): string | undefined {
+export function purchaseDate(state: LedgerState, p: Purchase): string | undefined {
   if (p.date) return p.date;
   const dates = Object.values(state.items).filter((i) => i.purchaseId === p.id && i.date).map((i) => i.date!).sort();
   return dates[0];
 }
 
-function score(state: LedgerState, p: Purchase, t: StatementTransaction, st: StatementData, opts: Required<Pick<MatchOptions, "tolerance" | "maxLagDays">> & Pick<MatchOptions, "aliases">): Candidate | undefined {
+function score(state: LedgerState, p: Purchase, t: StatementTransaction, st: StatementData, opts: Required<Pick<MatchOptions, "tolerance" | "maxLagDays" | "maxLeadDays">> & Pick<MatchOptions, "aliases">): Candidate | undefined {
   const total = purchaseTotalCents(state, p);
   if (total === undefined) return undefined;
   const reasons: string[] = [];
   let s = 0;
+  let beforeReceipt = false;
 
   const diff = Math.abs(total - t.amountCents);
   if (diff === 0) {
@@ -66,10 +77,14 @@ function score(state: LedgerState, p: Purchase, t: StatementTransaction, st: Sta
   const pd = purchaseDate(state, p);
   if (pd) {
     const lag = days(t.postDate ?? t.date) - days(pd);
-    if (lag < -3 || lag > opts.maxLagDays) return undefined;
-    if (lag >= 0 && lag <= 5) {
+    if (lag < -opts.maxLeadDays || lag > opts.maxLagDays) return undefined;
+    if (lag < 0) {
+      // A payment normally follows its receipt, so this earns no date credit and is never applied without asking.
+      beforeReceipt = true;
+      reasons.push(`charged ${-lag} day${lag === -1 ? "" : "s"} before the receipt date`);
+    } else if (lag <= DATE_MATCH_DAYS) {
       s += 0.25;
-      reasons.push("date matches");
+      reasons.push(lag === 0 ? "same date" : `posted ${lag} day${lag === 1 ? "" : "s"} later`);
     } else {
       s += 0.15;
       reasons.push("date close");
@@ -94,7 +109,7 @@ function score(state: LedgerState, p: Purchase, t: StatementTransaction, st: Sta
       reasons.push("different card");
     }
   }
-  return s > 0 ? { purchaseId: p.id, confidence: Math.round(Math.min(1, s) * 100) / 100, reasons } : undefined;
+  return s > 0 ? { purchaseId: p.id, confidence: Math.round(Math.min(1, s) * 100) / 100, reasons, ...(beforeReceipt ? { beforeReceipt } : {}) } : undefined;
 }
 
 /**
@@ -106,6 +121,7 @@ export function matchStatement(state: LedgerState, statementDocId: string, data:
   const opts = {
     tolerance: options.tolerance ?? ((total: number) => Math.max(100, Math.round(total * 0.02))),
     maxLagDays: options.maxLagDays ?? 30,
+    maxLeadDays: options.maxLeadDays ?? 30,
     aliases: options.aliases ?? state.settings["year"]?.vendorAliases,
   };
   const threshold = options.autoThreshold ?? 0.85;
@@ -121,7 +137,7 @@ export function matchStatement(state: LedgerState, statementDocId: string, data:
       .sort((a, b) => b.confidence - a.confidence || a.purchaseId.localeCompare(b.purchaseId));
     const [best, ...alternatives] = ranked;
     const clear = best !== undefined && (alternatives[0] === undefined || best.confidence - alternatives[0].confidence >= 0.1);
-    matches.push({ transactionId: t.id, ...(best ? { best } : {}), alternatives, auto: Boolean(best && best.confidence >= threshold && clear) });
+    matches.push({ transactionId: t.id, ...(best ? { best } : {}), alternatives, auto: Boolean(best && best.confidence >= threshold && clear && !best.beforeReceipt) });
   }
 
   // A purchase is claimed by at most one automatic match: the strongest charge wins, the rest become suggestions.
@@ -269,7 +285,7 @@ export interface SplitMatch {
  * A suggestion only.
  */
 export function matchSplitCharges(state: LedgerState, statementDocId: string, data: StatementData, options: MatchOptions = {}): SplitMatch[] {
-  const opts = { tolerance: options.tolerance ?? ((total: number) => Math.max(100, Math.round(total * 0.02))), maxLagDays: options.maxLagDays ?? 30, aliases: options.aliases ?? state.settings["year"]?.vendorAliases };
+  const opts = { tolerance: options.tolerance ?? ((total: number) => Math.max(100, Math.round(total * 0.02))), maxLagDays: options.maxLagDays ?? 30, maxLeadDays: options.maxLeadDays ?? 30, aliases: options.aliases ?? state.settings["year"]?.vendorAliases };
   const linked = new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === statementDocId && a.transactionId).map((a) => a.transactionId!));
   const proven = new Set(Object.values(state.additionalDocs).filter((a) => a.kind === "payment-proof" && a.ownerKind === "purchase").map((a) => a.ownerId!));
   const free = data.transactions.filter((t) => t.kind === "purchase" && !linked.has(t.id));
@@ -286,7 +302,7 @@ export function matchSplitCharges(state: LedgerState, statementDocId: string, da
       if (!words(t.descriptor).some((w) => vendor.some((v) => v === w || v.startsWith(w) || w.startsWith(v)) || opts.aliases?.[w]?.some((a) => vendor.includes(a)))) return false;
       if (!pd) return true;
       const lag = days(t.postDate ?? t.date) - days(pd);
-      return lag >= -3 && lag <= opts.maxLagDays;
+      return lag >= -opts.maxLeadDays && lag <= opts.maxLagDays;
     });
     if (pool.length < 2 || pool.length > 14) continue;
     const found = subsetsSumming(pool, total, opts.tolerance(total));
