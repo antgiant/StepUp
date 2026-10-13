@@ -1300,7 +1300,7 @@ function chargeAssist(purchaseId: string): string {
   const all = chargesForPurchase(ledger.state, purchaseId);
   if (all.length === 0) return "";
   if (assist?.kind !== "purchase" || assist.purchaseId !== purchaseId) {
-    return `<p class="row"><button data-assist-purchase="${esc(purchaseId)}">Link a charge from a statement</button> <small>${all.length} unlinked charge(s) on your proof of payment.</small></p>`;
+    return `<p class="row"><button data-assist-purchase="${esc(purchaseId)}">Link a charge from a statement</button> <small>Pick the statement charge that paid for this purchase; the closest matches are listed first.</small></p>`;
   }
   const cards = new Map(all.map((c) => [c.cardKey, c.cardLabel]));
   const shown = all.filter((c) => !assistView.card || c.cardKey === assistView.card);
