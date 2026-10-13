@@ -100,7 +100,7 @@ import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages
 import { shrinkToLimit } from "./shrink.js";
 import { cacheDocument, clearCachedDocuments, getCachedDocument, hasSharedFiles, takeSharedFiles } from "./docCache.js";
 import { addScanPage, buildScanPdf, type ScanPage } from "./scan.js";
-import { pdfFirstPageOcrText, pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
+import { pdfFirstPageOcrText, pdfLines, pdfToText, renderPdfPagesJpeg, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import { enablePullToRefresh } from "./pullRefresh.js";
 import "./style.css";
@@ -232,7 +232,23 @@ const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
 
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
-let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string } | undefined;
+let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string; pages?: string[] } | undefined;
+
+/**
+ * iPhone and iPad show only the first page of a PDF inside an <iframe> and cannot scroll to the rest, so there a PDF is
+ * drawn page by page as pictures instead. Everywhere else the browser's own viewer is better (zoom, search, select).
+ */
+const iosLike = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+async function pdfPagePictures(blob: Blob): Promise<string[]> {
+  const pages = await renderPdfPagesJpeg(blob, 1.5, 0.82);
+  return pages.map((p) => URL.createObjectURL(new Blob([p.jpeg as BlobPart], { type: "image/jpeg" })));
+}
+
+function clearPreview(): void {
+  preview?.pages?.forEach((u) => URL.revokeObjectURL(u));
+  preview = undefined;
+}
 const downloaded = new Map<string, { url: string; kind: PreviewKind; blob: Blob }>();
 const emailTexts = new Map<string, string>();
 
@@ -281,11 +297,14 @@ function scanPanel(): string {
 }
 
 /** A redacted copy that has been made but not saved: the person checks every page before it can be used. */
-let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan; check: RedactionCheck } | undefined;
+let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan; check: RedactionCheck; pages?: string[] } | undefined;
 const MAX_PROOF_BYTES = 5 * 1024 * 1024;
 
 function discardRedaction(): void {
-  if (redactionDraft) URL.revokeObjectURL(redactionDraft.url);
+  if (redactionDraft) {
+    URL.revokeObjectURL(redactionDraft.url);
+    redactionDraft.pages?.forEach((u) => URL.revokeObjectURL(u));
+  }
   redactionDraft = undefined;
 }
 
@@ -311,7 +330,9 @@ async function makeRedaction(docId: string, options: { pages: "all" | "matched";
   const keptTxns = (ledger.state.documents[docId]?.statement?.transactions ?? []).filter((t) => keep.has(t.id) && !missing.has(t.id));
   const check = checkRedactionOutput(ocrTexts, keptTxns);
   discardRedaction();
-  redactionDraft = { docId, bytes, url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" })), plan, check };
+  const redactedBlob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+  const pages = iosLike ? await pdfPagePictures(redactedBlob) : undefined;
+  redactionDraft = { docId, bytes, url: URL.createObjectURL(redactedBlob), plan, check, ...(pages ? { pages } : {}) };
 }
 
 async function saveRedaction(): Promise<void> {
@@ -335,7 +356,9 @@ async function openPreview(docId: string): Promise<void> {
   const filename = doc.filename ?? "receipt";
   const got = await loadDocument(docId);
   if (got.kind === "email") emailTexts.set(docId, emlToText(await got.blob.text()));
-  preview = { docId, filename, url: got.url, kind: got.kind, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
+  const pages = iosLike && got.kind === "pdf" ? await pdfPagePictures(got.blob) : undefined;
+  clearPreview();
+  preview = { docId, filename, url: got.url, kind: got.kind, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}), ...(pages ? { pages } : {}) };
 }
 
 function redactionPanel(): string {
@@ -351,7 +374,7 @@ function redactionPanel(): string {
   return `<section class="preview"><div class="preview-bar"><strong>Redacted copy of ${name}</strong>
       <span><button id="save-redaction"><strong>Looks right: save it</strong></button><button id="discard-redaction">Discard</button></span></div>
     <p class="note" style="padding:8px 14px;margin:0">Check every page. Only the issuer, the period, the column headings and ${d.plan.keptTransactions} linked charge(s) should be readable; everything else must be black.</p>
-    ${verdict}${missing}${warnings}<iframe src="${esc(d.url)}" title="Redacted copy"></iframe></section>`;
+    ${verdict}${missing}${warnings}${d.pages ? `<div class="pages">${d.pages.map((u, i) => `<img src="${esc(u)}" alt="Redacted copy, page ${i + 1}">`).join("")}</div>` : `<iframe src="${esc(d.url)}" title="Redacted copy"></iframe>`}</section>`;
 }
 
 function previewPanel(): string {
@@ -359,6 +382,7 @@ function previewPanel(): string {
   const open = preview.webUrl?.startsWith("https://") ? ` <a href="${esc(preview.webUrl)}" target="_blank" rel="noopener">Open in ${esc(storage.label)}</a>` : "";
   const body =
     preview.kind === "image" ? `<img src="${esc(preview.url)}" alt="${esc(preview.filename)}">`
+    : preview.kind === "pdf" && preview.pages ? `<div class="pages">${preview.pages.map((u, i) => `<img src="${esc(u)}" alt="${esc(preview!.filename)}, page ${i + 1}">`).join("")}</div>`
     : preview.kind === "pdf" ? `<iframe src="${esc(preview.url)}" title="${esc(preview.filename)}"></iframe>`
     : preview.kind === "email" ? `<pre class="mail">${esc(emailTexts.get(preview.docId) ?? "")}</pre>`
     : `<p class="note">This file type cannot be previewed here.${open}</p>`;
@@ -579,7 +603,7 @@ async function dropWorkspace(): Promise<void> {
 }
 
 function clearPreviews(): void {
-  preview = undefined;
+  clearPreview();
   discardScan();
   discardRedaction();
   for (const d of downloaded.values()) URL.revokeObjectURL(d.url);
@@ -2106,7 +2130,7 @@ window.addEventListener("popstate", (ev) => {
   view = back && typeof back.name === "string" ? back : { name: "queue" };
   replacingReceipt = undefined;
   itemEdit = undefined;
-  preview = undefined;
+  clearPreview();
   status = "";
   render();
   window.scrollTo({ top: saved?.scroll ?? 0 });
@@ -2493,7 +2517,7 @@ root.addEventListener("click", async (ev) => {
     status = "";
     render();
   } else if (t.id === "close-preview") {
-    preview = undefined;
+    clearPreview();
     render();
   } else if (d["archive"]) {
     if (await confirmModal("Archive this purchase?", "It and its items are hidden from the list, plan and budget. You can restore it later.", "Archive")) {
