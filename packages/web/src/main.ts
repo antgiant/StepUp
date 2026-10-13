@@ -100,7 +100,7 @@ import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages
 import { shrinkToLimit } from "./shrink.js";
 import { cacheDocument, clearCachedDocuments, getCachedDocument, hasSharedFiles, takeSharedFiles } from "./docCache.js";
 import { addScanPage, buildScanPdf, type ScanPage } from "./scan.js";
-import { pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
+import { pdfFirstPageOcrText, pdfLines, pdfToText, renderRedactedPdf } from "./pdfText.js";
 import { photoName, prepareUpload, previewKind, sha256Hex, type PreviewKind } from "./files.js";
 import { enablePullToRefresh } from "./pullRefresh.js";
 import "./style.css";
@@ -1269,8 +1269,14 @@ async function documentText(docId: string): Promise<{ text: string; ocr: boolean
   const got = await loadDocument(docId);
   note("Reading the file on this device…");
   let read: { text: string; ocr: boolean };
-  if (got.kind === "pdf") read = await pdfToText(got.blob);
-  else if (got.kind === "image") read = { text: (await ocrImage(got.blob)).text, ocr: true };
+  if (got.kind === "pdf") {
+    read = await pdfToText(got.blob);
+    // A printed email's header (with the sent date) is often a picture. When the text has no date, read the first page too.
+    if (!read.ocr && !readReceiptText(read.text).date) {
+      const header = await pdfFirstPageOcrText(got.blob).catch(() => "");
+      if (readReceiptText(header).date) read = { text: `${read.text}\n${header}`, ocr: true };
+    }
+  } else if (got.kind === "image") read = { text: (await ocrImage(got.blob)).text, ocr: true };
   else if (got.kind === "email") read = { text: emlToText(await got.blob.text()), ocr: false };
   else throw new Error("This file type can't be read. Fill in the details by hand.");
   documentTexts.set(docId, read);

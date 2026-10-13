@@ -53,6 +53,28 @@ export async function pdfLines(file: Blob): Promise<{ pages: PositionedLine[][];
   }
 }
 
+/**
+ * OCR of the first page only, even when the PDF has a text layer. Mail apps print an email's header (From / Date / To)
+ * as a picture, so the sent date is on the page but not in the text layer.
+ */
+export async function pdfFirstPageOcrText(file: Blob): Promise<string> {
+  const { task, doc } = await openPdf(file);
+  try {
+    const page = await doc.getPage(1);
+    const viewport = page.getViewport({ scale: OCR_SCALE });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+    return (await ocrCanvas(canvas)).map((l) => l.text).join("\n");
+  } finally {
+    await task.destroy();
+  }
+}
+
 /** The PDF's text, line by line (pages separated by a blank line). */
 export async function pdfToText(file: Blob): Promise<{ text: string; ocr: boolean }> {
   const { pages, ocr } = await pdfLines(file);

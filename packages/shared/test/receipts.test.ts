@@ -110,4 +110,11 @@ describe("OCR confidence", () => {
     expect(readReceiptText("Thanks for your order,\nTravis\nTotal $5.00").vendor).not.toBe("Travis");
     expect(readReceiptText("Hi Travis,\nAcme Tutoring\nTotal $5.00").vendor).toBe("Acme Tutoring");
   });
+
+  it("uses the sent date from a printed email's header when the body has none", () => {
+    const body = "Your next listen is ready,\nTravis\nOrder number: D01-3571323-5926648\nTotal paid: $3.18";
+    const header = "From: Audible.com donotreply@audible.com\nSubject: Thanks, your order is complete\nDate: Jun 30, 2026 at 9:47:13 PM\nTo: antgiant@wooleys.us";
+    expect(readReceiptText(body).date).toBeUndefined();
+    expect(readReceiptText(`${body}\n${header}`)).toMatchObject({ date: "2026-06-30", vendor: "Audible", totalCents: 318 });
+  });
 });
