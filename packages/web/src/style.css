@@ -204,7 +204,7 @@ html { overscroll-behavior-y: none; }
 .assist { padding: 12px 16px; margin: 8px 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .assist .queue > li { box-shadow: none; }
 
-/* The purchase detail page: one card per step, with the page title above and a clear hierarchy inside each. */
+/* The purchase detail page: one card per section, with the page title above and a clear hierarchy inside each. */
 input, select { min-height: 42px; }
 /* Date fields keep the native picker but are drawn like every other field (iOS otherwise shrinks and re-pads them). */
 input[type="date"] { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 0; line-height: 1.2; }
@@ -216,8 +216,7 @@ label[hidden] { display: none; }
 
 .panel { margin: 16px 0; padding: 4px 16px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .panel-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 14px 0 10px; font-size: 1.1rem; text-transform: none; letter-spacing: 0; color: var(--fg); }
-.panel-title small { flex-basis: 100%; margin-left: 38px; font-size: .85rem; font-weight: 400; color: var(--muted); }
-.panel-title .step { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-size: .9rem; font-weight: 700; }
+.panel-title small { flex-basis: 100%; font-size: .85rem; font-weight: 400; color: var(--muted); }
 .panel h4 { margin: 20px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 1rem; }
 .panel-title + h4 { border-top: 0; padding-top: 0; margin-top: 4px; }
 .panel details { box-shadow: none; background: var(--bg); }

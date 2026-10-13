@@ -1735,8 +1735,8 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
 
 /** Cards on the purchase page the person has folded away; remembered while the page is open, across redraws. */
 const collapsedPanels = new Set<string>();
-function panel(key: string, step: number, title: string, body: string, cls = ""): string {
-  return `<details class="panel${cls ? " " + cls : ""}" data-panel="${key}"${collapsedPanels.has(key) ? "" : " open"}><summary class="panel-title"><span class="step">${step}</span>${title}</summary>${body}</details>`;
+function panel(key: string, title: string, body: string, cls = ""): string {
+  return `<details class="panel${cls ? " " + cls : ""}" data-panel="${key}"${collapsedPanels.has(key) ? "" : " open"}><summary class="panel-title">${title}</summary>${body}</details>`;
 }
 root.addEventListener("toggle", (ev) => {
   const el = ev.target;
@@ -1782,7 +1782,7 @@ function purchaseView(id: string, draft = false): string {
     return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   <h2>New purchase</h2>
   <p class="note">This purchase is saved as soon as you fill in a detail and move to the next field.</p>
-  ${panel("details", 1, "Purchase details", `<form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
+  ${panel("details", "Purchase details", `<form id="purchase-form" class="grid" data-id="${esc(id)}" data-draft="1">
     <label class="wide">Name<input name="name" placeholder="e.g. Math curriculum"></label>
     <label class="wide">Vendor${storeBox("vendor", undefined)}</label>
     <label>Date<input name="date" type="date"></label>
@@ -1808,7 +1808,7 @@ function purchaseView(id: string, draft = false): string {
   return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
   ${filingNotice}${draftNote(items.map((i) => i.id))}
   <div class="page-title"><h2>${esc(purchaseName(p))}</h2><p class="note">${doc ? `Receipt file: ${esc(doc.filename)}` : "No receipt file yet"}</p></div>
-  ${panel("details", 1, "Purchase details", `<form id="purchase-form" class="grid" data-id="${esc(id)}">
+  ${panel("details", "Purchase details", `<form id="purchase-form" class="grid" data-id="${esc(id)}">
     <label class="wide">Name<input name="name" value="${esc(p.name)}" placeholder="${esc(purchaseName({ ...p, name: undefined }))}"></label>
     <label class="wide">Vendor${storeBox("vendor", p.vendor)}</label>
     <label>Date<input name="date" type="date" value="${esc(p.date)}"></label>
@@ -1817,7 +1817,7 @@ function purchaseView(id: string, draft = false): string {
     <label>Tax/shipping total<input name="taxTotal" inputmode="decimal" value="${money(p.taxShippingTotalCents)}"></label>
     ${saveIndicator()}</form>`)}
   ${documentation(id, p.receiptDocumentId, "bottom", false, receipt)}
-  ${panel("items", 3, `Items${items.length || remaining !== undefined ? ` <small>${items.length} item${items.length === 1 ? "" : "s"}${remaining !== undefined ? ` &middot; ${formatCents(remaining)} left to itemize` : ""}</small>` : ""}`, `
+  ${panel("items", `Items${items.length || remaining !== undefined ? ` <small>${items.length} item${items.length === 1 ? "" : "s"}${remaining !== undefined ? ` &middot; ${formatCents(remaining)} left to itemize` : ""}</small>` : ""}`, `
   ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">No items yet. Add the first one below.</p>`}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
   <h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Item" : "Add an item"}</h4>
@@ -1900,7 +1900,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
   // One "Documents" section: the receipt first, then proof of payment, then anything else. (`top` is no longer used.)
   if (part === "top") return "";
-  return panel("documents", 2, "Documents", `${receiptPart}${proofPart}${extraPart}`);
+  return panel("documents", "Documents", `${receiptPart}${proofPart}${extraPart}`);
 }
 
 /**
