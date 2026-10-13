@@ -1875,7 +1875,6 @@ function purchaseView(id: string, draft = false): string {
   ${documentation(id, p.receiptDocumentId, "bottom", false, receipt)}
   ${panel("items", `Items${items.length || remaining !== undefined ? ` <small>${items.length} item${items.length === 1 ? "" : "s"}${remaining !== undefined ? ` &middot; ${formatCents(remaining)} left to itemize` : ""}</small>` : ""}`, `
   ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">${readOnly() ? "No items." : "No items yet. Add the first one below."}</p>`}
-  ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
   ${readOnly() ? "" : `<h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Editing this item" : "Add an item"}</h4>
   <p class="note">It is saved as soon as it has a child, a description and an amount. Add the category and benefit message now or later: the item lists what is still missing, and you can come back with <strong>Edit</strong>.</p>
   ${children.length === 0 ? `<p class="warn">Add a child on the list page first.</p>` : ""}
@@ -2917,9 +2916,6 @@ root.addEventListener("click", async (ev) => {
     await save();
   } else if (d["dup"]) {
     duplicateItem(ledger, d["dup"]);
-    await save();
-  } else if (d["realloc"]) {
-    reallocateTax(ledger, d["realloc"]);
     await save();
   }
 });
