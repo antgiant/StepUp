@@ -104,7 +104,8 @@ import { rememberStorage, switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
-import { UNCLEAR_FILTER, chooseReceipt, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacyPurchaseView, legacyQueueView, legacySpreadsheet, legacyStatementsView, legacySummaryView, legacyTabs, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
+import { enforceReadOnly } from "./readOnly.js";
+import { UNCLEAR_FILTER, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
 import { shrinkToLimit } from "./shrink.js";
@@ -246,6 +247,21 @@ const ctx = (): RulesContext => ({
 });
 const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
   (i.categoryId && reference()?.category(i.categoryId)?.path.join(" - ")) || i.categoryPath?.join(" - ") || i.categoryId || "";
+
+/**
+ * A year Excel still owns is shown on the very same screens as a ledger year, read-only. Views are written once, for the
+ * ledger; this flag only drops what edits (and the app's own rules talking where Excel's status is the authority).
+ */
+const readOnly = (): boolean => Boolean(workspace?.legacy);
+
+/** What the status column reads for an item: Excel's own words for a year Excel owns, the app's otherwise. */
+function statusLabel(i: (typeof ledger.state.items)[string], ev?: ReturnType<typeof evaluateItem>): string {
+  if (readOnly()) return i.statusOverride ?? i.stepUpStatus ?? (i.submissionId ? "Submitted" : "(no status)");
+  return displayStatus(i, ev ?? evaluateItem(ledger.state, i.id, ctx()), ctx(), ledger.state.settings["year"]?.submissionDeadline);
+}
+
+/** Purchases whose workbook rows list several files without saying which is the receipt (a year Excel owns only). */
+const unclearReceipt = (purchaseId: string): boolean => Boolean(workspace?.legacy?.year.unclear.some((u) => u.purchaseId === purchaseId));
 
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
@@ -1152,7 +1168,7 @@ function queueView(): string {
   const children = Object.values(state.children);
   const childForm = `<details${children.length === 0 || addingChild ? " open" : ""}><summary>Children (${children.length})</summary>
     <ul>${children.map((c) => `<li>${esc(c.name)} ${scholarshipSelect(c.scholarship, `data-child-scholarship="${esc(c.id)}" aria-label="Program for ${esc(c.name)}" style="width:auto"`)}</li>`).join("")}</ul>
-    ${addingChild ? "" : `<p><button id="new-child">New child</button></p>`}
+    ${addingChild || readOnly() ? "" : `<p><button id="new-child">New child</button></p>`}
     ${!addingChild ? "" : `<form id="add-child" class="row"><input name="name" placeholder="Name" required>${scholarshipSelect(undefined, `name="scholarship" required aria-label="Program"`)}<button>Add child</button><button type="button" id="cancel-child">Cancel</button></form>`}</details>`;
   const banner = sinceBanner() + filingBanner();
   const startBlank = `<p class="row"><button id="new-purchase">New purchase</button></p>`;
@@ -1177,7 +1193,7 @@ function queueView(): string {
   const archivedFiles = archivedDocs.length
     ? `<details><summary>Archived files (${archivedDocs.length})</summary><ul class="queue">${archivedDocs.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
-  const keepForLater = workspace ? `<p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits here until you attach it to a purchase.</small></p>` : "";
+  const keepForLater = workspace && !readOnly() ? `<p class="row"><label class="btn">Keep a file for later<input type="file" id="upload-later" multiple accept="application/pdf,image/*" hidden></label> <small>It waits here until you attach it to a purchase.</small></p>` : "";
   const looseList = loose.length || workspace ? `<details><summary>Unattached files (${loose.length})</summary>${keepForLater}${loose.length ? `<ul class="queue">${looseRows.join("")}</ul>` : ""}</details>` : "";
 
   // One row per purchase: receipts with no items, and purchases with items that cannot be filed yet.
@@ -1189,6 +1205,11 @@ function queueView(): string {
     byPurchase.set(e.purchaseId, row);
   }
   const allPurchases = purchaseListing();
+  // Excel's own status is the authority for its year, so the app's "needs your attention" rules stay out of it.
+  if (readOnly()) {
+    const unclear = workspace?.legacy?.year.unclear.length ?? 0;
+    return `${childForm}<p class="note">Open a purchase to see its items and files.</p>${unclear ? `<p class="note warn">${unclear} purchase(s) list several files and the workbook does not say which is the receipt. Every file is shown as additional documentation.</p>` : ""}${allPurchases || "<p>The workbook has no purchases.</p>"}${looseList}${archivedFiles}${archivedList}`;
+  }
   if (byPurchase.size === 0) return `${banner}${childForm}${startBlank}<p>No purchases need attention.</p>${allPurchases}${looseList}${archivedFiles}${archivedList}`;
   const rows = [...byPurchase.entries()].map(([id, r]) => `<li class="q"><button class="row-button" data-open="${esc(id)}"><span><strong>${esc(r.title)}</strong><br><small>${esc(r.reasons.join("; "))}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`);
   return `${banner}${childForm}${startBlank}<h2>Needs your attention (${byPurchase.size})</h2><ul class="queue">${rows.join("")}</ul>${allPurchases}${looseList}${archivedFiles}${archivedList}`;
@@ -1197,10 +1218,9 @@ function queueView(): string {
 /** Every purchase with a search box and a status filter, the same as the Excel view's list (both narrow in place; see filterLegacyList). */
 function purchaseListing(): string {
   const state = ledger.state;
-  const deadline = state.settings["year"]?.submissionDeadline;
   const rows = Object.values(state.purchases).filter((p) => !p.archived).map((p) => {
     const items = itemsOf(state, p.id);
-    const labels = items.map((i) => displayStatus(i, evaluateItem(state, i.id, ctx()), ctx(), deadline));
+    const labels = items.map((i) => statusLabel(i));
     const dates = items.map((i) => effectiveDate(i, p)).filter((d): d is string => Boolean(d)).sort();
     return { p, items, labels, date: dates[dates.length - 1] ?? p.date ?? "" };
   }).sort((a, b) => b.date.localeCompare(a.date) || a.p.id.localeCompare(b.p.id));
@@ -1214,11 +1234,11 @@ function purchaseListing(): string {
     const vendor = r.p.vendor ?? r.items.map((i) => i.vendor).find(Boolean) ?? "";
     const text = `${purchaseName(r.p)} ${vendor} ${r.items.map((i) => `${i.description ?? ""} ${state.children[i.childId ?? ""]?.name ?? ""}`).join(" ")}`.toLowerCase();
     const attrs = listRowAttrs({ order: n, itemIds: r.items.map((i) => i.id), text, statuses: [...new Set(r.labels)], childIds: [...new Set(r.items.map((i) => i.childId).filter((c): c is string => Boolean(c)))], vendor, name: purchaseName(r.p), date: r.date, totalCents: total ?? 0 });
-    return `<li class="q" ${attrs}><button class="row-button" data-open="${esc(r.p.id)}"><span><strong>${esc(purchaseName(r.p))}</strong><br><small>${esc(r.date)}${r.date ? " · " : ""}${total !== undefined ? formatCents(total) + " · " : ""}${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
+    return `<li class="q" ${attrs}${unclearReceipt(r.p.id) ? " data-unclear" : ""}><button class="row-button" data-open="${esc(r.p.id)}"><span><strong>${esc(purchaseName(r.p))}</strong>${unclearReceipt(r.p.id) ? ` <span class="badge warn">Receipt unclear</span>` : ""}<br><small>${esc(r.date)}${r.date ? " · " : ""}${total !== undefined ? formatCents(total) + " · " : ""}${esc(summary || "no items")}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   });
   const vendors = rows.map((r) => r.p.vendor ?? r.items.map((i) => i.vendor).find(Boolean) ?? "");
   return `<h2>All purchases ${listCount(rows.length)}</h2>
-    ${listControls({ statuses: allStatuses, children: Object.values(state.children), vendors })}
+    ${listControls({ statuses: allStatuses, unclearCount: rows.filter((r) => unclearReceipt(r.p.id)).length, children: Object.values(state.children), vendors })}
     <ul class="queue" id="legacy-list">${items.join("")}</ul>`;
 }
 
@@ -1228,17 +1248,18 @@ function summaryView(): string {
   const d = s.deadline;
   const banner = d
     ? `<p class="${d.daysLeft < 0 ? "warn" : d.daysLeft <= 30 ? "warn" : "note"} banner">${d.daysLeft < 0 ? `The submission deadline passed ${-d.daysLeft} day(s) ago (${esc(d.date)}).` : `${d.daysLeft} day(s) until the submission deadline (${esc(d.date)}).`}</p>`
-    : `<p class="note banner">No submission deadline set.</p>`;
-  const deadlineForm = `<form id="deadline-form" class="row"><label>Submission deadline<input name="deadline" type="date" value="${esc(d?.date)}"></label><button>Save deadline</button></form>`;
+    : readOnly() ? "" : `<p class="note banner">No submission deadline set.</p>`;
+  const deadlineForm = readOnly() && !d ? "" : `<form id="deadline-form" class="row"><label>Submission deadline<input name="deadline" type="date" value="${esc(d?.date)}"></label><button>Save deadline</button></form>`;
   // Awards are typed in here; the pivot tables below show them against what has been spent.
   const awards = s.children.map((b) => {
     const c = state.children[b.childId]!;
     return `<form class="inline" data-cap="${esc(c.id)}"><label>${esc(c.name ?? c.id)}<input name="cap" inputmode="decimal" value="${b.capCents ? (b.capCents / 100).toFixed(2) : ""}" placeholder="0.00"></label><button>Save</button></form>`;
   });
   return `<h2>Summary</h2>${banner}${deadlineForm}
-    ${awards.length ? `<h3>Award for each student</h3>${awards.join("")}` : `<p>Add a student on the list page first.</p>`}
+    ${awards.length ? `<h3>Award for each student</h3>${awards.join("")}` : readOnly() ? "" : `<p>Add a student on the list page first.</p>`}
     ${Object.keys(filingNow()).length ? `<p class="banner">${Object.keys(filingNow()).length} item(s) are being filed with StepUp right now (see the list page).</p>` : ""}
-    ${pivotTables(state, ctx())}`;
+    ${pivotTables(state, ctx())}
+    ${readOnly() ? `<p class="row"><button id="legacy-download" class="primary">Download as a spreadsheet</button> <small>The same tracking sheet, summary and document list the app keeps for its own years.</small></p>` : ""}`;
 }
 
 /** The purchase's own name if it has one, else "Vendor, date", else the receipt's file name. */
@@ -1324,9 +1345,12 @@ function statementsView(): string {
     const charges = d.statement?.transactions.filter((t) => t.kind === "purchase") ?? [];
     const linked = linkedBy(d.id);
     const period = d.statement?.periodStart && d.statement.periodEnd ? `${d.statement.periodStart} to ${d.statement.periodEnd}${d.statement.periodInferred ? " (estimated)" : ""}` : "period not found";
-    const summary = d.statement ? `${period} &middot; ${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
+    // A year Excel owns never has its statements read: say which cards the workbook files them under instead.
+    const named = readOnly() ? (workspace?.legacy?.year.input.paymentMethods ?? []).filter((m) => m.file === d.filename).map((m) => m.label) : [];
+    const pointing = new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === d.id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId)).size;
+    const summary = readOnly() ? `${named.join(", ")}${named.length ? " &middot; " : ""}${pointing} purchase(s) point to it` : d.statement ? `${period} &middot; ${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
     // The whole row opens the statement (archiving is on the statement's own screen).
-    return `<li class="q"><button class="row-button" data-statement="${esc(d.id)}"><span><strong>${esc(statementDisplayName(d))}</strong><br><small>${d.statement ? summary : esc(summary)}${d.statement ? "" : " &middot; tap to read it"}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
+    return `<li class="q"><button class="row-button" data-statement="${esc(d.id)}"><span><strong>${esc(statementDisplayName(d))}</strong><br><small>${d.statement || readOnly() ? summary : esc(summary)}${d.statement || readOnly() ? "" : " &middot; tap to read it"}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   };
   const groups = clusterStatements(docs);
   const rows = groups.map((g) => `<h3>${esc(g.label)} <small>(${g.items.length})</small></h3><ul class="queue">${g.items.map(row).join("")}</ul>`);
@@ -1335,9 +1359,9 @@ function statementsView(): string {
     ? `<details><summary>Archived proof of payment (${archivedStatements.length})</summary><ul class="queue">${archivedStatements.map((d) => `<li class="q"><span>${esc(statementDisplayName(d))}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
   return `<h2>Proof of payment</h2>
-    <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment): it is read on this device as soon as it is added, charges are matched to your purchases, and the confident matches are linked for you. Statements are grouped by card or bank, oldest first.</span></p>
-    ${workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label><button id="start-scan" data-as-statement="1">Scan (several pages)</button></p>` : `<p class="note">Connect a folder to add files.</p>`}
-    ${rows.length ? rows.join("") : "<p>Nothing marked as proof of payment yet.</p>"}${archivedList}`;
+    ${readOnly() ? `<p class="note">The statement files the workbook lists for each card and period, and the files its rows name as proof of payment. Statements are not read or matched for a year kept in Excel.</p>` : `<p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment): it is read on this device as soon as it is added, charges are matched to your purchases, and the confident matches are linked for you. Statements are grouped by card or bank, oldest first.</span></p>`}
+    ${readOnly() ? "" : workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label><button id="start-scan" data-as-statement="1">Scan (several pages)</button></p>` : `<p class="note">Connect a folder to add files.</p>`}
+    ${rows.length ? rows.join("") : `<p>${readOnly() ? "The workbook lists no statement files." : "Nothing marked as proof of payment yet."}</p>`}${archivedList}`;
 }
 
 function statementReview(id: string): string {
@@ -1361,6 +1385,7 @@ function statementReview(id: string): string {
   const refundSuggestions = new Map(data ? matchRefunds(state, id, data).map((r) => [r.transactionId, r]) : []);
   const refundLinks = new Map(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "refund" && a.transactionId).map((a) => [a.transactionId!, a]));
   const redactedNote = redacted ? `<p class="note"><span class="ok">Redacted copy saved</span>: ${esc(redacted.filename)} <button data-preview="${esc(redacted.id)}">Preview</button> It is sent to StepUp instead of this statement.</p>` : data ? `<p class="note">Please link transactions to this statement to be able to generate a redacted version. Until a redacted version is generated the full statement will be sent.</p>` : "";
+  if (!data && readOnly()) return `${head}<p class="note">Statements are not read for a year kept in Excel. ${new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId)).size} purchase(s) in the workbook point to this file.</p>`;
   if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>${archive}`;
 
   const cardKnown = data.last4 ? Object.values(state.paymentMethods).find((p) => p.last4?.includes(data.last4!)) : undefined;
@@ -1578,7 +1603,7 @@ async function autoReadReceipts(items: Array<{ docId: string; purchaseId?: strin
 
 function tabs(): string {
   const tab = (name: string, label: string) => `<a href="#" data-go="${name}"${view.name === name || (name === "queue" && view.name === "purchase") || (name === "statements" && view.name === "statement") ? ` class="on" aria-current="page"` : ""}>${label}</a>`;
-  return `<div class="tabs">${tab("queue", "Needs attention")}${tab("statements", "Proof of payment")}${tab("summary", "Summary")}</div>`;
+  return `<div class="tabs">${tab("queue", readOnly() ? "Purchases" : "Needs attention")}${tab("statements", "Proof of payment")}${tab("summary", "Summary")}</div>`;
 }
 
 /**
@@ -1775,7 +1800,8 @@ function purchaseView(id: string, draft = false): string {
   const statusCell = (i: (typeof items)[number], ev: ReturnType<typeof evaluateItem>): string => {
     const mine = filing[i.id];
     if (mine) return `<span class="badge filing">Being filed by ${esc(mine.actor)}</span>`;
-    const label = displayStatus(i, ev, ctx(), state.settings["year"]?.submissionDeadline);
+    const label = statusLabel(i, ev);
+    if (readOnly()) return `<span class="ok">${esc(label)}</span>${i.notes?.trim() ? `<div class="note"><strong>Notes:</strong> <span style="white-space:pre-wrap">${esc(i.notes.trim())}</span></div>` : ""}`;
     if (i.stepUpStatus || i.submissionId) return `<span class="ok">${esc(label)}</span>`;
     if (awaitingReview(ev)) return `<small class="warn">Has what it needs. Check whether it needs anything more, then mark it ready.</small>`;
     return ev.readiness === "ready" ? `<span class="ok">Ready to file</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`;
@@ -1787,11 +1813,11 @@ function purchaseView(id: string, draft = false): string {
     return awaitingReview(ev) ? `<button data-ready="${esc(i.id)}" class="primary">Mark ready to submit</button> ` : "";
   };
   const rows = items.map((i) => {
-    const ev = evaluateItem(state, i.id, ctx());
+    const ev = readOnly() ? undefined as never : evaluateItem(state, i.id, ctx());
     const who = state.children[i.childId ?? ""]?.name ?? "?";
     const tax = i.includeTax === false ? " &middot; no tax/shipping" : i.taxShippingCents ? ` &middot; tax/shipping ${formatCents(i.taxShippingCents)}${i.taxShippingEstimated ? " (est.)" : ""}` : "";
     return `<li class="item-card"><div class="item-top"><strong>${esc(i.description)}</strong><span class="amt">${formatCents(i.amountCents)}</span></div>
-      <div class="item-meta">${esc(who)} &middot; ${esc(categoryLabel(i)) || "<span class=\"warn\">no category</span>"}${tax}</div>
+      <div class="item-meta">${esc(who)} &middot; ${esc(categoryLabel(i)) || "<span class=\"warn\">no category</span>"}${tax}${readOnly() && (i.paidCents ?? i.approvedCents) !== undefined ? ` &middot; ${i.paidCents !== undefined ? "paid" : "approved"} ${formatCents((i.paidCents ?? i.approvedCents)!)}` : ""}</div>
       <div class="item-status">${statusCell(i, ev)}</div>
       <div class="actions">${markButton(i, ev)}<button data-edit-item="${esc(i.id)}">Edit</button><button data-dup="${esc(i.id)}">Duplicate</button></div></li>`;
   });
@@ -1819,7 +1845,7 @@ function purchaseView(id: string, draft = false): string {
     : "";
   // A receipt that does not itself show payment is fine once a statement charge is linked to this purchase.
   const provedByStatement = Object.values(state.additionalDocs).some((a) => a.ownerKind === "purchase" && a.ownerId === id && a.kind === "payment-proof" && a.transactionId);
-  const tooBig = (doc?.sizeBytes ?? 0) > MAX_PROOF_BYTES;
+  const tooBig = !readOnly() && (doc?.sizeBytes ?? 0) > MAX_PROOF_BYTES;
   const receipt = {
     tools: doc?.driveItemId && workspace ? `<button data-read-receipt="${esc(id)}">Read receipt</button>${tooBig ? `<button data-shrink="${esc(id)}">Shrink to under 5 MB</button>` : ""}${readableFileName(doc, p) !== doc.filename ? `<button data-rename-file="${esc(id)}" title="${esc(readableFileName(doc, p))}">Give the file a readable name</button>` : ""}` : "",
     notes: `${tooBig ? `<p class="note warn">This receipt is ${((doc?.sizeBytes ?? 0) / 1048576).toFixed(1)} MB; StepUp only accepts files under 5 MB.</p>` : ""}${doc?.paymentEvidenceConfidence !== undefined ? (doc.paymentEvidenceConfidence >= 0.8 ? `<p class="note"><span class="ok">Receipt shows payment</span>${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}</p>` : (provedByStatement ? "" : `<p class="note warn">Receipt does not clearly show payment${doc.paymentEvidenceSnippet ? `: &ldquo;${esc(doc.paymentEvidenceSnippet)}&rdquo;` : ""}. A statement may be needed.</p>`)) : ""}`,
@@ -1837,9 +1863,9 @@ function purchaseView(id: string, draft = false): string {
     ${saveIndicator()}</form>`)}
   ${documentation(id, p.receiptDocumentId, "bottom", false, receipt)}
   ${panel("items", `Items${items.length || remaining !== undefined ? ` <small>${items.length} item${items.length === 1 ? "" : "s"}${remaining !== undefined ? ` &middot; ${formatCents(remaining)} left to itemize` : ""}</small>` : ""}`, `
-  ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">No items yet. Add the first one below.</p>`}
+  ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">${readOnly() ? "No items." : "No items yet. Add the first one below."}</p>`}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
-  <h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Editing this item" : "Add an item"}</h4>
+  ${readOnly() ? "" : `<h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Editing this item" : "Add an item"}</h4>
   <p class="note">It is saved as soon as it has a child, a description and an amount. Add the category and benefit message now or later: the item lists what is still missing, and you can come back with <strong>Edit</strong>.</p>
   ${children.length === 0 ? `<p class="warn">Add a child on the list page first.</p>` : ""}
   ${itemForm(id, next)}
@@ -1848,8 +1874,8 @@ function purchaseView(id: string, draft = false): string {
     <form id="category-form" class="row"><input name="path" list="cats" placeholder="Category - Type - Detail" required>
       <label class="check"><input type="checkbox" name="needsDate"> Needs a Service Date</label><button>Save for this year</button></form>
     <p class="note">Adds the category (or updates it) for this year's data. Use <strong>Advanced &rarr; Share category fixes</strong> to send fixes back so everyone gets them.</p></details>` : ""}
-  `)}
-  <section class="panel danger-zone"><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p></section>`;
+  `}`)}
+  ${readOnly() ? "" : `<section class="panel danger-zone"><p><button data-archive="${esc(id)}" class="danger">Archive this purchase</button> <small>Hides it and its items; you can restore it from the list page.</small></p></section>`}`;
 }
 
 /**
@@ -1860,6 +1886,7 @@ function purchaseView(id: string, draft = false): string {
 function documentation(purchaseId: string, receiptId: string | undefined, part: "top" | "bottom", draft = false, receipt: { tools: string; notes: string } = { tools: "", notes: "" }): string {
   const state = ledger.state;
   const online = Boolean(workspace);
+  const ro = readOnly();
   const nameOf = (id: string | undefined) => {
     const d = state.documents[id ?? ""];
     return esc(d ? (d.contentKind === "statement" ? statementDisplayName(d) : d.filename ?? "file") : "file");
@@ -1883,10 +1910,11 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ${state.documents[receiptId]?.driveItemId && online ? `<p class="row"><button class="primary" data-preview="${esc(receiptId)}">Preview</button></p>` : ""}
     ${receipt.notes}
     <details class="more"><summary>More receipt options</summary><p class="row"><button data-replace-receipt="${esc(purchaseId)}">Replace Receipt</button><button data-receipt-to-extra="${esc(purchaseId)}">Move to additional documentation</button>${receipt.tools}</p></details>`
+    : ro ? `<h4>Receipt</h4>${unclearReceipt(purchaseId) ? `<p class="note warn">The workbook lists several files on this purchase's rows and none is clearly the receipt. They are all shown under additional documentation.</p>` : `<p class="warn">The workbook names no receipt file for this purchase.</p>`}`
     : `<h4>Receipt</h4>
     <p class="note">The one document that shows what you bought and what it cost: an order confirmation, invoice or store receipt.${receiptId ? " Whatever you choose here replaces the current receipt, which goes back to your unattached files." : ""}</p>
     ${receiptId ? `<p>Current receipt: <strong>${nameOf(receiptId)}</strong></p>` : `<p class="warn">No receipt yet.</p>`}
-    ${adders("receipt")}${pick("receipt", receiptId ? "Replace the receipt with this" : "Use as the receipt")}
+    ${ro ? "" : `${adders("receipt")}${pick("receipt", receiptId ? "Replace the receipt with this" : "Use as the receipt")}`}
     ${receiptId ? `<p><button data-cancel-replace="1">Keep the current receipt</button></p>` : ""}`;
   // Proof of payment (a card statement showing the charge) is called out on its own, like the receipt; everything else
   // that backs the purchase up stays under additional documentation.
@@ -1894,7 +1922,7 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
   const listOf = (rows: typeof extras) => [...new Map(rows.map((a) => [a.documentId, a])).values()].map((a) => {
     const hasCharge = a.kind === "payment-proof" && extras.some((x) => x.documentId === a.documentId && x.transactionId);
     const canPreview = state.documents[a.documentId ?? ""]?.driveItemId && online;
-    return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button class="primary" data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button class="primary" data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<details class="more inline"><summary>More</summary><button class="danger" data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove from this purchase</button></details></span></li>`;
+    return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button class="primary" data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button class="primary" data-preview="${esc(a.documentId)}">Preview</button>`) : ""}${ro ? "" : `<details class="more inline"><summary>More</summary><button class="danger" data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove from this purchase</button></details>`}</span></li>`;
   }).join("");
   const proofs = extras.filter(isProof);
   const others = extras.filter((a) => !isProof(a));
@@ -1908,16 +1936,16 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
   const proofPart = draft
     ? `<h4>Proof of payment</h4>${saveFirst("proof of payment")}`
     : `<h4>Proof of payment</h4>
-    <p class="note">The card or bank statement showing what was paid for this purchase. Link the charge below, and a copy that shows only that charge is what gets sent.</p>
+    <p class="note">${ro ? "The card or bank statement file the workbook names as proof of payment for this purchase." : "The card or bank statement showing what was paid for this purchase. Link the charge below, and a copy that shows only that charge is what gets sent."}</p>
     ${proofs.length ? `<ul class="queue">${listOf(proofs)}</ul>` : `<p class="warn">No proof of payment yet.</p>`}
-    ${manageProof}`;
+    ${ro ? "" : manageProof}`;
   const extraPart = draft
     ? `<h4>Additional documentation</h4>${saveFirst("more documentation")}`
     : `<h4>Additional documentation</h4>
-    <p class="note">Anything else that backs this purchase up and is neither the receipt nor the proof of payment: an email, a letter. It is optional, and you can add several.</p>
-    ${others.length ? `<ul class="queue">${listOf(others)}</ul>` : `<p><small>None yet.</small></p>`}
-    <p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>
-    ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
+    <p class="note">Anything else that backs this purchase up and is neither the receipt nor the proof of payment: an email, a letter.${ro ? "" : " It is optional, and you can add several."}</p>
+    ${others.length ? `<ul class="queue">${listOf(others)}</ul>` : `<p><small>${ro ? "None." : "None yet."}</small></p>`}
+    ${ro ? "" : `<p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>
+    ${adders("additional")}${pick("additional", "Add as additional documentation")}`}`;
   // One "Documents" section: the receipt first, then proof of payment, then anything else. (`top` is no longer used.)
   if (part === "top") return "";
   return panel("documents", "Documents", `${receiptPart}${proofPart}${extraPart}`);
@@ -2397,11 +2425,10 @@ function render(): void {
   previewShown = showingPreview;
   const l = workspace?.legacy;
   if (l) {
-    // A year Excel still owns: its own read-only screens, and none of the editing ones (see legacyYear.ts).
-    const v = view.name === "statement" ? "statements" : view.name;
-    const read = ctx();
-    const page = v === "purchase" ? legacyPurchaseView(l, (view as { id: string }).id, read) : v === "summary" ? legacySummaryView(l, read) : v === "statements" ? legacyStatementsView(l) : legacyQueueView(l);
-    root.innerHTML = header() + legacyTabs(v) + legacyBanner(workspace!) + previewPanel() + page + footer();
+    // A year Excel still owns: the ledger's own screens, read-only (see enforceReadOnly).
+    const page = view.name === "summary" ? summaryView() : view.name === "statements" ? statementsView() : view.name === "statement" ? statementReview(view.id) : view.name === "purchase" ? purchaseView(view.id) : queueView();
+    root.innerHTML = header() + tabs() + legacyBanner(workspace!) + previewPanel() + page + footer();
+    enforceReadOnly(root);
     filterLegacyList(true);
     afterRender(scrollBack);
     return;
@@ -2479,7 +2506,7 @@ root.addEventListener("click", async (ev) => {
     return;
   }
   if (workspace?.legacy) {
-    // A year viewed from Excel: only looking around, picking a receipt, and the connection controls do anything.
+    // A year viewed from Excel: only looking around and the connection controls do anything.
     const legacy = workspace;
     if (t.id === "legacy-refresh") await guarded(async () => { await revalidate(legacy); persist(); status = "Read the workbook again."; }, "Reading the Excel workbook…");
     else if (t.id === "legacy-download") {
@@ -2489,16 +2516,10 @@ root.addEventListener("click", async (ev) => {
         Object.assign(document.createElement("a"), { href: url, download: file.name }).click();
         setTimeout(() => URL.revokeObjectURL(url), 10_000);
       }, "Building the spreadsheet…");
-    } else if (d["legacyPick"] || d["legacyClear"]) {
-      const id = d["legacyPick"] ?? d["legacyClear"]!;
-      const un = legacy.legacy!.year.unclear.find((u) => u.purchaseId === id);
-      const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
-      const candidates = un?.candidates ?? picked?.candidates;
-      if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
+    } else if (d["go"] || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
       // fall through to the shared handlers below
     } else return;
-    if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
+    if (t.id === "legacy-refresh" || t.id === "legacy-download") return;
   }
   if (d["pivotReset"] !== undefined) { resetPivots(); render(); return; }
   if (d["drillClear"] !== undefined) { clearDrill(); render(); return; }
@@ -2702,7 +2723,7 @@ root.addEventListener("click", async (ev) => {
     remember(true, from);
     render();
     window.scrollTo({ top: 0 });
-    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(async () => { status = await readStatement(d["statement"]!); }, "Reading the statement…");
+    if (!workspace?.legacy && !ledger.state.documents[d["statement"]]?.statement) await guarded(async () => { status = await readStatement(d["statement"]!); }, "Reading the statement…");
   } else if (t.id === "start-scan") {
     const now = new Date();
     const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
