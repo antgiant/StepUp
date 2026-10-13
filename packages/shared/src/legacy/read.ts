@@ -1,6 +1,7 @@
 import { CATEGORIES_TABLE, CHILDREN_TABLE, DOC_FILE_COLUMNS, TABLE1, WORKSHEET } from "../rules.js";
 import { getTableHeaderRow, getTableRows, getUsedRange, listTables, type DriveItemRef } from "../graph/onedrive.js";
 import type { StorageProvider } from "../storage/types.js";
+import { HISTORY_DIR } from "../history/store.js";
 import { LEDGER_DIR, LEGACY_CHOICES_FILE, STEPUP_DIR } from "../workspace/workspace.js";
 import { toIsoDate, type LegacyInput, type LegacyRow } from "../import/legacy.js";
 import { fileNameHints } from "../workspace/ingest.js";
@@ -29,7 +30,7 @@ export async function readReceiptFiles(storage: StorageProvider, folder: DriveIt
     for (const children of listings) {
       for (const c of children) {
         if (c.isFolder) {
-          if (c.name !== LEDGER_DIR && c.name !== STEPUP_DIR && depth < maxDepth) next.push({ driveId: folder.driveId, itemId: c.id, name: c.name, isFolder: true });
+          if (c.name !== LEDGER_DIR && c.name !== STEPUP_DIR && c.name !== HISTORY_DIR && depth < maxDepth) next.push({ driveId: folder.driveId, itemId: c.id, name: c.name, isFolder: true });
         } else if (c.name !== LEGACY_CHOICES_FILE && !found.has(c.name.toLowerCase())) {
           found.set(c.name.toLowerCase(), { name: c.name, id: c.id, webUrl: c.webUrl, size: c.size ?? 0 });
         }

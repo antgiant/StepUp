@@ -29,3 +29,14 @@ copy has not caught up, so the newer local change stands until the next read.
   the item) at any stage except a denial.
 - Excel years: the StepUp enhancement in `buildLegacyImport` replaces the sheet's status, amounts and message.
 - The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`).
+
+## History
+
+The History tab lists every change from every source, newest first: the ledger's (derived from its event log by
+`ledgerHistory`, never stored twice), StepUp's own (`diffStepUp`, written by the CLI whenever a fresh list differs) and the
+Excel workbook's (`diffExcel`, from before/after readings by the CLI's status sync). The last two are small immutable files in
+`<year>/_history/`, so a refresh reads only new ones.
+
+- Anything new that changes data (a new source, a new kind of event) must show up there: give ledger events a `label`, and put
+  field names a person should see in `FIELD_NAMES` in `packages/shared/src/history/ledger.ts` (and bookkeeping in `IGNORED`).
+- `_history` is skipped when looking for receipts, like `_ledger` and `_stepup`.
