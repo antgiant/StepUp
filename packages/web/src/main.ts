@@ -1,4 +1,6 @@
 import {
+  stepUpStatusUrl,
+  type LineItem,
   type StorageAccount,
   type LedgerEvent,
   HlcClock,
@@ -1786,6 +1788,15 @@ root.addEventListener("toggle", (ev) => {
   if (key) (el as HTMLDetailsElement).open ? collapsedPanels.delete(key) : collapsedPanels.add(key);
 }, true);
 
+/** What StepUp (or a person) said about a submitted item, in full, plus a link to the item's page on StepUp's site. */
+function stepUpDetails(i: LineItem): string {
+  const guid = i.submissionId ? ledger.state.submissions[i.submissionId]?.guid : undefined;
+  const link = guid ? `<a href="${esc(stepUpStatusUrl(guid))}" target="_blank" rel="noopener">View on StepUp</a>` : "";
+  const said = (label: string, text: string | undefined) => (text?.trim() ? `<div class="note"><strong>${label}:</strong> <span style="white-space:pre-wrap">${esc(text.trim())}</span></div>` : "");
+  const notes = i.notes?.trim() && i.notes.trim() !== i.holdNote?.trim() ? i.notes : undefined;
+  return `${link ? `<div>${link}</div>` : ""}${said("StepUp says", i.stepUpMessage)}${said("Hold", i.holdNote)}${said("Notes", notes)}`;
+}
+
 function purchaseView(id: string, draft = false): string {
   const state = ledger.state;
   const p = state.purchases[id] ?? (draft ? { id } : undefined);
@@ -1801,8 +1812,8 @@ function purchaseView(id: string, draft = false): string {
     const mine = filing[i.id];
     if (mine) return `<span class="badge filing">Being filed by ${esc(mine.actor)}</span>`;
     const label = statusLabel(i, ev);
-    if (readOnly()) return `<span class="ok">${esc(label)}</span>${i.notes?.trim() ? `<div class="note"><strong>Notes:</strong> <span style="white-space:pre-wrap">${esc(i.notes.trim())}</span></div>` : ""}`;
-    if (i.stepUpStatus || i.submissionId) return `<span class="ok">${esc(label)}</span>`;
+    if (readOnly()) return `<span class="ok">${esc(label)}</span>${stepUpDetails(i)}`;
+    if (i.stepUpStatus || i.submissionId) return `<span class="ok">${esc(label)}</span>${stepUpDetails(i)}`;
     if (awaitingReview(ev)) return `<small class="warn">Has what it needs. Check whether it needs anything more, then mark it ready.</small>`;
     return ev.readiness === "ready" ? `<span class="ok">Ready to file</span>` : `<small class="warn">${esc(ev.reasons.map((r) => r.message).join("; "))}</small>`;
   };
