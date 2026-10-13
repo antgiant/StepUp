@@ -1344,8 +1344,11 @@ function statementReview(id: string): string {
   if (!doc) return `<p>That proof of payment no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
   const head = `<p><a href="#" data-go="statements">&larr; All proof of payment</a></p><h2>${esc(doc.contentKind === "statement" ? statementDisplayName(doc) : doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}<button class="danger" data-archive-doc="${esc(id)}" data-linked="${new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.transactionId).map((a) => a.transactionId)).size}" title="Hide this file (added by mistake). You can restore it.">Archive</button></p>
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>
     ${doc.driveItemId && workspace ? `<details><summary>Rename the file</summary><form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc(statementDisplayName(doc).replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form></details>` : ""}`;
+  // Like a purchase's, the archive control sits at the very bottom of the screen.
+  const linkedCount = new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.transactionId).map((a) => a.transactionId)).size;
+  const archive = `<hr><p><button data-archive-doc="${esc(id)}" data-linked="${linkedCount}" class="danger">Archive this proof of payment</button> <small>Hides it; you can restore it from the proof of payment list.</small></p>`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Every page that shows something</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -1356,7 +1359,7 @@ function statementReview(id: string): string {
   const refundSuggestions = new Map(data ? matchRefunds(state, id, data).map((r) => [r.transactionId, r]) : []);
   const refundLinks = new Map(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "refund" && a.transactionId).map((a) => [a.transactionId!, a]));
   const redactedNote = redacted ? `<p class="note"><span class="ok">Redacted copy saved</span>: ${esc(redacted.filename)} <button data-preview="${esc(redacted.id)}">Preview</button> It is sent to StepUp instead of this statement.</p>` : data ? `<p class="note">Please link transactions to this statement to be able to generate a redacted version. Until a redacted version is generated the full statement will be sent.</p>` : "";
-  if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>`;
+  if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>${archive}`;
 
   const cardKnown = data.last4 ? Object.values(state.paymentMethods).find((p) => p.last4?.includes(data.last4!)) : undefined;
   const card = data.last4
@@ -1415,7 +1418,7 @@ function statementReview(id: string): string {
     ${detailsForm}
     ${redactForm}
     <p class="row"><button data-add-txn="1">Add a missed row</button></p>
-    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${editingTxn === "new" ? txnForm(undefined) : ""}${rows.join("")}</tbody></table>${splitSection}`;
+    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${editingTxn === "new" ? txnForm(undefined) : ""}${rows.join("")}</tbody></table>${splitSection}${archive}`;
 }
 
 /**
