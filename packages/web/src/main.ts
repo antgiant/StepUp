@@ -1813,7 +1813,12 @@ function stepUpDetails(i: LineItem): string {
   const link = guid ? `<a href="${esc(stepUpStatusUrl(guid))}" target="_blank" rel="noopener">View on StepUp</a>` : "";
   const said = (label: string, text: string | undefined) => (text?.trim() ? `<div class="note"><strong>${label}:</strong> <span style="white-space:pre-wrap">${esc(text.trim())}</span></div>` : "");
   const notes = i.notes?.trim() && i.notes.trim() !== i.holdNote?.trim() ? i.notes : undefined;
-  return `${link ? `<div>${link}</div>` : ""}${said("StepUp says", i.stepUpMessage)}${said("Hold", i.holdNote)}${said("Notes", notes)}`;
+  // StepUp holds the item at another amount than the ledger has: say so, with both.
+  const requested = (i.amountCents ?? 0) + (i.taxShippingCents ?? 0);
+  const adjusted = i.stepUpAmountCents !== undefined && i.amountCents !== undefined && i.stepUpAmountCents !== i.amountCents && i.stepUpAmountCents !== requested
+    ? `<div class="note warn"><strong>Adjusted:</strong> StepUp has ${formatCents(i.stepUpAmountCents)} for this item; the ledger has ${formatCents(i.amountCents)}${requested !== i.amountCents ? ` (${formatCents(requested)} with tax/shipping)` : ""}.</div>`
+    : "";
+  return `${link ? `<div>${link}</div>` : ""}${adjusted}${said("StepUp says", i.stepUpMessage)}${said("Hold", i.holdNote)}${said("Notes", notes)}`;
 }
 
 function purchaseView(id: string, draft = false): string {

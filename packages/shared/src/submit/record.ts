@@ -6,7 +6,9 @@ import { hashString } from "../util/hash.js";
 /** The hold the automation puts on items it could not file (the old "Unfiled (Missing Things)" status). Cleared by a person once fixed. */
 export const AUTOMATION_HOLD = "needs-attention";
 
-const submissionId = (reimbursementId: string) => `sub-${hashString(`stepup:${reimbursementId}`)}`;
+/** The id of the submission a StepUp reimbursement number is kept under (also used for ones first seen from StepUp's list). */
+export const submissionIdFor = (reimbursementId: string): string => `sub-${hashString(`stepup:${reimbursementId}`)}`;
+const submissionId = submissionIdFor;
 
 /** Records that these items (in line order) became line items 1..n of a StepUp reimbursement. Safe to repeat. */
 export function recordSubmitted(ledger: Ledger, itemIds: string[], info: { reimbursementId: string; submittedAt: string; guid?: string }): void {
@@ -107,7 +109,8 @@ export function applyStepUpStatuses(ledger: Ledger, apiItems: ApiLineItem[]): nu
     if (!status) continue;
     const amountCents = Number.isFinite(api.ItemAmount) ? Math.round(api.ItemAmount * 100) : undefined;
     const requested = (item.amountCents ?? 0) + (item.taxShippingCents ?? 0);
-    if ((status === "Approved" || status === "Paid") && amountCents !== undefined && amountCents !== item.amountCents && amountCents !== requested) status = "Adjusted";
+    // An item StepUp holds at an amount other than the ledger's is flagged as adjusted, whatever stage it is at.
+    if (["Submitted", "Approved", "Paid", "Appealed"].includes(status) && amountCents !== undefined && item.amountCents !== undefined && amountCents !== item.amountCents && amountCents !== requested) status = "Adjusted";
 
     if (api.ReimbursementGuid && GUID.test(api.ReimbursementGuid) && sub.guid?.toLowerCase() !== api.ReimbursementGuid.toLowerCase()) {
       ledger.set("submission", sub.id, { guid: api.ReimbursementGuid.toLowerCase() }, { label: "submission.guidObserved" });
@@ -117,6 +120,7 @@ export function applyStepUpStatuses(ledger: Ledger, apiItems: ApiLineItem[]): nu
     const message = api.Message?.trim();
     if (message && item.stepUpMessage !== message) fields["stepUpMessage"] = message;
     if (item.stepUpStatus !== status) fields["stepUpStatus"] = status;
+    if (amountCents !== undefined && item.stepUpAmountCents !== amountCents) fields["stepUpAmountCents"] = amountCents;
     if (amountCents !== undefined && (status === "Approved" || status === "Adjusted") && item.approvedCents !== amountCents) fields["approvedCents"] = amountCents;
     if (amountCents !== undefined && status === "Paid") {
       if (item.paidCents !== amountCents) fields["paidCents"] = amountCents;

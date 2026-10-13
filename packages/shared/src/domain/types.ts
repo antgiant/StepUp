@@ -80,6 +80,8 @@ export interface LineItem {
   paidCents?: number;
   /** What StepUp said about this item (a denial reason, an adjustment note), as last seen; shown beside the status. */
   stepUpMessage?: string;
+  /** What StepUp holds as this item's amount (cents), as last read. When it is not the ledger's amount the item is flagged as adjusted. */
+  stepUpAmountCents?: number;
   /** Set by a person or by the submission flow when something outside the data blocks filing (e.g. "needs-split"). Cleared by removing it. */
   hold?: string;
   holdNote?: string;

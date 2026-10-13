@@ -24,5 +24,8 @@ copy has not caught up, so the newer local change stands until the next read.
 - Ledger years: `stepUpOverlayEvents` folds StepUp's data in as events stamped with the time the list was last read, so the
   ledger's normal latest-change-wins rule gives the exception for free. They are never written to the logs. Do not add a second
   mechanism; add the field to `stepUpItemFields` instead.
+- A ledger year also shows what StepUp holds that the ledger has never heard of (as purchases and items of their own; drafts are
+  left out), and an item whose amount StepUp holds differently from the ledger's is flagged Adjusted (with both amounts shown on
+  the item) at any stage except a denial.
 - Excel years: the StepUp enhancement in `buildLegacyImport` replaces the sheet's status, amounts and message.
 - The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`).

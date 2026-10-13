@@ -45,4 +45,36 @@ describe("StepUp's list laid over a ledger year", () => {
     expect(l.state.items["i1"]).toMatchObject({ stepUpStatus: "Adjusted", approvedCents: 850 });
     expect(l.unflushedCount).toBe(2); // only the ledger's own
   });
+
+  it("flags an item whose amount differs from StepUp's as adjusted at any stage, but leaves a denial a denial", () => {
+    const l = ledgerWithSubmittedItem(1_000_000);
+    const r = projectReimbursement({ Id: "g", SequenceNumber: 7, SchoolYear: "2026-2027", LineItems: [{ LineItemNumber: "7-1", ExternalStatus: "Submitted", ItemAmount: 8.5 }] })!;
+    l.setOverlay((state) => stepUpOverlayEvents(state, [r], 2_000_000));
+    l.loadKnown([]);
+    expect(l.state.items["i1"]).toMatchObject({ stepUpStatus: "Adjusted", stepUpAmountCents: 850 });
+    const denied = projectReimbursement({ Id: "g", SequenceNumber: 7, SchoolYear: "2026-2027", LineItems: [{ LineItemNumber: "7-1", ExternalStatus: "Denied", ItemAmount: 8.5 }] })!;
+    l.setOverlay((state) => stepUpOverlayEvents(state, [denied], 2_000_000));
+    l.loadKnown([]);
+    expect(l.state.items["i1"]?.stepUpStatus).toBe("Denied (Initial)");
+  });
+
+  it("shows what StepUp has that the ledger has never heard of, except drafts", () => {
+    const l = ledgerWithSubmittedItem(1_000_000);
+    l.set("child", "child-kid", { name: "Kid" });
+    const r = projectReimbursement({
+      Id: "g9", SequenceNumber: 9, SchoolYear: "2026-2027", StudentName: "Kid", SubmitDate: "2026-03-01T00:00:00Z", ProviderName: "Amazon",
+      Receipts: [{ Id: "r", SourceFileName: "216 - amazon.pdf" }],
+      LineItems: [
+        { LineItemNumber: "9-1", ExternalStatus: "Paid", ItemAmount: 20, MatchedItemName: "Hub", CategoryName: "Instructional Material" },
+        { LineItemNumber: "9-2", ExternalStatus: "Draft", ItemAmount: 5 },
+      ],
+    })!;
+    l.setOverlay((state) => stepUpOverlayEvents(state, [r], 2_000_000));
+    l.loadKnown([]);
+    expect(l.state.items["stepup-9-1"]).toMatchObject({ description: "Hub", childId: "child-kid", stepUpStatus: "Paid", paidCents: 2000, amountCents: 2000 });
+    expect(l.state.items["stepup-9-2"]).toBeUndefined();
+    expect(l.state.purchases["purchase-stepup-9"]).toMatchObject({ vendor: "Amazon" });
+    expect(Object.values(l.state.submissions).find((s) => s.reimbursementId === "9")?.guid).toBe("g9");
+    expect(l.unflushedCount).toBe(3);
+  });
 });
