@@ -98,6 +98,16 @@ describe("evaluateItem", () => {
     expect(codes(s)).toContain("items-exceed-receipt-total");
   });
 
+  it("does not hold an estimated tax against the receipt total", () => {
+    const s = baseState();
+    s.purchases[s.items["i1"]!.purchaseId!]!.orderTotalCents = s.items["i1"]!.amountCents!;
+    s.items["i1"]!.taxShippingCents = 500;
+    s.items["i1"]!.taxShippingEstimated = true;
+    expect(codes(s)).not.toContain("items-exceed-receipt-total");
+    s.items["i1"]!.taxShippingEstimated = false;
+    expect(codes(s)).toContain("items-exceed-receipt-total");
+  });
+
   it("lists every missing basic field", () => {
     const s = baseState();
     s.items["i1"] = { id: "i1" };

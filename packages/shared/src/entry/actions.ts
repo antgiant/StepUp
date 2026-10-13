@@ -59,9 +59,21 @@ export interface NewItemInput {
 export function addItem(ledger: Ledger, purchaseId: string, input: NewItemInput): string {
   const id = newId("item");
   const estimated = input.taxShippingCents === undefined && input.amountCents !== undefined;
-  const taxShippingCents = input.taxShippingCents ?? (input.amountCents !== undefined ? estimateTaxCents(input.amountCents, defaultTaxRate(ledger.state)) : undefined);
+  const taxShippingCents = input.taxShippingCents ?? (input.amountCents !== undefined ? estimatedTax(ledger.state, purchaseId, input.amountCents) : undefined);
   ledger.set("item", id, clean({ ...input, purchaseId, taxShippingCents, taxShippingEstimated: estimated || undefined }), { label: "item.created" });
   return id;
+}
+
+/**
+ * The tax/shipping to assume for an item whose real figure is not known yet: the year's default rate, but never so much
+ * that the purchase's items add up to more than its receipt total (the amount is often the whole receipt, tax and all).
+ */
+function estimatedTax(state: LedgerState, purchaseId: string, amountCents: number, exceptItemId?: string): number {
+  const estimate = estimateTaxCents(amountCents, defaultTaxRate(state));
+  const total = state.purchases[purchaseId]?.orderTotalCents;
+  if (total === undefined) return estimate;
+  const others = itemsOf(state, purchaseId).filter((i) => i.id !== exceptItemId).reduce((sum, i) => sum + requestedCents(i), 0);
+  return Math.max(0, Math.min(estimate, total - others - amountCents));
 }
 
 /**
@@ -74,7 +86,7 @@ export function updateItem(ledger: Ledger, itemId: string, input: NewItemInput):
   const fields: Record<string, Json> = {};
   for (const [k, v] of Object.entries(input)) if (v !== undefined) fields[k] = v as Json;
   if (input.amountCents !== undefined && input.amountCents !== item.amountCents && item.taxShippingEstimated !== false && input.taxShippingCents === undefined) {
-    fields["taxShippingCents"] = estimateTaxCents(input.amountCents, defaultTaxRate(ledger.state));
+    fields["taxShippingCents"] = estimatedTax(ledger.state, item.purchaseId ?? "", input.amountCents, itemId);
     fields["taxShippingEstimated"] = true;
   }
   if (Object.keys(fields).length) ledger.set("item", itemId, fields, { label: "item.edited" });

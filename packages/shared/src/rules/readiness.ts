@@ -138,7 +138,9 @@ export function evaluateItem(state: LedgerState, itemId: string, ctx: RulesConte
     if (purchase.orderTotalCents !== undefined) {
       const sibling = Object.values(state.items).filter((i) => i.purchaseId === purchase.id);
       const total = sibling.reduce((sum, i) => sum + requestedCents(i), 0);
-      if (total > purchase.orderTotalCents) add("items-exceed-receipt-total", "Items add up to more than the receipt total");
+      // Tax/shipping that is only an estimate is never held against the receipt: the amounts alone decide.
+      const guessed = sibling.filter((i) => i.taxShippingEstimated).reduce((sum, i) => sum + (i.taxShippingCents ?? 0), 0);
+      if (total - guessed > purchase.orderTotalCents) add("items-exceed-receipt-total", "Items add up to more than the receipt total");
     }
   }
 
