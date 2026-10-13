@@ -62,7 +62,22 @@ export class Ledger {
   loadKnown(events: LedgerEvent[]): void {
     for (const e of events) this.clock.observe(e.hlc);
     this.raw = foldEvents([...events, ...this.pending]);
+    // Outside data folded in at the time it was read (see stepup/overlay.ts). Never written to the logs.
+    if (this.overlay) {
+      const extra = this.overlay(materialize(this.raw));
+      if (extra.length) this.raw = foldEvents([...events, ...this.pending, ...extra]);
+    }
     this.cached = undefined;
+  }
+
+  private overlay?: (state: LedgerState) => LedgerEvent[];
+
+  /**
+   * Lays events computed from the current state over every later load (and over this one once `loadKnown` runs). They
+   * take part in the merge like any event, so a later local change still wins, but they are never flushed.
+   */
+  setOverlay(make: ((state: LedgerState) => LedgerEvent[]) | undefined): void {
+    this.overlay = make;
   }
 
   set(entity: EntityKind, entityId: string, fields: Record<string, Json>, opts: LedgerWriteOptions = {}): LedgerEvent {

@@ -13,3 +13,16 @@ styling match. It is read-only: no buttons that act, no editable fields.
   default. Only add to `READ_ONLY_KEEP` for something that merely looks at data.
 - Where the Excel year needs different wording or data (statuses are Excel's own, statements are not read), branch on
   `readOnly()` inside the shared view rather than forking it.
+
+## Which source wins
+
+For anything StepUp holds about a filed item (status, paid/approved amounts, its message, the reimbursement's id), the order of
+authority is **StepUp's own data, then the ledger, then Excel**. StepUp's list is read from `<year>/_stepup/` (see
+`packages/shared/src/stepup/`). The one exception is something done here (the app or the CLI) after StepUp was last read: StepUp's
+copy has not caught up, so the newer local change stands until the next read.
+
+- Ledger years: `stepUpOverlayEvents` folds StepUp's data in as events stamped with the time the list was last read, so the
+  ledger's normal latest-change-wins rule gives the exception for free. They are never written to the logs. Do not add a second
+  mechanism; add the field to `stepUpItemFields` instead.
+- Excel years: the StepUp enhancement in `buildLegacyImport` replaces the sheet's status, amounts and message.
+- The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`).

@@ -9,6 +9,7 @@ import { categoryIdForPath } from "../reference/categories.js";
 import { hashString } from "../util/hash.js";
 import { childIdForName } from "../entry/actions.js";
 import type { StepUpReimbursement } from "../stepup/archive.js";
+import { stepUpItemFields, stepUpStatusOf } from "../stepup/overlay.js";
 
 /** Imports are stamped well in the past so any later human edit in the app always wins over imported values. */
 const IMPORT_WALL = 1_600_000_000_000;
@@ -414,8 +415,7 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
   // ---- what StepUp itself lists for the year
   if (input.stepUp?.length) {
     const before = materialize(foldEvents(events));
-    const known = (l: StepUpReimbursement["lines"][number]) =>
-      l.status === "Denied" ? (l.appealed ? "Denied (Final)" : "Denied (Initial)") : ["Submitted", "Approved", "Paid", "Appealed"].includes(l.status) ? l.status : undefined;
+    const known = (l: StepUpReimbursement["lines"][number]) => stepUpStatusOf(l);
     const said = (l: StepUpReimbursement["lines"][number]) => [l.reason, l.comment && l.comment !== l.reason ? l.comment : ""].filter(Boolean).join(": ") || undefined;
     for (const r of [...input.stepUp].sort((a, b) => a.number - b.number)) {
       const sid = `sub-${r.number}`;
@@ -433,15 +433,15 @@ export function buildLegacyImport(input: LegacyInput): LegacyImportResult {
           toAdd.push(l);
           continue;
         }
-        // The sheet is the authority for what it says; StepUp fills what it left blank.
+        // StepUp outranks the sheet: its status, amounts and message replace what the sheet says, and its names for the
+        // category (what was actually filed) replace the sheet's free text.
         const have = before.items[itemId];
-        const status = known(l);
-        const fields: Record<string, Json | undefined> = {
-          stepUpMessage: said(l),
-          stepUpStatus: status && !have?.stepUpStatus && !have?.statusOverride ? status : undefined,
-          approvedCents: status === "Approved" && have?.approvedCents === undefined ? l.amountCents : undefined,
-          paidCents: status === "Paid" && have?.paidCents === undefined ? l.amountCents : undefined,
-        };
+        const fields: Record<string, Json | undefined> = stepUpItemFields(l, have);
+        if (fields["stepUpStatus"]) fields["statusOverride"] = fields["stepUpStatus"];
+        if (l.category.length) {
+          fields["categoryPath"] = l.category;
+          fields["categoryId"] = categoryIdForPath(l.category);
+        }
         if (Object.values(fields).some((x) => x !== undefined)) emit("item", itemId, clean(fields), "stepup.item");
       }
       if (purchaseOfSubmission.has(sid)) emit("submission", sid, { guid: r.id }, "stepup.submission");

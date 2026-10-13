@@ -13,6 +13,8 @@ import { STEPUP_DIR } from "../workspace/workspace.js";
  */
 export const STEPUP_REIMBURSEMENTS_DIR = "reimbursements";
 export const STEPUP_INDEX_FILE = "index.json";
+/** Rewritten (a few bytes) every time a fresh copy of the list is read, even when nothing in it changed. */
+export const STEPUP_SYNCED_FILE = "synced.json";
 
 /** One line item of a reimbursement, reduced to what the app uses. Money in cents, dates as `YYYY-MM-DD`. */
 export interface StepUpLine {
@@ -155,15 +157,49 @@ export async function readStepUpIndex(storage: StorageProvider, driveId: string,
   }
 }
 
+/** A year's reimbursements and when StepUp's list was last read for them (ms; undefined when that is not known). */
+export interface StepUpYear {
+  reimbursements: StepUpReimbursement[];
+  readAt?: number;
+}
+
+/** When StepUp's list was last read for the year: the later of the sync marker and the index's own save time. */
+async function readSyncedAt(storage: StorageProvider, driveId: string, folderId: string, indexSavedAt?: string): Promise<number | undefined> {
+  let at = indexSavedAt ? Date.parse(indexSavedAt) : NaN;
+  try {
+    const marker = await storage.find(driveId, folderId, STEPUP_SYNCED_FILE);
+    if (marker) {
+      const t = Date.parse((JSON.parse((await storage.readText(driveId, marker.id)).text) as { at?: string }).at ?? "");
+      if (Number.isFinite(t) && !(t < at)) at = t;
+    }
+  } catch {
+    /* no marker: the index's own time stands */
+  }
+  return Number.isFinite(at) ? at : undefined;
+}
+
 /**
  * Every reimbursement kept for a year: one download of the index, or (if it is missing) the files themselves, read a few
  * at a time. Empty when the year has none.
  */
-export async function readStepUpReimbursements(storage: StorageProvider, driveId: string, yearFolderId: string): Promise<StepUpReimbursement[]> {
+export async function readStepUpYear(storage: StorageProvider, driveId: string, yearFolderId: string): Promise<StepUpYear> {
   const folder = await findStepUpFolder(storage, driveId, yearFolderId);
-  if (!folder) return [];
+  if (!folder) return { reimbursements: [] };
   const fromIndex = await readStepUpIndex(storage, driveId, folder.id);
-  if (fromIndex) return fromIndex.index.reimbursements.map(({ hash: _hash, ...r }) => r);
+  if (fromIndex) {
+    const readAt = await readSyncedAt(storage, driveId, folder.id, fromIndex.index.savedAt);
+    return { reimbursements: fromIndex.index.reimbursements.map(({ hash: _hash, ...r }) => r), ...(readAt !== undefined ? { readAt } : {}) };
+  }
+  const readAt = await readSyncedAt(storage, driveId, folder.id);
+  return { reimbursements: await readReimbursementFiles(storage, driveId, folder.id), ...(readAt !== undefined ? { readAt } : {}) };
+}
+
+export async function readStepUpReimbursements(storage: StorageProvider, driveId: string, yearFolderId: string): Promise<StepUpReimbursement[]> {
+  return (await readStepUpYear(storage, driveId, yearFolderId)).reimbursements;
+}
+
+async function readReimbursementFiles(storage: StorageProvider, driveId: string, folderId: string): Promise<StepUpReimbursement[]> {
+  const folder = { id: folderId };
   const dir = await storage.find(driveId, folder.id, STEPUP_REIMBURSEMENTS_DIR);
   if (!dir?.isFolder) return [];
   const files = (await storage.list(driveId, dir.id)).filter((f) => !f.isFolder && f.name.endsWith(".json"));

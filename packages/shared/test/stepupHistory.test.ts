@@ -36,15 +36,15 @@ describe("StepUp's own list of a year", () => {
     expect(projectReimbursement({ Id: "x" })).toBeUndefined();
   });
 
-  it("fills what an Excel row left blank and never overrides what it says", () => {
+  it("outranks what an Excel row says about an item, and leaves the rest of the row alone", () => {
     const stepUp = [projectReimbursement(raw(100, [{ ExternalStatus: "Paid", ReasonDescription: "Documentation received" }, { ExternalStatus: "Denied", ReasonDescription: "Duplicate request" }]))!];
     const rows = [
-      row(1, { "Reimbursement ID": 100, "Line Number": 1, Status: "" }),
-      row(2, { "Reimbursement ID": 100, "Line Number": 2, Status: "Denied (Initial)", Notes: "mine" }),
+      row(1, { "Reimbursement ID": 100, "Line Number": 1, Status: "Submitted" }),
+      row(2, { "Reimbursement ID": 100, "Line Number": 2, Status: "Approved", Notes: "mine" }),
     ];
     const { result } = deriveLegacyYear(input(rows, stepUp), {});
-    expect(result.state.items["legacy-1"]).toMatchObject({ stepUpStatus: "Paid", paidCents: 1250, stepUpMessage: "Documentation received" });
-    expect(result.state.items["legacy-2"]).toMatchObject({ statusOverride: "Denied (Initial)", notes: "mine", stepUpMessage: "Duplicate request" });
+    expect(result.state.items["legacy-1"]).toMatchObject({ stepUpStatus: "Paid", statusOverride: "Paid", paidCents: 1250, stepUpMessage: "Documentation received" });
+    expect(result.state.items["legacy-2"]).toMatchObject({ stepUpStatus: "Denied (Initial)", statusOverride: "Denied (Initial)", notes: "mine", stepUpMessage: "Duplicate request" });
     expect(result.state.submissions["sub-100"]?.guid).toBe("guid-100");
   });
 
