@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { DraftRecord } from "../draftTracker.js";
+import type { ApiResponse } from "../statusSync.js";
 import type { FolderChild } from "../graph/onedrive.js";
 import type { ReimbursementGroup, ResolveAmbiguousMainReceipt, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
 
@@ -42,6 +43,8 @@ export interface FilingStore {
   };
   /** "I am filing these rows now." Not ok when someone else already is (the reason says who). */
   claim(rows: Table1Row[]): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** Applies a reimbursements-list response (live, or read back from a saved capture); returns how many rows changed. */
+  applyStatusResponse(body: ApiResponse): Promise<number>;
   /** Gives the claim back (finished, skipped or failed). */
   release(rows: Table1Row[]): Promise<void>;
 

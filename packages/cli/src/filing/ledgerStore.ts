@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import {
@@ -37,7 +37,7 @@ import type { OpenedYear } from "../ledgerYear.js";
 import type { ReimbursementGroup, ScholarshipMismatch, Table1Row } from "../reimbursements.js";
 import { attachCategoryTreeListener, type Cache } from "../categorySync.js";
 import { nodesFromCache } from "../categoryNodes.js";
-import { attachStatusSyncListenerWith } from "../statusSync.js";
+import { attachStatusSyncListenerWith, type ApiResponse } from "../statusSync.js";
 import type { FilingStore } from "./store.js";
 
 const REFERENCE_FILE = path.resolve(process.cwd(), "packages/web/public/reference/categories.json");
@@ -223,17 +223,19 @@ export class LedgerStore implements FilingStore {
     console.log(`[category] StepUp lists "${newPath}" where we had "${oldPath}". Items were updated; run "npm run reference:build" to refresh the shared list.`);
   }
 
+  /** Applies a reimbursements-list response (from the live page or a saved capture): statuses, amounts, messages, ids. */
+  async applyStatusResponse(body: ApiResponse): Promise<number> {
+    const results = (body.Results ?? []) as unknown as Array<Record<string, unknown> & { LineItems?: Array<Record<string, unknown>> }>;
+    const lineItems = results.flatMap((r) =>
+      (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem)
+    );
+    const changed = applyStepUpStatuses(this.ledger, lineItems);
+    await this.save();
+    return changed;
+  }
+
   attachListeners(page: Page): void {
-    attachStatusSyncListenerWith(page, async (body) => {
-      const results = (body.Results ?? []) as unknown as Array<Record<string, unknown> & { LineItems?: Array<Record<string, unknown>> }>;
-      const lineItems = results.flatMap((r) =>
-        (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem)
-      );
-      captureDeniedLineItems(results);
-      const changed = applyStepUpStatuses(this.ledger, lineItems);
-      await this.save();
-      return changed;
-    });
+    attachStatusSyncListenerWith(page, (body) => this.applyStatusResponse(body));
     // StepUp's own category list, as it is observed, becomes edits in this year's ledger (the old Table5 sync).
     attachCategoryTreeListener(page, (cache) => this.recordCategories(cache));
     // Pre-authorization status is not part of the ledger yet (plan: Pre-Auth is its own flow), so it is not synced here.
@@ -274,23 +276,4 @@ export class LedgerStore implements FilingStore {
     await this.save();
     await this.rebuildMirror();
   }
-}
-
-/**
- * Keeps every denied line item (and the result it came in) exactly as StepUp sent it, so the field that holds the
- * reason can be confirmed from a real response. Best effort; never fails a sync.
- */
-function captureDeniedLineItems(results: Array<Record<string, unknown> & { LineItems?: Array<Record<string, unknown>> }>): void {
-  try {
-    const denied = results.flatMap((r) => (r.LineItems ?? []).filter((li) => li["ExternalStatus"] === "Denied").map((li) => ({ result: { ...r, LineItems: undefined }, lineItem: li })));
-    if (denied.length === 0) return;
-    const file = path.resolve(process.cwd(), ".cache", "denied-line-items.json");
-    mkdirSync(path.dirname(file), { recursive: true });
-    const byNumber = new Map<string, unknown>();
-    try {
-      for (const d of JSON.parse(readFileSync(file, "utf-8")) as Array<{ lineItem: Record<string, unknown> }>) byNumber.set(String(d.lineItem["LineItemNumber"]), d);
-    } catch {}
-    for (const d of denied) byNumber.set(String(d.lineItem["LineItemNumber"]), d);
-    writeFileSync(file, JSON.stringify([...byNumber.values()], null, 2), "utf-8");
-  } catch {}
 }

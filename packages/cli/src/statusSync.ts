@@ -187,20 +187,23 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
     }
 
     // What StepUp said about the item (a denial reason) goes on the end of the row's own notes, once.
-    // Only for items StepUp turned down or paid differently, which is where it explains itself.
-    const explained = mappedStatus.startsWith("Denied") || mappedStatus === "Adjusted";
+    // Anything still open or turned down; a paid item's old "documentation received" comment is history, not a note.
+    const explained = mappedStatus !== "Paid";
     const said = explained ? messageOf(apiItem as unknown as Record<string, unknown>) : undefined;
     if (said && notesIdx !== -1) {
       const line = `StepUp: ${said}`;
       const current = String(values[notesIdx] ?? "").trim();
-      if (!current.includes(line)) changes.Notes = current ? `${current}\n${line}` : line;
+      // Already there (by this tool, or typed in by hand from the same email): leave the notes alone.
+      const norm = (t: string) => t.toLowerCase().replace(/\s+/g, " ");
+      const comment = said.includes(": ") ? said.slice(said.indexOf(": ") + 2) : said;
+      if (!current.includes(line) && !norm(current).includes(norm(comment).slice(0, 60))) changes.Notes = current ? `${current}\n${line}` : line;
     }
 
     if (Object.keys(changes).length === 0) continue;
 
-    await updateTableRowByIndex(excelRef, TABLE1, rowIndex, values, headers, changes);
+    if (!process.argv.includes("--dry-run")) await updateTableRowByIndex(excelRef, TABLE1, rowIndex, values, headers, changes);
     console.log(
-      `[status sync] Row ${reimbursementId}-${lineNumber}: ${Object.entries(changes)
+      `[status sync] ${process.argv.includes("--dry-run") ? "Would update row" : "Row"} ${reimbursementId}-${lineNumber}: ${Object.entries(changes)
         .map(([k, v]) => `${k}="${v}"`)
         .join(", ")}`
     );
@@ -218,6 +221,9 @@ export async function syncStatusesFromApiResponse(excelRef: DriveItemRef, body: 
  * "recent activity" widget, distinct from the real Reimbursements list page) — an empty response
  * must NOT start the throttle window, or it silently blocks the next, actually-populated response
  * for 2 hours. Only a response with real data to sync counts as a sync.
+ *
+ * As of 2026-10 a single response (about 6 MB: every reimbursement of every school year, 732 of them) carries all the
+ * data, so there is no need to visit the Reimbursements list page; the dashboard's own request is enough.
  */
 export function attachStatusSyncListener(page: Page, excelRef: DriveItemRef): void {
   attachStatusSyncListenerWith(page, (body) => syncStatusesFromApiResponse(excelRef, body));

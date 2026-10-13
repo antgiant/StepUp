@@ -20,7 +20,7 @@ import {
   type ScholarshipMismatch,
   type Table1Row,
 } from "../reimbursements.js";
-import { attachStatusSyncListener } from "../statusSync.js";
+import { attachStatusSyncListener, syncStatusesFromApiResponse, type ApiResponse } from "../statusSync.js";
 import type { FilingStore } from "./store.js";
 
 const TABLE1 = "Table1";
@@ -123,6 +123,10 @@ export class ExcelStore implements FilingStore {
 
   renameCategory(oldPath: string, newPath: string): Promise<void> {
     return applyCategoryRename(this.excelRef, oldPath, newPath);
+  }
+
+  applyStatusResponse(body: ApiResponse): Promise<number> {
+    return syncStatusesFromApiResponse(this.excelRef, body);
   }
 
   attachListeners(page: Page): void {

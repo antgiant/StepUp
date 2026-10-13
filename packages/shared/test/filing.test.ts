@@ -138,8 +138,9 @@ describe("StepUp's message and status page", () => {
   });
   it("builds the status address and reads reason text", () => {
     expect(stepUpStatusUrl(G)).toBe(`https://apply.stepupforstudents.org/Reimbursement/Details/${G}/Two?BackLink=Reimbursement`);
-    expect(messageOf({ DenialReason: "  no  " })).toBe("no");
-    expect(messageOf({ Comments: ["a", "", "b"] })).toBe("a\nb");
-    expect(messageOf({ Other: "x" })).toBeUndefined();
+    expect(messageOf({ ReasonDescription: "Not an approved expense", CommentText: "  Thank you.\t\t" })).toBe("Not an approved expense: Thank you.");
+    expect(messageOf({ ReasonDescription: "Duplicate request", CommentText: "Duplicate request", CommentType: "External" })).toBe("Duplicate request");
+    expect(messageOf({ ReasonDescription: "On hold", CommentText: "internal only", CommentType: "Internal" })).toBe("On hold");
+    expect(messageOf({ ReasonDescription: null, CommentText: null })).toBeUndefined();
   });
 });

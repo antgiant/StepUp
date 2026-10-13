@@ -12,6 +12,8 @@ import { acquireStepUpLock } from "./stepupLock.js";
 import { getClientId } from "./clientId.js";
 import { getSignedInName } from "./graph/auth.js";
 import { attachSearchCapture } from "./statusSync.js";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 /**
  * Brings the statuses (and what StepUp said about each item) up to date without filing anything:
@@ -19,6 +21,8 @@ import { attachSearchCapture } from "./statusSync.js";
  *   npm run statuses                               the spreadsheet in .env
  *   npm run statuses -- --ledger=2026-2027         that year's ledger
  *   npm run statuses -- --capture-only             keep StepUp's raw list responses in .cache/ and write nothing
+ *   npm run statuses -- --from-capture [--ledger=Y]  apply the last capture to the spreadsheet / ledger; no browser or login
+ *   add --dry-run to the spreadsheet form to list what would change without writing
  *
  * You log in to StepUp in the browser that opens, then open the Reimbursements list (scroll through it so every page
  * loads). The list's own requests are what get read; this never starts, edits or submits a reimbursement.
@@ -38,7 +42,19 @@ async function chooseStore(): Promise<FilingStore> {
   return new ExcelStore(await resolveShareLink(requireEnv("ONEDRIVE_EXCEL_URL")), await resolveShareLink(requireEnv("ONEDRIVE_FILES_FOLDER_URL")));
 }
 
+async function applyCapture(): Promise<void> {
+  const file = path.resolve(process.cwd(), ".cache", "stepup-search-responses.json");
+  const saved = JSON.parse(await readFile(file, "utf-8")) as Record<string, { result: unknown }>;
+  const results = Object.values(saved).map((v) => v.result);
+  const store = await chooseStore();
+  console.log(`Applying ${results.length} captured reimbursement(s) to ${store.describe}...`);
+  const changed = await store.applyStatusResponse({ Results: results as never });
+  await store.finish();
+  console.log(`Updated ${changed} row(s).`);
+}
+
 async function main() {
+  if (process.argv.includes("--from-capture")) return applyCapture().then(() => process.exit(0));
   const captureOnly = process.argv.includes("--capture-only");
   const lock = await acquireStepUpLock();
   try {

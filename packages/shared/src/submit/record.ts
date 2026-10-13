@@ -62,22 +62,16 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const stepUpStatusUrl = (guid: string): string => `https://apply.stepupforstudents.org/Reimbursement/Details/${guid}/Two?BackLink=Reimbursement`;
 
 /**
- * Text fields StepUp's line items might carry a reason in. Not yet confirmed against a real denied item: the CLI keeps
- * every denied line it sees in .cache/denied-line-items.json so the real name can be settled and this list trimmed.
+ * What StepUp says about a line item, from a raw search result: the reason it gives (ReasonDescription, e.g. "Not an
+ * approved expense") and the comment its staff wrote (CommentText; internal comments are never shown). Both fields were
+ * confirmed against the real list of 732 reimbursements.
  */
-const MESSAGE_FIELDS = ["DenialReason", "DenialReasons", "DenialMessage", "StatusReason", "StatusMessage", "Reason", "Comments", "Comment", "Message", "Notes"];
-
-/** The reason text on a raw search line item, if it has any. */
 export function messageOf(lineItem: Record<string, unknown>): string | undefined {
-  for (const k of MESSAGE_FIELDS) {
-    const v = lineItem[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-    if (Array.isArray(v)) {
-      const joined = v.filter((x): x is string => typeof x === "string" && x.trim() !== "").join("\n");
-      if (joined) return joined;
-    }
-  }
-  return undefined;
+  const text = (k: string) => (typeof lineItem[k] === "string" ? (lineItem[k] as string).replace(/\s+/g, " ").trim() : "");
+  const reason = text("ReasonDescription");
+  const comment = lineItem["CommentType"] === "Internal" ? "" : text("CommentText");
+  const parts = [reason, comment && comment !== reason ? comment : ""].filter(Boolean);
+  return parts.length ? parts.join(": ") : undefined;
 }
 
 /** StepUp's raw status (and whether it was appealed) -> our status vocabulary; anything unrecognised is left alone. */
