@@ -1323,8 +1323,8 @@ function statementsView(): string {
     const linked = linkedBy(d.id);
     const period = d.statement?.periodStart && d.statement.periodEnd ? `${d.statement.periodStart} to ${d.statement.periodEnd}${d.statement.periodInferred ? " (estimated)" : ""}` : "period not found";
     const summary = d.statement ? `${period} &middot; ${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
-    return `<li class="q"><div><strong>${esc(statementDisplayName(d))}</strong><br><small>${d.statement ? summary : esc(summary)}</small></div>
-      <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button><button class="danger" data-archive-doc="${esc(d.id)}" data-linked="${linked.size}" title="Hide this file (added by mistake). You can restore it.">Archive</button></div></li>`;
+    // The whole row opens the statement (archiving is on the statement's own screen).
+    return `<li class="q"><button class="row-button" data-statement="${esc(d.id)}"><span><strong>${esc(statementDisplayName(d))}</strong><br><small>${d.statement ? summary : esc(summary)}${d.statement ? "" : " &middot; tap to read it"}</small></span><span class="chev" aria-hidden="true">&rsaquo;</span></button></li>`;
   };
   const groups = clusterStatements(docs);
   const rows = groups.map((g) => `<h3>${esc(g.label)} <small>(${g.items.length})</small></h3><ul class="queue">${g.items.map(row).join("")}</ul>`);
@@ -1344,8 +1344,8 @@ function statementReview(id: string): string {
   if (!doc) return `<p>That proof of payment no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
   const head = `<p><a href="#" data-go="statements">&larr; All proof of payment</a></p><h2>${esc(doc.contentKind === "statement" ? statementDisplayName(doc) : doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>
-    ${doc.driveItemId && workspace ? `<form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc(statementDisplayName(doc).replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form>` : ""}`;
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}<button class="danger" data-archive-doc="${esc(id)}" data-linked="${new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.transactionId).map((a) => a.transactionId)).size}" title="Hide this file (added by mistake). You can restore it.">Archive</button></p>
+    ${doc.driveItemId && workspace ? `<details><summary>Rename the file</summary><form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc(statementDisplayName(doc).replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form></details>` : ""}`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Every page that shows something</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -2787,6 +2787,13 @@ root.addEventListener("click", async (ev) => {
       : `${name} will be hidden and moved to the "${ARCHIVE_FOLDER}" folder. It is not deleted; you can restore it later.`;
     if (await confirmModal("Archive this file?", message, "Archive")) {
       await setArchived(d["archiveDoc"], true);
+      if (view.name === "statement" && view.id === d["archiveDoc"] && ledger.state.documents[d["archiveDoc"]]?.archived) {
+        // Archived from its own screen: go back to the list, which no longer shows it, and keep the notice.
+        const notice = status;
+        go({ name: "statements" });
+        status = notice;
+        render();
+      }
     }
   } else if (d["unarchiveDoc"]) {
     await setArchived(d["unarchiveDoc"], false);
