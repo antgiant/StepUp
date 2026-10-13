@@ -1693,26 +1693,35 @@ async function autosaveItemNow(form: HTMLFormElement, focusNext?: string): Promi
   if (!dateShown) raw["serviceDate"] = "";
   if (!itemId) writeItemDraft(purchaseId, raw); // kept on this device even while the form is incomplete
   const amountCents = toCents(raw["amount"]!);
-  if (!raw["childId"] || !raw["description"] || amountCents === undefined || !raw["categoryId"] || !raw["benefitMessage"]) return;
+  // An item is saved as soon as it has a child, a description and an amount. The category, benefit message and the rest
+  // can come later: what is still missing shows on the item, and it cannot be marked ready until it is there.
+  if (!raw["childId"] || !raw["description"] || amountCents === undefined) return;
   const input = {
     childId: raw["childId"],
     description: raw["description"],
     amountCents,
-    ...categoryFields(raw["categoryId"]),
-    benefitMessage: raw["benefitMessage"],
+    ...(raw["categoryId"] ? categoryFields(raw["categoryId"]) : { categoryId: "", categoryPath: [] as string[] }),
+    benefitMessage: raw["benefitMessage"] ?? "",
     serviceDate: raw["serviceDate"] ?? "",
     serviceProvider: raw["serviceProvider"] ?? "",
   };
   const existing = itemId ? ledger.state.items[itemId] : undefined;
   if (existing) {
-    const same = existing.childId === input.childId && existing.description === input.description && existing.amountCents === input.amountCents && existing.categoryId === input.categoryId && (existing.benefitMessage ?? "") === input.benefitMessage && (existing.serviceDate ?? "") === input.serviceDate && (existing.serviceProvider ?? "") === input.serviceProvider;
+    const same = existing.childId === input.childId && existing.description === input.description && existing.amountCents === input.amountCents && (existing.categoryId ?? "") === input.categoryId && (existing.benefitMessage ?? "") === input.benefitMessage && (existing.serviceDate ?? "") === input.serviceDate && (existing.serviceProvider ?? "") === input.serviceProvider;
     if (same) return;
   }
   showSaveState("saving", "", "item-save-state");
   let created = false;
   if (existing) updateItem(ledger, existing.id, input);
   else {
-    const id = addItem(ledger, purchaseId, { ...input, serviceDate: input.serviceDate || undefined, serviceProvider: input.serviceProvider || undefined });
+    const { categoryId, categoryPath, benefitMessage, ...rest } = input;
+    const id = addItem(ledger, purchaseId, {
+      ...rest,
+      ...(categoryId ? { categoryId, ...(categoryPath?.length ? { categoryPath } : {}) } : {}),
+      ...(benefitMessage ? { benefitMessage } : {}),
+      serviceDate: input.serviceDate || undefined,
+      serviceProvider: input.serviceProvider || undefined,
+    });
     itemEdit = { purchaseId, itemId: id };
     writeItemDraft(purchaseId, undefined);
     created = true;
@@ -1776,7 +1785,7 @@ function purchaseView(id: string, draft = false): string {
     return `<li class="item-card"><div class="item-top"><strong>${esc(i.description)}</strong><span class="amt">${formatCents(i.amountCents)}</span></div>
       <div class="item-meta">${esc(who)} &middot; ${esc(categoryLabel(i)) || "<span class=\"warn\">no category</span>"}${tax}</div>
       <div class="item-status">${statusCell(i, ev)}</div>
-      <div class="actions">${markButton(i, ev)}<button data-dup="${esc(i.id)}">Duplicate</button></div></li>`;
+      <div class="actions">${markButton(i, ev)}<button data-edit-item="${esc(i.id)}">Edit</button><button data-dup="${esc(i.id)}">Duplicate</button></div></li>`;
   });
   if (draft) {
     return `<p><a href="#" data-go="queue">&larr; Back to the list</a></p>
@@ -1822,7 +1831,8 @@ function purchaseView(id: string, draft = false): string {
   ${panel("items", `Items${items.length || remaining !== undefined ? ` <small>${items.length} item${items.length === 1 ? "" : "s"}${remaining !== undefined ? ` &middot; ${formatCents(remaining)} left to itemize` : ""}</small>` : ""}`, `
   ${items.length ? `<ul class="items">${rows.join("")}</ul>` : `<p class="note">No items yet. Add the first one below.</p>`}
   ${items.length && p.taxShippingTotalCents !== undefined ? `<p><button data-realloc="${esc(id)}">Spread the real tax/shipping across items</button></p>` : ""}
-  <h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Item" : "Add an item"}</h4>
+  <h4>${itemEdit?.purchaseId === id && itemEdit.itemId ? "Editing this item" : "Add an item"}</h4>
+  <p class="note">It is saved as soon as it has a child, a description and an amount. Add the category and benefit message now or later: the item lists what is still missing, and you can come back with <strong>Edit</strong>.</p>
   ${children.length === 0 ? `<p class="warn">Add a child on the list page first.</p>` : ""}
   ${itemForm(id, next)}
   <p><button type="button" id="add-another"${itemEdit?.purchaseId === id && itemEdit.itemId ? "" : " disabled"}>Add another</button></p>
@@ -2613,6 +2623,11 @@ root.addEventListener("click", async (ev) => {
     URL.revokeObjectURL(url);
     status = "Saved category-edits.json. Send it to the maintainers (or open an issue on the project) so everyone gets these fixes.";
     render();
+  } else if (d["editItem"] && view.name === "purchase") {
+    writeItemDraft(view.id, undefined);
+    itemEdit = { purchaseId: view.id, itemId: d["editItem"] };
+    render();
+    root.querySelector<HTMLElement>("#item-form")?.scrollIntoView({ block: "center" });
   } else if (t.id === "add-another" && view.name === "purchase") {
     writeItemDraft(view.id, undefined);
     itemEdit = { purchaseId: view.id };
