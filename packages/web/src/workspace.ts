@@ -13,6 +13,9 @@ import {
   type FolderEntry,
   listYears,
   openLedgerFolders,
+  readStepUpYear,
+  stepUpOverlayEvents,
+  type StepUpYear,
   loadRemotePointer,
   saveRemotePointer,
   type CategoryReference,
@@ -107,6 +110,8 @@ export interface OpenWorkspace {
   fromCache?: boolean;
   /** What was copied in from an earlier year on this open (unsaved until the ledger is flushed). */
   carried: CarryResult;
+  /** StepUp's own list for this year, laid over the ledger (it outranks the ledger; see stepup/overlay.ts). */
+  stepUp?: StepUpYear;
   /** Set when this year is still kept in Excel and is only being viewed (see legacyYear.ts). Everything else is read-only then. */
   legacy?: LegacyState;
 }
@@ -120,6 +125,16 @@ async function yearsOf(driveId: string, rootId: string): Promise<YearInfo[]> {
   // Excel's workbook needs OneDrive's Excel service; elsewhere such a year is StepUp's own list if there is one, else empty.
   return storage.kind === "onedrive" ? years : years.map((y) => (y.kind === "legacy-excel" ? { ...y, kind: y.hasStepUp ? ("stepup" as const) : ("empty" as const) } : y));
 }
+
+/** Lays StepUp's list over the year's ledger: what it says wins unless something was done here after it was read. */
+function layStepUp(ledger: Ledger, store: StorageEventStore, stepUp: StepUpYear | undefined): void {
+  const readAt = stepUp?.readAt;
+  ledger.setOverlay(stepUp?.reimbursements.length && readAt !== undefined ? (state) => stepUpOverlayEvents(state, stepUp.reimbursements, readAt) : undefined);
+  ledger.loadKnown(store.cachedEvents());
+}
+
+/** StepUp's list is extra: failing to read it must never stop the year opening. */
+const readStepUp = (driveId: string, yearFolderId: string): Promise<StepUpYear | undefined> => readStepUpYear(storage, driveId, yearFolderId).catch(() => undefined);
 
 /** Opens the pointer's chosen (else newest ledger) year and loads its events. */
 export async function openWorkspace(pointer: Pointer, clientId: string, yearLabel?: string): Promise<OpenWorkspace> {
@@ -140,8 +155,10 @@ export async function openWorkspace(pointer: Pointer, clientId: string, yearLabe
   const store = new StorageEventStore(storage, pointer.driveId, folders.eventsId, clientId);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   await ledger.refresh();
+  const stepUp = await readStepUp(pointer.driveId, year.folderId);
+  if (stepUp) layStepUp(ledger, store, stepUp);
   const carried = Object.keys(ledger.state.children).length ? { children: 0, paymentMethods: 0 } : await carryOver(pointer, ledger, years.filter((y) => y.kind === "ledger" || y.kind === "legacy-excel"), year.label, clientId);
-  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carried };
+  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: folders.eventsId, carried, ...(stepUp ? { stepUp } : {}) };
 }
 
 export interface CarryResult {
@@ -246,7 +263,8 @@ export function openFromCache(pointer: Pointer, clientId: string, rec: Workspace
   store.seedCache(rec.logs);
   const ledger = new Ledger(store, new HlcClock(clientId), "web");
   ledger.loadKnown(store.cachedEvents());
-  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: rec.eventsId, fromCache: true, carried: { children: 0, paymentMethods: 0 } };
+  if (rec.stepUp) layStepUp(ledger, store, rec.stepUp);
+  return { pointer: { ...pointer, year: year.label }, years, year, driveId: pointer.driveId, ledger, store, eventsId: rec.eventsId, fromCache: true, carried: { children: 0, paymentMethods: 0 }, ...(rec.stepUp ? { stepUp: rec.stepUp } : {}) };
 }
 
 /** Brings a cache-built workspace up to date: re-lists the years and downloads only the logs whose ETag changed. Returns whether anything changed. */
@@ -260,6 +278,8 @@ export async function revalidate(ws: OpenWorkspace): Promise<boolean> {
   const before = JSON.stringify([ws.ledger.state, ws.years]);
   ws.years = await yearsOf(ws.pointer.driveId, ws.pointer.rootId);
   await ws.ledger.refresh();
+  ws.stepUp = await readStepUp(ws.driveId, ws.year.folderId);
+  layStepUp(ws.ledger, ws.store, ws.stepUp);
   ws.fromCache = false;
   // Opening from the cache skips the carry-over done on a fresh open, so a new year would stay without its students.
   ws.carried = { children: 0, paymentMethods: 0 };
@@ -274,7 +294,7 @@ export function snapshotFor(ws: OpenWorkspace, reference?: CategoryReference): W
     const workbook = book ? { itemId: book.itemId, name: book.name, ...(book.eTag ? { eTag: book.eTag } : {}), ...(book.webUrl ? { webUrl: book.webUrl } : {}) } : undefined;
     return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: "", logs: [], legacy: { input: l.year.input, choices: l.year.choices, ...(workbook ? { workbook } : {}), readAt: l.readAt }, savedAt: Date.now() };
   }
-  return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: ws.eventsId, logs: ws.store.exportCache(), ...(reference ? { snapshot: reference } : {}), savedAt: Date.now() };
+  return { v: 1, years: ws.years, yearLabel: ws.year.label, eventsId: ws.eventsId, logs: ws.store.exportCache(), ...(reference ? { snapshot: reference } : {}), ...(ws.stepUp ? { stepUp: ws.stepUp } : {}), savedAt: Date.now() };
 }
 
 /** The workspace root as a shareable folder entry. */

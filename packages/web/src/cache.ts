@@ -1,4 +1,4 @@
-import type { CachedLog, CategoryReference, LedgerEvent, LegacyYear, YearInfo } from "@step-up/shared/web";
+import type { CachedLog, CategoryReference, LedgerEvent, LegacyYear, StepUpYear, YearInfo } from "@step-up/shared/web";
 
 /**
  * What the browser remembers about a workspace between visits so the app can paint instantly and then ask OneDrive
@@ -12,6 +12,8 @@ export interface WorkspaceCache {
   logs: CachedLog[];
   /** The year's frozen category list, so categories work at once and offline. */
   snapshot?: CategoryReference;
+  /** StepUp's own list for the year (laid over the ledger), so it is there at once and offline. */
+  stepUp?: StepUpYear;
   /** For a year still kept in Excel: what was last read from the workbook, so switching to it does not wait on Excel. */
   legacy?: {
     input: LegacyYear["input"];
