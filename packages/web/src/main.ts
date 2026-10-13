@@ -65,6 +65,8 @@ import {
   learnAlias,
   purchaseTotalCents,
   planRedaction,
+  staleRedactions,
+  locateCharges,
   readReceiptText,
   redactedCopyOf,
   type RedactionPlan,
@@ -232,7 +234,11 @@ const categoryLabel = (i: { categoryId?: string; categoryPath?: string[] }) =>
 
 /** `draft` purchases exist only on screen until a detail is saved, so backing out never leaves an empty one behind. */
 /** The receipt being looked at. Documents never change, so a downloaded copy is kept for the session. */
-let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string; pages?: string[] } | undefined;
+let preview: { docId: string; filename: string; url: string; kind: PreviewKind; webUrl?: string; pages?: string[]; marks?: PreviewMark[]; purchaseId?: string } | undefined;
+/** A box to highlight on a previewed page, as percentages of that page so it follows however the picture is scaled. */
+interface PreviewMark { page: number; left: number; top: number; width: number; height: number }
+/** Set when a preview has highlighted charges: the next render scrolls the first one into view. */
+let scrollToMark = false;
 
 /**
  * iPhone and iPad show only the first page of a PDF inside an <iframe> and cannot scroll to the rest, so there a PDF is
@@ -297,7 +303,7 @@ function scanPanel(): string {
 }
 
 /** A redacted copy that has been made but not saved: the person checks every page before it can be used. */
-let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan; check: RedactionCheck; pages?: string[] } | undefined;
+let redactionDraft: { docId: string; bytes: Uint8Array; url: string; plan: RedactionPlan; check: RedactionCheck; keeps: string[]; pages?: string[]; purchaseId?: string; viewOnly?: boolean } | undefined;
 const MAX_PROOF_BYTES = 5 * 1024 * 1024;
 
 function discardRedaction(): void {
@@ -312,15 +318,24 @@ function discardRedaction(): void {
  * Builds the redacted copy of a statement on this device: everything is blacked out except the issuer, the period, the
  * column headings and the charges already linked to purchases (plan §3.10a). Shown for review; nothing is saved yet.
  */
-async function makeRedaction(docId: string, options: { pages: "all" | "matched"; purchaseId?: string } = { pages: "all" }): Promise<void> {
-  const got = await loadDocument(docId);
-  if (got.kind !== "pdf") throw new Error("Only PDF statements can be redacted here.");
+async function makeRedaction(docId: string, options: { pages: "all" | "matched"; purchaseId?: string; viewOnly?: boolean } = { pages: "all" }): Promise<void> {
   const links = Object.values(ledger.state.additionalDocs).filter((a) => a.documentId === docId && a.kind === "payment-proof" && a.transactionId && (!options.purchaseId || a.ownerId === options.purchaseId));
   const keep = new Set(links.map((a) => a.transactionId!));
-  if (keep.size === 0) throw new Error("Link at least one charge to a purchase first; only linked charges stay visible.");
   note("Finding what to keep…");
+  const built = await buildRedaction(docId, keep, options.pages);
+  discardRedaction();
+  const redactedBlob = new Blob([built.bytes as BlobPart], { type: "application/pdf" });
+  const pages = iosLike ? await pdfPagePictures(redactedBlob) : undefined;
+  redactionDraft = { docId, bytes: built.bytes, url: URL.createObjectURL(redactedBlob), plan: built.plan, check: built.check, keeps: [...keep].sort(), ...(pages ? { pages } : {}), ...(options.purchaseId ? { purchaseId: options.purchaseId } : {}), ...(options.viewOnly ? { viewOnly: true } : {}) };
+}
+
+/** Blacks out everything except the header and the given charges, then reads the result again to check it. Nothing is saved. */
+async function buildRedaction(docId: string, keep: ReadonlySet<string>, pages: "all" | "matched"): Promise<{ bytes: Uint8Array; plan: RedactionPlan; check: RedactionCheck }> {
+  const got = await loadDocument(docId);
+  if (got.kind !== "pdf") throw new Error("Only PDF statements can be redacted here.");
+  if (keep.size === 0) throw new Error("Link at least one charge to a purchase first; only linked charges stay visible.");
   const read = await pdfLines(got.blob);
-  const plan = planRedaction(read.pages, { keepTransactionIds: keep, pages: options.pages });
+  const plan = planRedaction(read.pages, { keepTransactionIds: keep, pages });
   if (read.ocr) plan.warnings.push("Some pages were read with OCR, so the boxes may be less exact. Check every page carefully.");
   if (plan.keptTransactions === 0) throw new Error(plan.warnings.join(" ") || "Nothing on this statement could be kept.");
   note("Blacking out the rest, then reading the result to check it…");
@@ -328,26 +343,61 @@ async function makeRedaction(docId: string, options: { pages: "all" | "matched";
   if (bytes.byteLength > MAX_PROOF_BYTES) throw new Error("The redacted copy is over StepUp's 5 MB limit.");
   const missing = new Set(plan.missing);
   const keptTxns = (ledger.state.documents[docId]?.statement?.transactions ?? []).filter((t) => keep.has(t.id) && !missing.has(t.id));
-  const check = checkRedactionOutput(ocrTexts, keptTxns);
-  discardRedaction();
-  const redactedBlob = new Blob([bytes as BlobPart], { type: "application/pdf" });
-  const pages = iosLike ? await pdfPagePictures(redactedBlob) : undefined;
-  redactionDraft = { docId, bytes, url: URL.createObjectURL(redactedBlob), plan, check, ...(pages ? { pages } : {}) };
+  return { bytes, plan, check: checkRedactionOutput(ocrTexts, keptTxns, { headerKept: plan.headerKept }) };
+}
+
+/** Uploads a redacted copy next to its statement and makes it the one that is sent. */
+async function storeRedaction(docId: string, bytes: Uint8Array, keeps: string[]): Promise<void> {
+  const ws = workspace;
+  const original = ledger.state.documents[docId];
+  if (!ws || !original) return;
+  const body = new Blob([bytes as BlobPart], { type: "application/pdf" });
+  const name = `${(original.filename ?? "Statement").replace(/\.pdf$/i, "")} (redacted).pdf`;
+  for (const old of Object.values(ledger.state.documents)) if (old.redacted && old.derivedFrom === docId) ledger.set("document", old.id, { redacted: false }, { label: "document.redactionSuperseded" });
+  const result = await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
+  ledger.set("document", result.documentId, { derivedFrom: docId, redacted: true, redactedKeeps: keeps, contentKind: "statement" }, { label: "document.redacted" });
+  await ledger.flush();
 }
 
 async function saveRedaction(): Promise<void> {
   const draft = redactionDraft;
-  const ws = workspace;
-  const original = draft ? ledger.state.documents[draft.docId] : undefined;
-  if (!draft || !ws || !original) return;
-  const body = new Blob([draft.bytes as BlobPart], { type: "application/pdf" });
-  const name = `${(original.filename ?? "Statement").replace(/\.pdf$/i, "")} (redacted).pdf`;
-  for (const old of Object.values(ledger.state.documents)) if (old.redacted && old.derivedFrom === draft.docId) ledger.set("document", old.id, { redacted: false }, { label: "document.redactionSuperseded" });
-  const result = await uploadReceipt(ledger, storage, ws.driveId, ws.year.folderId, { name, body, sha256: (await sha256Hex(body)) || undefined });
-  ledger.set("document", result.documentId, { derivedFrom: draft.docId, redacted: true, contentKind: "statement" }, { label: "document.redacted" });
-  await ledger.flush();
+  if (!draft || draft.viewOnly) return;
+  await storeRedaction(draft.docId, draft.bytes, draft.keeps);
   discardRedaction();
   status = "Saved the redacted copy. It will be sent to StepUp instead of the original statement.";
+}
+
+let refreshingRedactions = false;
+let redactionTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Keeps each statement's saved redacted copy matching the charges linked to purchases, so linking another charge never
+ * means remaking and saving the copy by hand. A refreshed copy is saved only when reading it back finds every kept
+ * charge legible and nothing else; otherwise the old copy stays and the statement page explains what to check.
+ */
+function scheduleRedactionRefresh(): void {
+  if (redactionTimer) clearTimeout(redactionTimer);
+  redactionTimer = setTimeout(() => void refreshRedactions(), 4000);
+}
+
+async function refreshRedactions(): Promise<void> {
+  if (refreshingRedactions || !workspace || workspace.legacy || !navigator.onLine || redactionDraft) return;
+  const stale = staleRedactions(ledger.state);
+  if (stale.length === 0) return;
+  refreshingRedactions = true;
+  try {
+    for (const s of stale) {
+      try {
+        const built = await buildRedaction(s.documentId, new Set(s.keep), "matched");
+        if (built.check.leaks.length || built.check.unreadable.length || built.plan.missing.length) continue;
+        await storeRedaction(s.documentId, built.bytes, s.keep);
+      } catch { /* leave the old copy; a person can make one from the statement page */ }
+    }
+    persist();
+    if (!typing()) render();
+  } finally {
+    refreshingRedactions = false;
+  }
 }
 
 async function openPreview(docId: string): Promise<void> {
@@ -361,6 +411,31 @@ async function openPreview(docId: string): Promise<void> {
   preview = { docId, filename, url: got.url, kind: got.kind, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}), ...(pages ? { pages } : {}) };
 }
 
+/**
+ * Previews a statement from the purchase it proves: every page is drawn as a picture with the purchase's charge(s)
+ * boxed, and the first one is scrolled into view. A file that cannot be read this way is shown plainly.
+ */
+async function openProofPreview(docId: string, purchaseId: string): Promise<void> {
+  const doc = ledger.state.documents[docId];
+  if (!doc?.driveItemId || !workspace) return;
+  const ids = new Set(Object.values(ledger.state.additionalDocs).filter((a) => a.documentId === docId && a.kind === "payment-proof" && a.ownerId === purchaseId && a.transactionId).map((a) => a.transactionId!));
+  const got = await loadDocument(docId);
+  if (got.kind !== "pdf" || ids.size === 0) return openPreview(docId);
+  const located = locateCharges((await pdfLines(got.blob)).pages, ids);
+  const images = await renderPdfPagesJpeg(got.blob, 1.5, 0.82);
+  const marks: PreviewMark[] = located.flatMap((c) => {
+    const img = images[c.page];
+    if (!img) return [];
+    const pad = 2;
+    return [{ page: c.page, left: (Math.max(0, c.rect.x0 - pad) / img.widthPt) * 100, top: ((img.heightPt - c.rect.y1 - pad) / img.heightPt) * 100, width: ((c.rect.x1 - c.rect.x0 + 2 * pad) / img.widthPt) * 100, height: ((c.rect.y1 - c.rect.y0 + 2 * pad) / img.heightPt) * 100 }];
+  });
+  const pages = images.map((p) => URL.createObjectURL(new Blob([p.jpeg as BlobPart], { type: "image/jpeg" })));
+  clearPreview();
+  preview = { docId, filename: doc.filename ?? "statement", url: got.url, kind: "pdf", pages, marks, purchaseId, ...(doc.webUrl ? { webUrl: doc.webUrl } : {}) };
+  scrollToMark = marks.length > 0;
+  if (marks.length < ids.size) status = `Found ${marks.length} of ${ids.size} linked charge(s) in this PDF; the rest could not be located on its pages.`;
+}
+
 function redactionPanel(): string {
   const d = redactionDraft;
   if (!d) return "";
@@ -372,8 +447,9 @@ function redactionPanel(): string {
     ? `<p class="warn"><strong>Check failed.</strong> ${c.leaks.length ? `Something that should be hidden can be read: ${esc(c.leaks.join("; "))}. ` : ""}${c.unreadable.length ? `Could not read ${c.unreadable.length} kept charge(s): ${esc(c.unreadable.join(", "))}.` : ""} Look at every page before saving.</p>`
     : `<p class="note"><span class="ok">Checked by reading the result again:</span> all ${c.legible} kept charge(s) are legible and nothing else (no other amounts, no account numbers) could be read.</p>`;
   return `<section class="preview"><div class="preview-bar"><strong>Redacted copy of ${name}</strong>
-      <span><button id="save-redaction"><strong>Looks right: save it</strong></button><button id="discard-redaction">Discard</button></span></div>
-    <p class="note" style="padding:8px 14px;margin:0">Check every page. Only the issuer, the period, the column headings and ${d.plan.keptTransactions} linked charge(s) should be readable; everything else must be black.</p>
+      <span>${d.viewOnly ? "" : `<button id="save-redaction"><strong>Looks right: save it</strong></button>`}<button id="discard-redaction">${d.viewOnly ? "Close" : "Discard"}</button></span></div>
+    ${d.viewOnly ? `<p class="note" style="padding:8px 14px;margin:0">Just a look at what is shown for ${esc(purchaseLabel(d.purchaseId ?? ""))}. Nothing is saved: the copy that is sent keeps every linked charge and refreshes itself when links change.</p>` : ""}
+    <p class="note" style="padding:8px 14px;margin:0">Check every page. Only the statement's header, the column headings and ${d.plan.keptTransactions} linked charge(s) should be readable; everything else must be black.</p>
     ${verdict}${missing}${warnings}${d.pages ? `<div class="pages">${d.pages.map((u, i) => `<img src="${esc(u)}" alt="Redacted copy, page ${i + 1}">`).join("")}</div>` : `<iframe src="${esc(d.url)}" title="Redacted copy"></iframe>`}</section>`;
 }
 
@@ -382,11 +458,14 @@ function previewPanel(): string {
   const open = preview.webUrl?.startsWith("https://") ? ` <a href="${esc(preview.webUrl)}" target="_blank" rel="noopener">Open in ${esc(storage.label)}</a>` : "";
   const body =
     preview.kind === "image" ? `<img src="${esc(preview.url)}" alt="${esc(preview.filename)}">`
-    : preview.kind === "pdf" && preview.pages ? `<div class="pages">${preview.pages.map((u, i) => `<img src="${esc(u)}" alt="${esc(preview!.filename)}, page ${i + 1}">`).join("")}</div>`
+    : preview.kind === "pdf" && preview.pages ? `<div class="pages">${preview.pages.map((u, i) => {
+        const boxes = (preview!.marks ?? []).filter((m) => m.page === i).map((m) => `<span class="hl" style="left:${m.left.toFixed(2)}%;top:${m.top.toFixed(2)}%;width:${m.width.toFixed(2)}%;height:${m.height.toFixed(2)}%"></span>`).join("");
+        return preview!.marks ? `<div class="page-mark"><img src="${esc(u)}" alt="${esc(preview!.filename)}, page ${i + 1}">${boxes}</div>` : `<img src="${esc(u)}" alt="${esc(preview!.filename)}, page ${i + 1}">`;
+      }).join("")}</div>`
     : preview.kind === "pdf" ? `<iframe src="${esc(preview.url)}" title="${esc(preview.filename)}"></iframe>`
     : preview.kind === "email" ? `<pre class="mail">${esc(emailTexts.get(preview.docId) ?? "")}</pre>`
     : `<p class="note">This file type cannot be previewed here.${open}</p>`;
-  return `<section class="preview"><div class="preview-bar"><strong>${esc(preview.filename)}</strong><span>${preview.kind === "other" || preview.kind === "email" ? "" : open}<button id="close-preview">Close</button></span></div>${body}</section>`;
+  return `<section class="preview"><div class="preview-bar"><strong>${esc(preview.filename)}</strong><span>${preview.kind === "other" || preview.kind === "email" ? "" : open}${preview.purchaseId && preview.kind === "pdf" ? `<button data-redact-view="${esc(preview.docId)}" data-purchase="${esc(preview.purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : ""}<button id="close-preview">Close</button></span></div>${preview.marks?.length ? `<p class="note" style="padding:8px 14px;margin:0">The highlighted line${preview.marks.length === 1 ? " is" : "s are"} the charge${preview.marks.length === 1 ? "" : "s"} linked to ${esc(purchaseLabel(preview.purchaseId ?? ""))}.</p>` : ""}${body}</section>`;
 }
 
 /**
@@ -788,6 +867,7 @@ async function save(): Promise<void> {
   await guarded(() => ledger.flush(), `Saving to ${storage.label}…`);
   persist();
   scheduleMirror();
+  scheduleRedactionRefresh();
 }
 
 /**
@@ -1180,7 +1260,7 @@ function statementReview(id: string): string {
     ${doc.driveItemId && workspace ? `<form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc((doc.filename ?? "").replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form>` : ""}`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
-    ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Keep every page</option><option value="matched">Only pages with the linked charges</option></select></label>
+    ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Every page that shows something</option><option value="matched">Only pages with the linked charges</option></select></label>
         <label>Charges to show<select name="purchase"><option value="">Every charge linked this year</option>${proofOwners.map((o) => `<option value="${esc(o)}">Only ${esc(purchaseLabel(o))}</option>`).join("")}</select></label>
         <button>Make redacted copy</button></form>`
     : "";
@@ -1677,7 +1757,11 @@ function documentation(purchaseId: string, receiptId: string | undefined, part: 
     ? `<h4>Additional documentation</h4><p class="note">Save the purchase details above (or add a receipt) first; then you can add more documentation here.</p>`
     : `<h4>Additional documentation</h4>
     <p class="note">Anything else that backs this purchase up and is not the receipt itself: a card statement showing the payment, an email, a letter. It is optional, and you can add several.</p>
-    ${extras.length ? `<ul class="queue">${extras.map((a) => `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${state.documents[a.documentId ?? ""]?.driveItemId && online ? `<button data-preview="${esc(a.documentId)}">Preview</button>` : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`).join("")}</ul><p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>` : `<p><small>None yet.</small></p>`}
+    ${extras.length ? `<ul class="queue">${[...new Map(extras.map((a) => [a.documentId, a])).values()].map((a) => {
+      const hasCharge = a.kind === "payment-proof" && extras.some((x) => x.documentId === a.documentId && x.transactionId);
+      const canPreview = state.documents[a.documentId ?? ""]?.driveItemId && online;
+      return `<li class="q"><span>${nameOf(a.documentId)}</span><span class="actions">${canPreview ? (hasCharge ? `<button data-preview-proof="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Shows the statement with this purchase's charge highlighted">Preview</button><button data-redact-view="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}" title="Hides every other charge, account number and balance">See it redacted</button>` : `<button data-preview="${esc(a.documentId)}">Preview</button>`) : ""}<button data-unlink-extra="${esc(a.documentId)}" data-purchase="${esc(purchaseId)}">Remove</button></span></li>`;
+    }).join("")}</ul><p class="note">Remove only unlinks a file from this purchase; it stays in your unattached files.</p>` : `<p><small>None yet.</small></p>`}
     ${adders("additional")}${pick("additional", "Add as additional documentation")}`;
   // Until there is a receipt, adding one comes first (above the items). After that, its details stay at the top of the
   // screen and the controls to replace or move it sit down here with the rest of the documentation.
@@ -2147,6 +2231,10 @@ function render(): void {
   root.innerHTML = header() + (onboarding ? "" : tabs()) + scanPanel() + redactionPanel() + previewPanel() + body + footer();
   filterLegacyList(true);
   scheduleClaimPoll();
+  if (scrollToMark) {
+    scrollToMark = false;
+    requestAnimationFrame(() => root.querySelector(".preview .hl")?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  }
 }
 
 // Each screen is a history entry, so the phone's swipe-back / back button returns to the previous screen instead of leaving the app.
@@ -2545,6 +2633,15 @@ root.addEventListener("click", async (ev) => {
     await ledger.flush();
     await guarded(async () => { status = (await autoReadStatements([d["markStatement"]!])).join(" "); }, "Reading the proof of payment…");
     await save();
+  } else if (d["previewProof"]) {
+    await guarded(() => openProofPreview(d["previewProof"]!, d["purchase"]!), "Finding the charge on the statement…");
+    window.scrollTo({ top: 0 });
+  } else if (d["redactView"]) {
+    await guarded(async () => {
+      clearPreview();
+      await makeRedaction(d["redactView"]!, { pages: "matched", purchaseId: d["purchase"]!, viewOnly: true });
+    }, "Making the redacted view…");
+    window.scrollTo({ top: 0 });
   } else if (d["preview"]) {
     await guarded(() => openPreview(d["preview"]!), "Downloading the receipt…");
     window.scrollTo({ top: 0 });
