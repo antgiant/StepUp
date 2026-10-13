@@ -36,6 +36,13 @@ import {
   displayStatus,
   parseStatementText,
   saveStatement,
+  clusterStatements,
+  editStatementDetails,
+  editTransaction,
+  addTransaction,
+  removeTransaction,
+  mergeReread,
+  isIsoDate,
   matchStatement,
   linkTransaction,
   matchRefunds,
@@ -130,6 +137,8 @@ let newYearOpen = false;
 let addingChild = false;
 /** The purchase whose receipt is being replaced: only then are the ways to add a receipt shown. */
 let replacingReceipt: string | undefined;
+/** The statement row open for correcting (its id), or "new" while a missed row is being added. */
+let editingTxn: string | undefined;
 /** The item the add-an-item form is working on: once its required details are filled in it exists and edits update it. */
 let itemEdit: { purchaseId: string; itemId?: string } | undefined;
 const itemDraftKey = (purchaseId: string) => `stepup.itemdraft.${purchaseId}`;
@@ -436,6 +445,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
     let waiting = 0;
     let attached = 0;
     let marked = 0;
+    const markedIds: string[] = [];
     const dupes: string[] = [];
     for (const [i, file] of files.entries()) {
       note(`Preparing ${file.name} (${i + 1} of ${files.length})…`);
@@ -448,6 +458,7 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
       if (asStatement && result.status === "uploaded" && result.documentId) {
         ledger.set("document", result.documentId, { contentKind: "statement" }, { label: "document.markedStatement" });
         marked++;
+        markedIds.push(result.documentId);
       }
       if (purchaseId && result.documentId && result.status !== "queued") {
         attachToPurchase(purchaseId, result.documentId, role);
@@ -455,13 +466,15 @@ async function uploadFiles(files: File[], fromCamera: boolean, purchaseId?: stri
       }
     }
     if (attached || marked) await ledger.flush();
+    const readNotes = markedIds.length ? await autoReadStatements(markedIds) : [];
     persist();
     status = [
-      asStatement ? (marked ? `Added ${marked} file(s) as proof of payment. Open one to read it.` : "") : "",
+      asStatement ? (marked ? `Added ${marked} file(s) as proof of payment.` : "") : "",
       purchaseId ? (attached ? `Attached ${attached} file(s) to this purchase.` : "") : added && !asStatement ? `Added ${added} file(s) to your unattached files.` : "",
       purchaseId && added > attached ? `Added ${added - attached} file(s) to your unattached files.` : "",
       waiting ? `${waiting} file(s) saved on this device; they will upload when you are back online.` : "",
       dupes.length ? `Already added, skipped: ${dupes.join(", ")}.` : "",
+      ...readNotes,
     ].filter(Boolean).join(" ");
   }, `Uploading to ${storage.label}…`);
 }
@@ -1107,23 +1120,26 @@ const purchaseLabel = (id: string) => {
 
 function statementsView(): string {
   const state = ledger.state;
-  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && !d.archived).sort((a, b) => (a.filename ?? a.id).localeCompare(b.filename ?? b.id));
+  const docs = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && !d.archived);
   const linkedBy = (docId: string) => new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === docId && a.transactionId).map((a) => a.transactionId));
-  const rows = docs.map((d) => {
+  const row = (d: (typeof docs)[number]) => {
     const charges = d.statement?.transactions.filter((t) => t.kind === "purchase") ?? [];
     const linked = linkedBy(d.id);
-    const summary = d.statement ? `${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
-    return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${esc(summary)}${d.statement?.last4 ? ` &middot; card ending ${esc(d.statement.last4)}` : ""}</small></div>
+    const period = d.statement?.periodStart && d.statement.periodEnd ? `${d.statement.periodStart} to ${d.statement.periodEnd}${d.statement.periodInferred ? " (estimated)" : ""}` : "period not found";
+    const summary = d.statement ? `${period} &middot; ${charges.length} charge(s), ${charges.filter((t) => linked.has(t.id)).length} linked` : "Not read yet";
+    return `<li class="q"><div><strong>${esc(d.filename ?? d.id)}</strong><br><small>${d.statement ? summary : esc(summary)}</small></div>
       <div class="actions"><button data-statement="${esc(d.id)}">${d.statement ? "Review" : "Read it"}</button><button class="danger" data-archive-doc="${esc(d.id)}" data-linked="${linked.size}" title="Hide this file (added by mistake). You can restore it.">Archive</button></div></li>`;
-  });
+  };
+  const groups = clusterStatements(docs);
+  const rows = groups.map((g) => `<h3>${esc(g.label)} <small>(${g.items.length})</small></h3><ul class="queue">${g.items.map(row).join("")}</ul>`);
   const archivedStatements = Object.values(state.documents).filter((d) => d.contentKind === "statement" && !d.derivedFrom && d.archived);
   const archivedList = archivedStatements.length
     ? `<details><summary>Archived proof of payment (${archivedStatements.length})</summary><ul class="queue">${archivedStatements.map((d) => `<li class="q"><span>${esc(d.filename ?? d.id)}</span><button data-unarchive-doc="${esc(d.id)}">Restore</button></li>`).join("")}</ul></details>`
     : "";
   return `<h2>Proof of payment</h2>
-    <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment), then read it here: it is read on this device, charges are matched to your purchases, and the confident matches are linked for you.</span></p>
+    <p class="note"><span>A card or bank statement can prove payment for many purchases at once. Add one below (or mark a file already on the list page as proof of payment): it is read on this device as soon as it is added, charges are matched to your purchases, and the confident matches are linked for you. Statements are grouped by card or bank, oldest first.</span></p>
     ${workspace ? `<p class="row"><label class="btn">Add proof of payment<input type="file" id="upload-statement" multiple accept="application/pdf,image/*" hidden></label><label class="btn">Take a photo<input type="file" id="photo-statement" accept="image/*" capture="environment" hidden></label><button id="start-scan" data-as-statement="1">Scan (several pages)</button></p>` : `<p class="note">Connect a folder to add files.</p>`}
-    ${rows.length ? `<ul class="queue">${rows.join("")}</ul>` : "<p>Nothing marked as proof of payment yet.</p>"}${archivedList}`;
+    ${rows.length ? rows.join("") : "<p>Nothing marked as proof of payment yet.</p>"}${archivedList}`;
 }
 
 function statementReview(id: string): string {
@@ -1132,7 +1148,8 @@ function statementReview(id: string): string {
   if (!doc) return `<p>That proof of payment no longer exists.</p>`;
   const data: StatementData | undefined = doc.statement;
   const head = `<p><a href="#" data-go="statements">&larr; All proof of payment</a></p><h2>${esc(doc.filename ?? id)}</h2>
-    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>`;
+    <p class="row">${doc.driveItemId && workspace ? `<button data-preview="${esc(id)}">Preview</button>` : ""}<button data-read-statement="${esc(id)}">${data ? "Read again" : "Read it"}</button>${data ? `<button data-relink="1">Match again</button>` : ""}</p>
+    ${doc.driveItemId && workspace ? `<form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc((doc.filename ?? "").replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form>` : ""}`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Keep every page</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -1142,7 +1159,7 @@ function statementReview(id: string): string {
   const redacted = redactedCopyOf(state, doc);
   const refundSuggestions = new Map(data ? matchRefunds(state, id, data).map((r) => [r.transactionId, r]) : []);
   const refundLinks = new Map(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "refund" && a.transactionId).map((a) => [a.transactionId!, a]));
-  const redactedNote = redacted ? `<p class="note"><span class="ok">Redacted copy saved</span>: ${esc(redacted.filename)} <button data-preview="${esc(redacted.id)}">Preview</button> It is sent to StepUp instead of this statement.</p>` : data ? `<p class="note">No redacted copy yet: this statement would be sent as it is. Make one once its charges are linked.</p>` : "";
+  const redactedNote = redacted ? `<p class="note"><span class="ok">Redacted copy saved</span>: ${esc(redacted.filename)} <button data-preview="${esc(redacted.id)}">Preview</button> It is sent to StepUp instead of this statement.</p>` : data ? `<p class="note">Please link transactions to this statement to be able to generate a redacted version. Until a redacted version is generated the full statement will be sent.</p>` : "";
   if (!data) return `${head}<p class="note">Not read yet. Only PDFs with selectable text can be read automatically; for others, attach the file to a purchase by hand.</p>`;
 
   const cardKnown = data.last4 ? Object.values(state.paymentMethods).find((p) => p.last4?.includes(data.last4!)) : undefined;
@@ -1151,12 +1168,21 @@ function statementReview(id: string): string {
       ? `<p class="note">Card: ${esc(cardKnown.label ?? `ending ${data.last4}`)}</p>`
       : `<form id="card-form" class="row" data-last4="${esc(data.last4)}" data-issuer="${esc(data.issuer)}"><input name="label" value="${esc(`${data.issuer ?? "Card"} ${data.last4}`)}" aria-label="Card name" required><button>Save this card</button></form>`
     : "";
-  const period = data.periodStart && data.periodEnd ? `${data.periodStart} to ${data.periodEnd}` : "period not found";
+  const period = data.periodStart && data.periodEnd ? `${data.periodStart} to ${data.periodEnd}${data.periodInferred ? " (estimated from the charges)" : ""}` : "period not found";
+  const detailsForm = `<details${data.periodInferred || !data.periodStart ? " open" : ""}><summary>Correct the card, bank or period</summary>
+    <form id="statement-details-form" class="row" data-doc="${esc(id)}"><label>Bank or card issuer<input name="issuer" value="${esc(data.issuer ?? "")}"></label><label>Last 4 digits<input name="last4" value="${esc(data.last4 ?? "")}" inputmode="numeric" maxlength="4" pattern="\\d{4}"></label>
+      <label>Period starts<input type="date" name="periodStart" value="${esc(data.periodStart ?? "")}"></label><label>Period ends<input type="date" name="periodEnd" value="${esc(data.periodEnd ?? "")}"></label><button>Save</button></form></details>`;
+  const kinds: Array<[string, string]> = [["purchase", "Purchase"], ["credit", "Refund or credit"], ["payment", "Payment to the card"], ["fee", "Fee or interest"]];
+  const txnForm = (t: { id: string; date: string; descriptor: string; amountCents: number; kind: string } | undefined) =>
+    `<tr><td colspan="4"><form id="txn-form" class="row" data-doc="${esc(id)}" data-txn="${esc(t?.id ?? "")}"><label>Date<input type="date" name="date" value="${esc(t?.date ?? "")}" required></label>
+      <label>Description<input name="descriptor" value="${esc(t?.descriptor ?? "")}" required></label><label>Amount (negative for a refund or payment)<input name="amount" value="${t ? (t.amountCents / 100).toFixed(2) : ""}" inputmode="decimal" required></label>
+      <label>Kind<select name="kind">${kinds.map(([v, l]) => `<option value="${v}"${(t?.kind ?? "purchase") === v ? " selected" : ""}>${l}</option>`).join("")}</select></label><button>Save row</button><button type="button" data-cancel-txn="1">Cancel</button></form></td></tr>`;
   const matches = new Map<string, TransactionMatch>(matchStatement(state, id, data).map((m) => [m.transactionId, m]));
   const links = new Map(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.transactionId).map((a) => [a.transactionId!, a]));
   const rows = data.transactions.map((t) => {
+    if (editingTxn === t.id) return txnForm(t);
     const amount = `<td class="num">${formatCents(t.amountCents)}</td>`;
-    const base = `<td>${esc(t.date)}</td><td>${esc(t.descriptor)}${t.confidence < 0.8 ? ` <small class="warn">check this row</small>` : ""}</td>${amount}`;
+    const base = `<td>${esc(t.date)}</td><td>${esc(t.descriptor)}${t.edited ? ` <small>(corrected)</small>` : t.confidence < 0.8 ? ` <small class="warn">check this row</small>` : ""}<br><button data-edit-txn="${esc(t.id)}">Edit</button> <button class="danger" data-remove-txn="${esc(t.id)}" data-doc="${esc(id)}">Remove</button></td>${amount}`;
     if (t.kind === "credit") {
       const done = refundLinks.get(t.id);
       const suggestion = refundSuggestions.get(t.id);
@@ -1188,12 +1214,17 @@ function statementReview(id: string): string {
       }).join("")}</ul><p class="note">One order shipped in parts is charged in parts. Each charge is linked as proof for the purchase.</p>`
     : "";
   return `${head}${redactedNote}<p class="note">${esc(data.issuer ?? "Card statement")}${data.last4 ? ` ending ${esc(data.last4)}` : ""} &middot; ${esc(period)} &middot; ${charges.filter((t) => links.has(t.id)).length} of ${charges.length} charges linked</p>${card}
+    ${detailsForm}
     ${redactForm}
-    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${rows.join("")}</tbody></table>${splitSection}`;
+    <p class="row"><button data-add-txn="1">Add a missed row</button></p>
+    <table><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Matched purchase</th></tr></thead><tbody>${editingTxn === "new" ? txnForm(undefined) : ""}${rows.join("")}</tbody></table>${splitSection}`;
 }
 
-/** Downloads a statement PDF, reads its text on this device, saves the charges and links the confident matches. */
-async function readStatement(docId: string): Promise<void> {
+/**
+ * Downloads a statement, reads its text on this device (OCR for photos and scans), saves the charges and links the
+ * confident matches. Rows a person already corrected survive a second read. Returns what to tell the person.
+ */
+async function readStatement(docId: string): Promise<string> {
   const got = await loadDocument(docId);
   note("Reading the statement on this device…");
   let text: string;
@@ -1202,14 +1233,28 @@ async function readStatement(docId: string): Promise<void> {
   else if (got.kind === "image") ({ text } = await ocrImage(got.blob)), (ocr = true);
   else throw new Error("This file type can't be read. Attach it to a purchase by hand.");
   const parsed = parseStatementText(text, { confidencePenalty: ocr ? 0.2 : 0 });
-  if (parsed.transactions.length === 0) {
-    status = parsed.warnings.join(" ") + (ocr ? " The text was read by OCR and may be too unclear." : "");
-    return;
-  }
-  saveStatement(ledger, docId, parsed);
-  const auto = linkConfidentMatches(ledger, docId, matchStatement(ledger.state, docId, parsed));
+  if (parsed.transactions.length === 0) return parsed.warnings.join(" ") + (ocr ? " The text was read by OCR and may be too unclear." : "");
+  const merged = { ...mergeReread(ledger.state.documents[docId]?.statement, parsed), unparsedLines: parsed.unparsedLines, warnings: parsed.warnings };
+  saveStatement(ledger, docId, merged);
+  const auto = linkConfidentMatches(ledger, docId, matchStatement(ledger.state, docId, merged));
   await ledger.flush();
-  status = `Read ${parsed.transactions.length} line(s)${ocr ? " using OCR (check each row)" : ""}; linked ${auto} charge(s) automatically.${parsed.unparsedLines.length ? ` ${parsed.unparsedLines.length} line(s) could not be read.` : ""}`;
+  const period = merged.periodInferred ? " The period was estimated from the charges; check it." : "";
+  return `Read ${merged.transactions.length} line(s)${ocr ? " using OCR (check each row)" : ""}; linked ${auto} charge(s) automatically.${merged.unparsedLines.length ? ` ${merged.unparsedLines.length} line(s) could not be read.` : ""}${period}`;
+}
+
+/** Reads each newly added proof of payment, one failure never stopping the rest. Returns one sentence per file. */
+async function autoReadStatements(docIds: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const [i, id] of docIds.entries()) {
+    const name = ledger.state.documents[id]?.filename ?? "file";
+    note(`Reading ${name} (${i + 1} of ${docIds.length})…`);
+    try {
+      out.push(`${name}: ${await readStatement(id)}`);
+    } catch (err) {
+      out.push(`${name} could not be read (${err instanceof Error ? err.message : err}). Open it to try again or correct it by hand.`);
+    }
+  }
+  return out;
 }
 
 /** The text of a receipt or other document: its text layer, or OCR for scans and photos. Kept for the session. */
@@ -2258,7 +2303,7 @@ root.addEventListener("click", async (ev) => {
     remember(true, from);
     render();
     window.scrollTo({ top: 0 });
-    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(() => readStatement(d["statement"]!), "Reading the statement…");
+    if (!ledger.state.documents[d["statement"]]?.statement) await guarded(async () => { status = await readStatement(d["statement"]!); }, "Reading the statement…");
   } else if (t.id === "start-scan") {
     const now = new Date();
     const stamp = `${String(now.getMonth() + 1).padStart(2, "0")} ${String(now.getDate()).padStart(2, "0")} ${now.getFullYear()}`;
@@ -2315,8 +2360,33 @@ root.addEventListener("click", async (ev) => {
     await guarded(() => readReceipt(d["readReceipt"]!), "Reading the receipt…");
     persist();
   } else if (d["readStatement"]) {
-    await guarded(() => readStatement(d["readStatement"]!), "Reading the statement…");
+    await guarded(async () => {
+      const had = ledger.state.documents[d["readStatement"]!]?.statement?.transactions.some((t) => t.edited);
+      if (had && !(await confirmModal("Read again?", "Rows you corrected or added are kept, but charges that were read wrongly will be replaced by the new reading.", "Read again"))) return;
+      status = await readStatement(d["readStatement"]!);
+    }, "Reading the statement…");
     persist();
+  } else if (d["editTxn"]) {
+    editingTxn = d["editTxn"];
+    render();
+    return;
+  } else if (d["addTxn"]) {
+    editingTxn = "new";
+    render();
+    return;
+  } else if (d["cancelTxn"]) {
+    editingTxn = undefined;
+    render();
+    return;
+  } else if (d["removeTxn"]) {
+    if (await confirmModal("Remove this row?", "Use this for a line that is not a charge (a page heading read as a transaction). Any link to a purchase is undone.", "Remove")) {
+      const doc = d["doc"]!;
+      const link = Object.values(ledger.state.additionalDocs).find((a) => a.documentId === doc && a.transactionId === d["removeTxn"] && a.ownerId);
+      if (link?.ownerId) unlinkTransaction(ledger, link.ownerId, doc, d["removeTxn"]!);
+      removeTransaction(ledger, doc, d["removeTxn"]!);
+      await save();
+    }
+    return;
   } else if (t.id === "save-redaction") {
     await guarded(saveRedaction, "Saving the redacted copy…");
     persist();
@@ -2358,6 +2428,8 @@ root.addEventListener("click", async (ev) => {
     await setArchived(d["unarchiveDoc"], false);
   } else if (d["markStatement"]) {
     ledger.set("document", d["markStatement"], { contentKind: "statement" }, { label: "document.markedStatement" });
+    await ledger.flush();
+    await guarded(async () => { status = (await autoReadStatements([d["markStatement"]!])).join(" "); }, "Reading the proof of payment…");
     await save();
   } else if (d["preview"]) {
     await guarded(() => openPreview(d["preview"]!), "Downloading the receipt…");
@@ -2457,6 +2529,7 @@ root.addEventListener("submit", async (ev) => {
     await guarded(async () => {
       const bytes = await buildScanPdf(draft.pages, MAX_PROOF_BYTES);
       const body = new Blob([bytes as BlobPart], { type: "application/pdf" });
+      let readNotes: string[] = [];
       const result = await uploadOrQueue({ name, blob: body, sha256: (await sha256Hex(body)) || undefined });
       if (draft.purchaseId && result.documentId && result.status !== "queued") {
         attachToPurchase(draft.purchaseId, result.documentId, draft.role);
@@ -2465,11 +2538,62 @@ root.addEventListener("submit", async (ev) => {
       if (draft.statement && result.status === "uploaded" && result.documentId) {
         ledger.set("document", result.documentId, { contentKind: "statement" }, { label: "document.markedStatement" });
         await ledger.flush();
+        readNotes = await autoReadStatements([result.documentId]);
       }
-      status = result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s))${draft.purchaseId ? " on this purchase" : draft.statement ? " as proof of payment" : " to your unattached files"}.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`;
+      status = readNotes.join(" ") + " " + (result.status === "uploaded" ? `Saved "${result.name}" (${draft.pages.length} page(s))${draft.purchaseId ? " on this purchase" : draft.statement ? " as proof of payment" : " to your unattached files"}.` : result.status === "queued" ? `Saved "${result.name}" on this device; it will upload when you are back online.` : `That scan was already added as "${result.name}".`);
+      status = status.trim();
       discardScan();
       persist();
     }, "Building the PDF…");
+    return;
+  }
+  if (form.id === "rename-statement-form" && workspace) {
+    const doc = ledger.state.documents[form.dataset["doc"]!];
+    const old = doc?.filename ?? "";
+    const ext = /\.[^.]+$/.exec(old)?.[0] ?? "";
+    const base = val(form, "name").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().replace(/\.[^.]+$/, (m) => (m.toLowerCase() === ext.toLowerCase() ? "" : m));
+    const name = base + ext;
+    if (!doc?.driveItemId || !base || name === old) return;
+    await guarded(async () => {
+      const itemId = await storage.rename(workspace!.driveId, doc.driveItemId!, name);
+      ledger.set("document", doc.id, { filename: name, ...(itemId !== doc.driveItemId ? { driveItemId: itemId } : {}) }, { label: "document.renamed" });
+      await ledger.flush();
+      downloaded.delete(doc.id);
+      status = `Renamed the file in ${storage.label} to "${name}".`;
+    }, "Renaming the file…");
+    persist();
+    return;
+  }
+  if (form.id === "statement-details-form") {
+    const ps = val(form, "periodStart");
+    const pe = val(form, "periodEnd");
+    if ((ps && !isIsoDate(ps)) || (pe && !isIsoDate(pe)) || (ps && pe && ps > pe)) {
+      status = "The period must be real dates, with the start no later than the end.";
+      render();
+      return;
+    }
+    editStatementDetails(ledger, form.dataset["doc"]!, { issuer: val(form, "issuer"), last4: val(form, "last4"), periodStart: ps, periodEnd: pe });
+    await save();
+    return;
+  }
+  if (form.id === "txn-form") {
+    const doc = form.dataset["doc"]!;
+    const amountCents = toCents(val(form, "amount"));
+    if (amountCents === undefined) {
+      status = "That amount is not a number.";
+      render();
+      return;
+    }
+    const edit = { date: val(form, "date"), descriptor: val(form, "descriptor"), amountCents, kind: val(form, "kind") as "purchase" | "credit" | "payment" | "fee" };
+    const id = form.dataset["txn"];
+    const ok = id ? editTransaction(ledger, doc, id, edit) : addTransaction(ledger, doc, edit) !== undefined;
+    if (!ok) {
+      status = "That row needs a real date and a description.";
+      render();
+      return;
+    }
+    editingTxn = undefined;
+    await save();
     return;
   }
   if (form.id === "card-form") {
