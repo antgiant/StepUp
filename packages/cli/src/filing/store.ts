@@ -27,9 +27,9 @@ export interface FilingStore {
   /** The rows could not be filed: record why so they are not offered again until a person fixes them. */
   markNeedsAttention(rows: Table1Row[], note: string): Promise<void>;
   /** The rows (in line order) are now line items 1..n of this StepUp reimbursement. */
-  markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string): Promise<void>;
+  markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string, guid?: string): Promise<void>;
   /** A draft with this number exists for the rows; remembered so a crash loses nothing. */
-  recordDraftNumber(rows: Table1Row[], reimbursementId: string): Promise<void>;
+  recordDraftNumber(rows: Table1Row[], reimbursementId: string, guid?: string): Promise<void>;
   /** The live category list showed the rows' category under a different name. */
   fixCategory(rows: Table1Row[], newValue: string): Promise<void>;
   renameCategory(oldPath: string, newPath: string): Promise<void>;

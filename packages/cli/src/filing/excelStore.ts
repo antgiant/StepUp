@@ -107,13 +107,13 @@ export class ExcelStore implements FilingStore {
     }
   }
 
-  async markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string): Promise<void> {
+  async markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string, _guid?: string): Promise<void> {
     for (const [idx, row] of rows.entries()) {
       await this.write(row, { Status: SUBMITTED_STATUS, Submitted: submittedDate, "Reimbursement ID": reimbursementId, "Line Number": String(idx + 1) });
     }
   }
 
-  async recordDraftNumber(rows: Table1Row[], reimbursementId: string): Promise<void> {
+  async recordDraftNumber(rows: Table1Row[], reimbursementId: string, _guid?: string): Promise<void> {
     for (const row of rows) await this.write(row, { "Reimbursement ID": reimbursementId });
   }
 

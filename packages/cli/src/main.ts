@@ -920,7 +920,7 @@ async function runGroupSteps(
       }
       if (seq) {
         draftSeq = seq;
-        await store.recordDraftNumber(group.rows.filter((row) => (row.data["Reimbursement ID"] ?? "").trim() !== seq), seq);
+        await store.recordDraftNumber(group.rows.filter((row) => (row.data["Reimbursement ID"] ?? "").trim() !== seq), seq, guid);
         console.log(`[draft] Recorded Reimbursement #${seq} on ${group.rows.length} row(s).`);
       }
     }
@@ -1012,7 +1012,7 @@ async function runGroupSteps(
     throw new Error(`Submitted as Reimbursement #${reimbursementId}, but no item details were ever filled in by this run — update the spreadsheet rows manually.`);
   }
 
-  await store.markSubmitted(matchedRows, reimbursementId, new Date().toISOString().slice(0, 10));
+  await store.markSubmitted(matchedRows, reimbursementId, new Date().toISOString().slice(0, 10), record.guid || undefined);
   await store.drafts.delete(groupRowIds);
   console.log(`Recorded ${matchedRows.length} item(s) in ${store.describe}.`);
 

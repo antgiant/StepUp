@@ -10,6 +10,8 @@ import {
   createPurchase,
   filingGroups,
   mapStepUpStatus,
+  messageOf,
+  stepUpStatusUrl,
   planSubmissions,
   recordCategoryFix,
   recordDraftNumber,
@@ -115,5 +117,29 @@ describe("StepUp status sync", () => {
   it("ignores items that were never submitted and lines it does not know", () => {
     const { l } = setup();
     expect(applyStepUpStatuses(l, [{ LineItemNumber: "R-9-1", ExternalStatus: "Paid", Appealed: false, ItemAmount: 1 }])).toBe(0);
+  });
+});
+
+describe("StepUp's message and status page", () => {
+  const G = "660480b6-0354-4a5b-82b0-0054385b4220";
+  it("keeps the denial text and learns the reimbursement's id from the list", () => {
+    const { l, i1, i2 } = setup();
+    recordSubmitted(l, [i1, i2], { reimbursementId: "R-1001", submittedAt: "2026-10-21" });
+    const changed = applyStepUpStatuses(l, [{ LineItemNumber: "R-1001-1", ExternalStatus: "Denied", Appealed: false, ItemAmount: 16.05, ReimbursementGuid: G.toUpperCase(), Message: " Not an eligible expense " }]);
+    expect(changed).toBe(2);
+    expect(l.state.items[i1]).toMatchObject({ stepUpStatus: "Denied (Initial)", stepUpMessage: "Not an eligible expense" });
+    expect(Object.values(l.state.submissions)[0]?.guid).toBe(G);
+  });
+  it("ignores an id that is not a GUID, and records one given at submit time", () => {
+    const { l, i1 } = setup();
+    recordSubmitted(l, [i1], { reimbursementId: "R-5", submittedAt: "2026-10-21", guid: G });
+    applyStepUpStatuses(l, [{ LineItemNumber: "R-5-1", ExternalStatus: "Submitted", Appealed: false, ItemAmount: 1, ReimbursementGuid: "12345" }]);
+    expect(Object.values(l.state.submissions)[0]?.guid).toBe(G);
+  });
+  it("builds the status address and reads reason text", () => {
+    expect(stepUpStatusUrl(G)).toBe(`https://apply.stepupforstudents.org/Reimbursement/Details/${G}/Two?BackLink=Reimbursement`);
+    expect(messageOf({ DenialReason: "  no  " })).toBe("no");
+    expect(messageOf({ Comments: ["a", "", "b"] })).toBe("a\nb");
+    expect(messageOf({ Other: "x" })).toBeUndefined();
   });
 });

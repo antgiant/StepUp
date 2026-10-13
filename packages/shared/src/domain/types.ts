@@ -78,6 +78,8 @@ export interface LineItem {
   stepUpStatus?: string;
   approvedCents?: number;
   paidCents?: number;
+  /** What StepUp said about this item (a denial reason, an adjustment note), as last seen; shown beside the status. */
+  stepUpMessage?: string;
   /** Set by a person or by the submission flow when something outside the data blocks filing (e.g. "needs-split"). Cleared by removing it. */
   hold?: string;
   holdNote?: string;
@@ -147,6 +149,8 @@ export interface Submission {
   purchaseId?: string;
   childId?: string;
   submittedAt?: string;
+  /** StepUp's own id for the reimbursement; what its status page address is built from. */
+  guid?: string;
 }
 
 /** Singleton (id "year") holding year-level configuration. */

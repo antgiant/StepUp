@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import {
@@ -6,6 +6,8 @@ import {
   openLedgerFolders,
   readYearSnapshot,
   applyStepUpStatuses,
+  messageOf,
+  type ApiLineItem,
   claimItems,
   claimedByOthers,
   deleteDraft,
@@ -199,14 +201,14 @@ export class LedgerStore implements FilingStore {
     await this.save();
   }
 
-  async markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string): Promise<void> {
-    recordSubmitted(this.ledger, this.itemIds(rows), { reimbursementId, submittedAt: submittedDate });
+  async markSubmitted(rows: Table1Row[], reimbursementId: string, submittedDate: string, guid?: string): Promise<void> {
+    recordSubmitted(this.ledger, this.itemIds(rows), { reimbursementId, submittedAt: submittedDate, ...(guid ? { guid } : {}) });
     await this.save();
     await this.rebuildMirror();
   }
 
-  async recordDraftNumber(rows: Table1Row[], reimbursementId: string): Promise<void> {
-    recordDraftNumber(this.ledger, this.itemIds(rows), reimbursementId);
+  async recordDraftNumber(rows: Table1Row[], reimbursementId: string, guid?: string): Promise<void> {
+    recordDraftNumber(this.ledger, this.itemIds(rows), reimbursementId, guid);
     for (const r of rows) r.data["Reimbursement ID"] = reimbursementId;
     await this.save();
   }
@@ -223,7 +225,11 @@ export class LedgerStore implements FilingStore {
 
   attachListeners(page: Page): void {
     attachStatusSyncListenerWith(page, async (body) => {
-      const lineItems = (body.Results ?? []).flatMap((r) => r.LineItems ?? []);
+      const results = (body.Results ?? []) as unknown as Array<Record<string, unknown> & { LineItems?: Array<Record<string, unknown>> }>;
+      const lineItems = results.flatMap((r) =>
+        (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem)
+      );
+      captureDeniedLineItems(results);
       const changed = applyStepUpStatuses(this.ledger, lineItems);
       await this.save();
       return changed;
@@ -268,4 +274,23 @@ export class LedgerStore implements FilingStore {
     await this.save();
     await this.rebuildMirror();
   }
+}
+
+/**
+ * Keeps every denied line item (and the result it came in) exactly as StepUp sent it, so the field that holds the
+ * reason can be confirmed from a real response. Best effort; never fails a sync.
+ */
+function captureDeniedLineItems(results: Array<Record<string, unknown> & { LineItems?: Array<Record<string, unknown>> }>): void {
+  try {
+    const denied = results.flatMap((r) => (r.LineItems ?? []).filter((li) => li["ExternalStatus"] === "Denied").map((li) => ({ result: { ...r, LineItems: undefined }, lineItem: li })));
+    if (denied.length === 0) return;
+    const file = path.resolve(process.cwd(), ".cache", "denied-line-items.json");
+    mkdirSync(path.dirname(file), { recursive: true });
+    const byNumber = new Map<string, unknown>();
+    try {
+      for (const d of JSON.parse(readFileSync(file, "utf-8")) as Array<{ lineItem: Record<string, unknown> }>) byNumber.set(String(d.lineItem["LineItemNumber"]), d);
+    } catch {}
+    for (const d of denied) byNumber.set(String(d.lineItem["LineItemNumber"]), d);
+    writeFileSync(file, JSON.stringify([...byNumber.values()], null, 2), "utf-8");
+  } catch {}
 }
