@@ -103,6 +103,18 @@ import {
   resolveReference,
   type MapTarget,
   type RulesContext,
+  planSubmissions,
+  hasErrors,
+  verifyLedger,
+  verifyFiles,
+  zipBackup,
+  backupFileName,
+  archiveStepUpList,
+  resultsFromSavedList,
+  applyStepUpStatuses,
+  messageOf,
+  type ApiLineItem,
+  type Finding,
 } from "@step-up/shared/web";
 import { storage } from "./storage.js";
 import { microsoftAuth } from "./auth.js";
@@ -1085,6 +1097,7 @@ function header(): string {
         ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? (storage.kind === "browser" ? `<button id="update-mirror">Download spreadsheet</button>` : `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>`) : ""}
+        ${workspace && storage.kind !== "browser" ? `<button id="check-year" title="Reads the whole ledger and looks for anything that points at something that is not there">Check this year</button><button id="check-year-files" title="Also asks ${esc(storage.label)} whether every receipt file is still there">Check this year and its files</button><button id="check-year-contents" title="Downloads every file to confirm it is unchanged (slow)">Check this year and every file's contents</button><button id="backup-year">Back up this year (zip)</button><button id="backup-year-docs" title="Includes every receipt and statement file; can be large">Back up this year with documents (zip)</button><label class="btn" title="A saved copy of StepUp's reimbursements list (see the extension or the command line)">Bring in StepUp's list<input type="file" id="stepup-import" accept=".json,.txt" hidden></label>` : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace && storage.kind !== "browser" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
         ${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}
@@ -1329,6 +1342,55 @@ function historyView(): string {
     <div id="history-list">${historyList()}</div>`;
 }
 
+/** The last "Check this year" result, shown on the Summary page until the next one. */
+let yearCheck: { at: string; label: string; files: "no" | "sizes" | "contents"; events: number; findings: Finding[] } | undefined;
+
+function saveBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  Object.assign(document.createElement("a"), { href: url, download: name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** The integrity check the command line's `verify` runs: nothing points at nothing, logs are clean, files are where they were. */
+async function checkYear(files: "no" | "sizes" | "contents"): Promise<void> {
+  const ws = workspace;
+  if (!ws || ws.legacy) return;
+  const events = await activeStore.readAll();
+  const findings: Finding[] = verifyLedger(ledger.state, events);
+  if (files !== "no") {
+    findings.push(...(await verifyFiles(storage, ws.driveId, ledger.state, { hash: files === "contents", progress: (done, total) => showBusy(`Checking file ${done + 1} of ${total}…`) })));
+  }
+  if (clockLooksWrong()) findings.push({ severity: "warn", code: "clock-skew", message: `This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} ${storage.label}'s. Edits made on different devices may be ordered wrongly.` });
+  yearCheck = { at: new Date().toISOString(), label: ws.year.label, files, events: events.length, findings };
+  go({ name: "summary" });
+}
+
+function yearCheckPanel(): string {
+  const c = yearCheck;
+  if (!c || c.label !== workspace?.year.label) return "";
+  const what = c.files === "no" ? "" : c.files === "sizes" ? " and that every file is still there" : " and every file's contents";
+  const bad = hasErrors(c.findings);
+  return `<section class="panel"><h3 class="panel-title">Year check<small>${esc(c.label)}: ${c.events} change(s) read${what} · ${esc(new Date(c.at).toLocaleString())}</small></h3>
+    <p class="${bad ? "warn" : "note"} banner">${bad ? "Something is inconsistent; details below." : "Nothing is wrong."}</p>
+    <ul>${c.findings.map((f) => `<li class="${f.severity === "error" ? "warn" : ""}"><strong>${f.severity === "error" ? "Problem" : f.severity === "warn" ? "Look at" : "Note"}:</strong> ${esc(f.message)}${f.ids?.length ? ` <small>e.g. ${esc(f.ids.slice(0, 3).join(", "))}</small>` : ""}</li>`).join("")}</ul>
+    <p class="row"><button data-dismiss-check>Hide this</button></p></section>`;
+}
+
+/** What the filing tool would send to StepUp, and what is holding the rest back. Only a look; filing happens in StepUp's own tab. */
+function planPanel(): string {
+  if (readOnly() || !workspace) return "";
+  const plan = planSubmissions(ledger.state, ctx());
+  if (!plan.groups.length && !plan.blocked.length) return "";
+  const groups = plan.groups.map((g) => `<li><strong>${esc(g.childName)}</strong> · ${esc(g.receipt.filename ?? g.receipt.id)}
+      <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
+      ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
+      ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}</li>`).join("");
+  const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
+  return `<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
+    ${groups ? `<ul>${groups}</ul>` : `<p class="note">Nothing is ready yet.</p>`}
+    ${blocked ? `<details><summary>Held back (${plan.blocked.length})</summary><ul>${blocked}</ul></details>` : ""}</section>`;
+}
+
 function summaryView(): string {
   const state = ledger.state;
   const s = yearSummary(state, ctx());
@@ -1345,6 +1407,7 @@ function summaryView(): string {
   return `<h2>Summary</h2>${banner}${deadlineForm}
     ${awards.length ? `<h3>Award for each student</h3>${awards.join("")}` : readOnly() ? "" : `<p>Add a student on the list page first.</p>`}
     ${Object.keys(filingNow()).length ? `<p class="banner">${Object.keys(filingNow()).length} item(s) are being filed with StepUp right now (see the list page).</p>` : ""}
+    ${yearCheckPanel()}${planPanel()}
     ${pivotTables(state, ctx())}
     ${readOnly() ? `<p class="row"><button id="legacy-download" class="primary">Download as a spreadsheet</button> <small>The same tracking sheet, summary and document list the app keeps for its own years.</small></p>` : ""}`;
 }
@@ -2730,6 +2793,20 @@ root.addEventListener("click", async (ev) => {
   } else if (t.id === "refresh-now") {
     if (workspace) await refreshInBackground(workspace);
     render();
+  } else if (t.id === "check-year" || t.id === "check-year-files" || t.id === "check-year-contents") {
+    await guarded(() => checkYear(t.id === "check-year" ? "no" : t.id === "check-year-files" ? "sizes" : "contents"), "Checking the year…");
+  } else if (t.id === "backup-year" || t.id === "backup-year-docs") {
+    const ws = workspace;
+    if (!ws || ws.legacy) return;
+    const documents = t.id === "backup-year-docs";
+    await guarded(async () => {
+      const { blob, manifest } = await zipBackup(storage, ws.driveId, ws.year.folderId, ws.year.label, ledger.state, { documents, progress: (done, total, name) => showBusy(`Backing up ${done + 1} of ${total}: ${name}`) });
+      saveBlob(blob, backupFileName(ws.year.label, manifest.takenAt, documents));
+      status = `Backed up ${manifest.files.length} file(s) from ${ws.year.label}${documents ? "" : " (no documents; use the \"with documents\" option for those)"}.`;
+    }, "Backing up…");
+  } else if (t.dataset["dismissCheck"] !== undefined) {
+    yearCheck = undefined;
+    render();
   } else if (t.id === "update-mirror") {
     await guarded(async () => {
       const result = await publishMirrorNow();
@@ -3234,6 +3311,27 @@ root.addEventListener("change", async (ev) => {
     const purchaseId = input.dataset["purchase"];
     input.value = "";
     await uploadFiles(files, input.id === "photo", purchaseId, input.dataset["role"] === "additional" ? "additional" : "receipt");
+    return;
+  }
+  if (input.id === "stepup-import" && input.files?.[0]) {
+    const picked = input.files[0];
+    input.value = "";
+    await guarded(async () => {
+      const ws = workspace;
+      if (!ws) return;
+      const results = resultsFromSavedList(await picked.text());
+      const done = await archiveStepUpList({ storage, driveId: ws.driveId, rootId: ws.pointer.rootId }, results);
+      // The open year's own ledger also records what StepUp says about the items it filed (the command line does the same
+      // for every ledger year it can reach); other years show StepUp's side through their `_stepup` folder.
+      if (!ws.legacy) {
+        const lines = (results as Array<Record<string, unknown> & { SchoolYear?: string; LineItems?: Array<Record<string, unknown>> }>)
+          .filter((r) => r.SchoolYear === ws.year.label)
+          .flatMap((r) => (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem));
+        if (lines.length && applyStepUpStatuses(ledger, lines) > 0) await save();
+      }
+      status = done.listed === 0 ? "StepUp's list had no reimbursements that could be read." : done.changed === 0 ? `StepUp's list is already up to date (${done.listed} reimbursement(s)).` : `Brought in ${done.changed} changed reimbursement(s) of ${done.listed}: ${done.years.filter((y) => y.changed).map((y) => `${y.label} (${y.changed})`).join(", ")}.`;
+      await refreshInBackground(ws);
+    }, "Bringing in StepUp's list…");
     return;
   }
   if (input.id !== "import" || !input.files?.[0]) return;
