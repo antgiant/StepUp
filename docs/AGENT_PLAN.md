@@ -48,6 +48,14 @@ What the second recording (2026-10-14, request bodies included, field names only
   `Filters:{ProgramType}`).
 - A SignalR hub (`infrastructureapi … /negotiate`) pushes notifications; a possible later source of status changes.
 
+The third recording (same day) added: `typesbyids`/`detailsbyids` take a plain JSON array of ids; the balance request is
+`{ "<student sequence number>": [strings] }` (what the strings are is traced by the recorder's provenance report, not
+guessed); `comments/search` is filtered by `SourceEntityId`; `notifications/in-app/search` lists in-app notifications; a
+reimbursement's details page is `Reimbursement/Details/{id}/Two`. It was produced by an older recorder object that a newer
+script inherited on a second click; the agent now carries the recording as data and rebuilds its recorder, so an update
+takes effect immediately. The recorder also traces each id in a request to the response field it came from (paths only)
+and masks identifier-like object keys.
+
 Still unknown for B: the values of the status/enum fields on a new draft (the recorder now samples a fixed set of
 setting-like fields), the exact `ReceiptDocuments[]` item, how storage upload is authorised, and the submit call (never
 exercised, by design).

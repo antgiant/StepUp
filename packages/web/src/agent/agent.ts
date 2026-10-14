@@ -18,7 +18,7 @@ import {
   type VendorEntry,
 } from "@step-up/shared/web";
 import type { Observed } from "./observe.js";
-import type { AgentToApp, AppToAgent } from "./protocol.js";
+import type { AgentToApp, AppToAgent, RecordingReport } from "./protocol.js";
 import { Recorder } from "./recorder.js";
 import { findAccessToken, tokenFresh, PERSON_SCOPE, PROVIDER_SCOPE, type StepUpToken } from "./token.js";
 
@@ -76,7 +76,8 @@ export interface AgentHost {
 export interface AgentState {
   categories: CategoryCache;
   vendors: Record<string, VendorEntry>;
-  recording: Recorder;
+  /** The recording as data: the newer agent rebuilds its own recorder from it (never reuses the older object's code). */
+  recording: RecordingReport;
   lastListSignature?: string;
 }
 
@@ -103,13 +104,17 @@ export class StepUpAgent {
     this.appOrigin = new URL(host.appHome).origin;
     this.categories = carried?.categories ?? emptyCategoryCache();
     this.vendors = carried?.vendors ?? {};
-    this.recorder = carried?.recording ?? new Recorder();
+    // `carried.recording` may come from an older copy of this script, whose recorder object has older code and may even be a
+    // live object rather than data: take its report either way and rebuild.
+    const was = carried?.recording as unknown;
+    const data = was && typeof (was as { report?: unknown }).report === "function" ? (was as { report(): RecordingReport }).report() : (was as RecordingReport | undefined);
+    this.recorder = Recorder.restore(data);
     this.lastListSignature = carried?.lastListSignature;
     this.unlisten = host.addMessageListener((e) => this.onAppMessage(e));
   }
 
   state(): AgentState {
-    return { categories: this.categories, vendors: this.vendors, recording: this.recorder, lastListSignature: this.lastListSignature };
+    return { categories: this.categories, vendors: this.vendors, recording: this.recorder.report(), lastListSignature: this.lastListSignature };
   }
 
   dispose(): void {
@@ -145,6 +150,8 @@ export class StepUpAgent {
       const problems = checkStepUpShape("reimbursements-search", body);
       if (problems.length) return say("StepUp's list no longer looks the way this expects (the site may have changed), so nothing was sent.");
       results = body.Results;
+      // Our own calls are not observed; they are indexed so a request later can be traced to the response its ids came from.
+      this.recorder.noteOwnResponse("POST", API, body);
     } catch (err) {
       return say(`Something went wrong: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -191,7 +198,10 @@ export class StepUpAgent {
   /** One of StepUp's own calls with the page's sign-in; the parsed body, or undefined when it was refused. */
   private async callApi(url: string, body: unknown, token: StepUpToken): Promise<unknown | undefined> {
     const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(body) });
-    return r.ok ? await r.json() : undefined;
+    if (!r.ok) return undefined;
+    const json = await r.json();
+    this.recorder.noteOwnResponse("POST", url, json);
+    return json;
   }
 
   /** Types, then their details, in small batches with a pause between (as the command line always did). Records the day. */
@@ -200,8 +210,11 @@ export class StepUpAgent {
       for (const batch of chunks(ids, CHUNK)) {
         if (this.disposed) return;
         const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(batch) });
-        if (r.ok) merge(this.categories, await r.json());
-        else if (r.status === 401 || r.status === 403) return;
+        if (r.ok) {
+          const json = await r.json();
+          this.recorder.noteOwnResponse("POST", url, json);
+          merge(this.categories, json);
+        } else if (r.status === 401 || r.status === 403) return;
         await this.host.sleep(CHUNK_DELAY_MS);
       }
     };
@@ -221,7 +234,9 @@ export class StepUpAgent {
         headers: { authorization: `Bearer ${token.secret}` },
       });
       if (!r.ok) return;
-      const students = parseStudents(await r.json());
+      const json = await r.json();
+      this.recorder.noteOwnResponse("GET", `https://personapi-prod.stepupforstudents.org/api/guardian/${guardian}/studentScholarship/`, json);
+      const students = parseStudents(json);
       if (students.length) this.post({ type: "stepup-learned", kind: "students", students });
     } catch {
       /* not learned now; the dashboard asks for it itself too */

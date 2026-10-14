@@ -376,6 +376,11 @@ describe("recording", () => {
     expect(rep.calls["POST reimbursementapi-prod/api/x/search"]).toMatchObject({ req: "{Filters:{GuardianId:string},Keywords:null}", res: "{Results:[1x{a:number}]}", via: ["xhr"] });
   });
 
+  it("never names an identifier that is used as a key", () => {
+    expect(shapeOf({ "20027242": [1, 2], "20027248": [3], name: "x" })).toBe("{name:string,{idx2}:[2xnumber]}");
+    expect(shapeOf({ "0f8fad5b-d9cb-469f-a165-70867728950e": { a: 1 } })).toBe("{{id}:{a:number}}");
+  });
+
   it("describes shapes and normalises addresses", () => {
     expect(shapeOf({ b: [1, 2], a: "x", c: { d: null } })).toBe("{a:string,b:[2xnumber],c:{d:null}}");
     expect(normalizeUrl("https://reimbursementapi-prod.stepupforstudents.org/api/r/12/0f8fad5b-d9cb-469f-a165-70867728950e?v=9&page=2")).toBe("reimbursementapi-prod/api/r/{n}/{guid}?page");
@@ -424,10 +429,55 @@ describe("carrying on after a second click", () => {
     const a = make();
     await a.agent.start();
     a.agent.observed(obs(CATS, { Results: [{ Id: "c1", Name: "Cat", Types: [], IsActive: true, IsDeleted: false }] }));
-    const state = a.agent.state();
-    const b = new StepUpAgent(a.host, state);
+    const b = new StepUpAgent(a.host, a.agent.state());
     expect(Object.keys(b.state().categories.categories)).toEqual(["c1"]);
-    expect(b.recorder).toBe(a.agent.recorder);
+  });
+
+  it("rebuilds the recorder from data, so the newer code is what records (an older copy's object is not reused)", async () => {
+    const a = make();
+    await a.agent.start();
+    a.fromApp({ type: "stepup-record", on: true });
+    a.agent.observed(obs("https://reimbursementapi-prod.stepupforstudents.org/api/x", { a: 1 }, 200, { b: "v" }));
+    // What an older script's recorder hands over: a live object with only the older behaviour, and data in its report.
+    const older = { report: () => a.agent.recorder.report(), note() { throw new Error("older code must not be called"); } };
+    const b = new StepUpAgent(a.host, { ...a.agent.state(), recording: older as never });
+    expect(b.recorder).not.toBe(older);
+    expect(b.recorder.on).toBe(true);
+    expect(Object.keys(b.recorder.report().calls)).toContain("POST reimbursementapi-prod/api/x");
+    b.observed(obs("https://reimbursementapi-prod.stepupforstudents.org/api/y", { c: 2 }, 200, { d: "w" }));
+    expect(Object.keys(b.recorder.report().calls)).toContain("POST reimbursementapi-prod/api/y");
+  });
+});
+
+describe("where a request's ids came from", () => {
+  const ID1 = "5b8a1c1e-0d0b-4f6e-9b0a-1c2d3e4f5a6b";
+  const ID2 = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+  it("traces ids in a request to the response field they were first seen in, by path only", async () => {
+    const r = make();
+    await r.agent.start();
+    r.fromApp({ type: "stepup-record", on: true });
+    r.agent.observed(obs("https://personapi-prod.stepupforstudents.org/api/guardian/0f8fad5b-d9cb-469f-a165-70867728950e/studentScholarship/", [{ id: ID1, sequenceNumber: 20027242, scholarships: [{ id: ID2 }] }]));
+    r.agent.observed(obs("https://infrastructureapi-prod.stepupforstudents.org/api/balancecheck/bulk/details", {}, 200, { "20027242": [ID2, "11111111-2222-4333-8444-555555555555"] }));
+    r.fromApp({ type: "stepup-report" });
+    const rep = r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { calls: Record<string, { origins?: Record<string, string> }> };
+    const o = rep.calls["POST infrastructureapi-prod/api/balancecheck/bulk/details"]!.origins!;
+    expect(o["{id}"]).toBe("POST personapi-prod/api/guardian/{guid}/studentScholarship/ :: [].sequenceNumber");
+    expect(o["{id}[]"]).toBe("POST personapi-prod/api/guardian/{guid}/studentScholarship/ :: [].scholarships[].id");
+    const text = JSON.stringify(rep);
+    for (const secret of [ID1, ID2, "20027242", "11111111-2222"]) expect(text).not.toContain(secret);
+  });
+
+  it("says when the page made an id up itself, and traces the agent's own calls too", async () => {
+    const r = make();
+    await r.agent.start(); // its own list response is indexed (listBody has Id "g0", "g1": not id-like) -> use a guid
+    r.fromApp({ type: "stepup-record", on: true });
+    r.agent.recorder.noteOwnResponse("POST", "https://reimbursementapi-prod.stepupforstudents.org/api/categories/search", { Results: [{ Id: ID1 }] });
+    r.agent.observed(obs("https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/v2", {}, 200, { Id: ID2, lineItems: [{ categoryId: ID1 }] }));
+    r.fromApp({ type: "stepup-report" });
+    const o = (r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { calls: Record<string, { origins?: Record<string, string> }> }).calls["POST reimbursementapi-prod/api/reimbursements/v2"]!.origins!;
+    expect(o["Id"]).toBe("(not seen in any response)");
+    expect(o["lineItems[].categoryId"]).toBe("POST reimbursementapi-prod/api/categories/search :: Results[].Id");
   });
 });
 

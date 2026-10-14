@@ -1,13 +1,25 @@
 import type { Observed } from "./observe.js";
 import type { RecordingReport } from "./protocol.js";
 
+/** An object key that is really an identifier (a student's sequence number, a guid): masked in shapes. */
+const idKey = (k: string): boolean => /^\d{5,}$/.test(k) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k);
+
 /** A value's shape: field names and types, never the values themselves, so a report is safe to share. */
 export function shapeOf(v: unknown, depth = 0): string {
   if (v === null) return "null";
   if (Array.isArray(v)) return v.length ? `[${v.length}x${shapeOf(v[0], depth + 1)}]` : "[]";
   if (typeof v === "object") {
     if (depth > 4) return "{...}";
-    return "{" + Object.keys(v as object).sort().map((k) => `${k}:${shapeOf((v as Record<string, unknown>)[k], depth + 1)}`).join(",") + "}";
+    const named: string[] = [];
+    const ids: unknown[] = [];
+    for (const k of Object.keys(v as object).sort()) {
+      const val = (v as Record<string, unknown>)[k];
+      if (idKey(k)) ids.push(val);
+      else named.push(`${k}:${shapeOf(val, depth + 1)}`);
+    }
+    // Keys that are identifiers are counted, not named; the first one's value stands for them all.
+    if (ids.length) named.push(`{id${ids.length > 1 ? `x${ids.length}` : ""}}:${shapeOf(ids[0], depth + 1)}`);
+    return "{" + named.join(",") + "}";
   }
   return typeof v;
 }
@@ -35,8 +47,54 @@ const SAMPLE_KEYS = new Set([
   "skipvalidation", "shouldupload", "filetype", "isnew", "ocrformatted", "hasduplicate", "resubmitted", "hasappealeditems",
   "appealed", "isduplicate", "reassigned", "schoolyear", "programname", "sortorder", "pagesize", "currentpage",
   "applydefaultfilters", "includeglobalsearchtotal", "skipcount", "excludedstatuses", "requestsourcetype", "status",
-  "commenttype", "commentrecordtype", "internalonly",
+  "commenttype", "commentrecordtype", "internalonly", "sourceentityname", "reasoncode", "callertype", "doctype", "wasread",
+  "wasdeleted", "contactreason",
 ]);
+
+const ID_LIKE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{5,})$/i;
+const MAX_INDEXED = 100_000;
+const MAX_JSON_CHARS = 3_000_000;
+
+/**
+ * Where did the ids in a request come from? Responses are indexed in memory by id value -> the call and field they were seen
+ * in; a request's ids are then reported as the field they came from (or "not seen in any response", i.e. made up by the
+ * page). Only field paths are ever reported, never the ids, so this is safe to share.
+ */
+class Provenance {
+  private seen = new Map<string, string>();
+
+  private walk(v: unknown, path: string, visit: (value: string, path: string) => void, limit: number, depth = 0): void {
+    if (depth > 10 || v === null) return;
+    if (typeof v === "string") {
+      if (ID_LIKE.test(v)) visit(v.toLowerCase(), path || "(body)");
+    } else if (typeof v === "number") {
+      if (Number.isInteger(v) && Math.abs(v) >= 10000) visit(String(v), path || "(body)");
+    } else if (Array.isArray(v)) {
+      for (const x of v.slice(0, limit)) this.walk(x, `${path}[]`, visit, limit, depth + 1);
+    } else if (typeof v === "object") {
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+        const numericKey = /^\d{5,}$/.test(k);
+        if (numericKey) visit(k, `${path}.{id}`);
+        this.walk(val, numericKey ? `${path}.{id}` : `${path}.${k}`, visit, limit, depth + 1);
+      }
+    }
+  }
+
+  index(source: string, json: unknown): void {
+    this.walk(json, "", (value, path) => {
+      if (this.seen.size < MAX_INDEXED && !this.seen.has(value)) this.seen.set(value, `${source} :: ${path.replace(/^\./, "")}`);
+    }, 100);
+  }
+
+  trace(json: unknown): Record<string, string> {
+    const out: Record<string, string> = {};
+    this.walk(json, "", (value, path) => {
+      const p = path.replace(/^\./, "");
+      if (!(p in out)) out[p] = this.seen.get(value) ?? "(not seen in any response)";
+    }, 5);
+    return out;
+  }
+}
 
 /** The first value of each sampled field anywhere in a JSON value (short strings, numbers, booleans, null only). */
 export function samplesOf(v: unknown, into: Record<string, string | number | boolean | null> = {}, depth = 0): Record<string, string | number | boolean | null> {
@@ -69,6 +127,27 @@ export class Recorder {
   private calls = new Map<string, RecordingReport["calls"][string]>();
   private pages: string[] = [];
   private loads: RecordingReport["loads"] = [];
+  private provenance = new Provenance();
+
+  /**
+   * A recorder holding what a report says: how a newer copy of the agent carries a recording over. The data is carried,
+   * never the old object, so the newer code is what keeps recording.
+   */
+  static restore(report: Partial<RecordingReport> | undefined): Recorder {
+    const r = new Recorder();
+    if (!report) return r;
+    r.on = Boolean(report.on);
+    r.startedAt = report.startedAt;
+    r.loads = [...(report.loads ?? [])];
+    r.pages = [...(report.pages ?? [])];
+    for (const [k, v] of Object.entries(report.calls ?? {})) r.calls.set(k, v);
+    return r;
+  }
+
+  /** Index a response of ours (the agent's own calls are not observed) so later requests can be traced to it. */
+  noteOwnResponse(method: string, url: string, json: unknown): void {
+    this.provenance.index(`${method} ${normalizeUrl(url)}`, json);
+  }
 
   start(now: string, page: string): void {
     this.on = true;
@@ -82,8 +161,19 @@ export class Recorder {
     if (this.on) this.pages.push(path);
   }
   note(o: Observed): void {
-    if (!this.on || !OURS.test(o.url) || NOISE.test(o.url)) return;
+    if (!OURS.test(o.url) || NOISE.test(o.url)) return;
     const key = `${o.method} ${normalizeUrl(o.url)}`;
+    // Responses are always indexed (cheaply, in memory), so a later request can be traced to where its ids came from.
+    let resJson: unknown;
+    if (o.responseText && o.responseText.length <= MAX_JSON_CHARS) {
+      try {
+        resJson = JSON.parse(o.responseText);
+        this.provenance.index(key, resJson);
+      } catch {
+        /* not JSON */
+      }
+    }
+    if (!this.on) return;
     const e = this.calls.get(key) ?? { n: 0, via: [], status: [] };
     e.n++;
     if (!e.via.includes(o.via)) e.via.push(o.via);
@@ -98,6 +188,7 @@ export class Recorder {
       try {
         const j = JSON.parse(o.requestBody) as unknown;
         e.req = shapeOf(j);
+        e.origins = { ...this.provenance.trace(j), ...(e.origins ?? {}) };
         e.samples = { ...samplesOf(j), ...(e.samples ?? {}) };
         const sd = (j as { submitDate?: unknown } | null)?.submitDate;
         if (placeholderDate(sd)) e.samples["submitDate"] = sd as string;
@@ -107,7 +198,7 @@ export class Recorder {
     }
     if (o.responseText && e.res === undefined) {
       try {
-        const j = JSON.parse(o.responseText) as unknown;
+        const j = resJson !== undefined ? resJson : (JSON.parse(o.responseText) as unknown);
         e.res = shapeOf(Array.isArray(j) ? j.slice(0, 1) : j);
         e.samples = { ...samplesOf(j), ...(e.samples ?? {}) };
         e.kb = Math.round(o.responseText.length / 1024);
