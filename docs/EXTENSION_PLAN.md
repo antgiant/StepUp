@@ -1,6 +1,6 @@
 # Plan: replace the command line with a browser extension
 
-Status: **superseded for now by `docs/AGENT_PLAN.md`** (the bookmarklet agent route, 2026-10-14); kept for the verified facts and
+Status: **superseded for now by `docs/AGENT_PLAN.md`** (facts: `docs/STEPUP_FINDINGS.md`) (the bookmarklet agent route, 2026-10-14); kept for the verified facts and
 the extension option. Written 2026-10-13 for an AI coding agent (and the owner).
 Read this whole file, then `CLAUDE.md`, then `docs/PLAN.md` §7 (working agreements) before changing anything.
 

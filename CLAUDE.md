@@ -33,8 +33,10 @@ copy has not caught up, so the newer local change stands until the next read.
 - The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`). Writing StepUp's
   list into `<year>/_stepup/` is `archiveStepUpList` in `packages/shared/src/stepup/sync.ts`, shared by the CLI and the web app
   (Advanced → Bring in StepUp's list). Keep it environment-agnostic: no Node imports.
-- The plan to replace the CLI is `docs/AGENT_PLAN.md` (the bookmarklet agent in `packages/web/src/agent`); the verified facts about
-  StepUp's sign-in and calls, and the extension option, are in `docs/EXTENSION_PLAN.md`.
+- The plan to replace the CLI is `docs/AGENT_PLAN.md` (the bookmarklet agent in `packages/web/src/agent`); what is known
+  about StepUp's sign-in, calls and drafts is `docs/STEPUP_FINDINGS.md`. **Nothing may write to StepUp through its API:** the
+  agent makes a short allow-list of reads only (`isAllowedOwnRead`), and filing is fail-closed form autofill with a person
+  pressing every Continue and Submit. `docs/EXTENSION_PLAN.md` is kept for the extension option only.
 
 ## History
 
