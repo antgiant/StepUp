@@ -1,6 +1,7 @@
 # Plan: replace the command line with a browser extension
 
-Status: **PLAN, not started.** Written 2026-10-13 for an AI coding agent (and the owner) to carry out in a later session.
+Status: **superseded for now by `docs/AGENT_PLAN.md`** (the bookmarklet agent route, 2026-10-14); kept for the verified facts and
+the extension option. Written 2026-10-13 for an AI coding agent (and the owner).
 Read this whole file, then `CLAUDE.md`, then `docs/PLAN.md` §7 (working agreements) before changing anything.
 
 > **Public repo rule** (from `docs/PLAN.md`): never commit real names, amounts, file names, share links, tokens, OneDrive

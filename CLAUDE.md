@@ -33,7 +33,8 @@ copy has not caught up, so the newer local change stands until the next read.
 - The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`). Writing StepUp's
   list into `<year>/_stepup/` is `archiveStepUpList` in `packages/shared/src/stepup/sync.ts`, shared by the CLI and the web app
   (Advanced → Bring in StepUp's list). Keep it environment-agnostic: no Node imports.
-- The plan to replace the CLI with a browser extension is `docs/EXTENSION_PLAN.md`.
+- The plan to replace the CLI is `docs/AGENT_PLAN.md` (the bookmarklet agent in `packages/web/src/agent`); the verified facts about
+  StepUp's sign-in and calls, and the extension option, are in `docs/EXTENSION_PLAN.md`.
 
 ## History
 
