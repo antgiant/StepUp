@@ -1,30 +1,19 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+import { categoriesOfRequest as categoriesIn, categoryCacheFrom, mergeVendors, type VendorEntry } from "@step-up/shared";
 
 const CACHE_FILE = path.resolve(process.cwd(), ".cache", "vendor-listing-cache.json");
 const URL_PATTERN = /providerapi-prod\.stepupforstudents\.org\/api\/businesssummary\/getbusinesssummarydropdown/i;
 
-export interface VendorEntry {
-  id: string;
-  businessProfileId: string;
-  name: string;
-  /** The categories (StepUp ids from the category tree) this provider was offered for: the list in "Who did you pay?" depends on the category chosen. */
-  categoryIds?: string[];
-}
+export type { VendorEntry };
 
-const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const CATEGORY_CACHE = path.resolve(process.cwd(), ".cache", "category-tree-cache.json");
 
 /** Ids in the category tree that appear in the request that fetched a provider list: that is the category the list was for. */
 async function categoriesOfRequest(requestText: string): Promise<string[]> {
-  const mentioned = new Set((requestText.match(GUID) ?? []).map((g) => g.toLowerCase()));
-  if (mentioned.size === 0) return [];
   try {
-    const tree = JSON.parse(await readFile(CATEGORY_CACHE, "utf-8")) as Record<string, unknown>;
-    const known = new Set<string>();
-    for (const level of ["categories", "types", "details"]) for (const id of Object.keys((tree[level] as Record<string, unknown>) ?? {})) known.add(id.toLowerCase());
-    return [...mentioned].filter((id) => known.has(id));
+    return categoriesIn(requestText, categoryCacheFrom(JSON.parse(await readFile(CATEGORY_CACHE, "utf-8"))));
   } catch {
     return [];
   }
@@ -63,10 +52,7 @@ export function attachVendorListingListener(page: Page): void {
       const request = response.request();
       const categoryIds = await categoriesOfRequest(`${request.url()}\n${request.postData() ?? ""}`);
       if (categoryIds.length === 0) console.log("\n[vendor listing] Could not tell which category this provider list was for; the names are kept without one.");
-      for (const r of body.Results) {
-        const had = cache[r.Id]?.categoryIds ?? [];
-        cache[r.Id] = { id: r.Id, businessProfileId: r.BusinessProfileId, name: r.DBAName, categoryIds: [...new Set([...had, ...categoryIds])] };
-      }
+      mergeVendors(cache, body, categoryIds);
       await saveCache(cache);
       console.log(`\n[vendor listing] Now know ${Object.keys(cache).length} vendor(s)/provider(s) total (from ${body.Results.length} in this response).`);
     } catch (err) {

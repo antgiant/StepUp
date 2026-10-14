@@ -1,6 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+import {
+  chunks as chunk,
+  emptyCategoryCache,
+  mergeCategorySearch,
+  mergeDetails,
+  mergeTypes,
+  scholarshipDisplayName,
+  type CachedNode,
+  type CategoryCache,
+} from "@step-up/shared";
 import { stepUpShapeOk } from "./drift.js";
 import {
   appendTableRows,
@@ -19,42 +29,12 @@ const DETAILS_PATTERN = /reimbursementapi-prod\.stepupforstudents\.org\/api\/cat
 const CHUNK_SIZE = 50;
 const DELAY_BETWEEN_CHUNKS_MS = 400;
 
-/**
- * StepUp's internal scholarship program codes (e.g. "fesua"), mapped to the human label used
- * elsewhere in the spreadsheet (Table2's "Scholarship" column). Seeded with the one we've
- * directly confirmed (via real Pre-Auth API data: PartnerId "24" / code "fesua" == "FES-UA");
- * any other code encountered falls back to its own raw uppercased form rather than guessing.
- */
-const KNOWN_SCHOLARSHIP_NAMES: Record<string, string> = {
-  fesua: "FES-UA",
-};
-
-export function scholarshipDisplayName(code: string): string {
-  return KNOWN_SCHOLARSHIP_NAMES[code.toLowerCase()] ?? code.toUpperCase();
-}
-
-export interface CachedNode {
-  name: string;
-  isActive: boolean;
-  isDeleted: boolean;
-  /** IDs of this node's children (Types for a Category, Details for a Type), if known. */
-  childIds?: string[];
-  /** StepUp's PartnerId codes (e.g. "24") this node is approved for, if known. */
-  partnerIds?: string[];
-}
-
-export interface Cache {
-  lastSyncAt: number;
-  categories: Record<string, CachedNode>;
-  types: Record<string, CachedNode>;
-  details: Record<string, CachedNode>;
-  /** PartnerId -> StepUp's internal program code text (e.g. "24" -> "fesua"), learned opportunistically. */
-  partnerCodes: Record<string, string>;
-}
-
-function emptyCache(): Cache {
-  return { lastSyncAt: 0, categories: {}, types: {}, details: {}, partnerCodes: {} };
-}
+// The cache's shape and the merging of StepUp's responses into it live in shared/stepup/learn.ts (the bookmarklet agent uses
+// the same code); these re-exports keep this file's callers as they were.
+export { scholarshipDisplayName };
+export type { CachedNode };
+export type Cache = CategoryCache;
+const emptyCache = emptyCategoryCache;
 
 async function loadCache(): Promise<Cache> {
   try {
@@ -71,12 +51,6 @@ async function saveCache(cache: Cache): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
-  return chunks;
 }
 
 export interface CategoryPathEntry {
@@ -296,25 +270,7 @@ export function attachCategoryTreeListener(page: Page, excelRef: CategorySink): 
       const cache = await loadCache();
       const raw: unknown = await response.json();
       if (!stepUpShapeOk("categories-search", raw)) return;
-      const body = raw as {
-        Results: Array<{
-          Id: string;
-          Name: string;
-          Types: string[];
-          IsActive: boolean;
-          IsDeleted: boolean;
-          ApprovedPrograms?: Array<{ PartnerId: string }>;
-        }>;
-      };
-      for (const c of body.Results) {
-        cache.categories[c.Id] = {
-          name: c.Name,
-          isActive: c.IsActive,
-          isDeleted: c.IsDeleted,
-          childIds: c.Types,
-          partnerIds: (c.ApprovedPrograms ?? []).map((p) => String(p.PartnerId)),
-        };
-      }
+      mergeCategorySearch(cache, raw);
       await saveCache(cache);
     } catch (err) {
       console.log(`\n[category sync] Failed to process categories/search: ${(err as Error).message}`);
@@ -335,28 +291,7 @@ export function attachCategoryTreeListener(page: Page, excelRef: CategorySink): 
 
       for (const batch of chunk(idsToFetch, CHUNK_SIZE)) {
         const response = await route.fetch({ postData: JSON.stringify(batch) });
-        if (response.ok()) {
-          const data = (await response.json()) as Array<{
-            id: string;
-            name: string;
-            details?: string[];
-            isActive: boolean;
-            isDeleted: boolean;
-            approvedPrograms?: Array<{ partnerId: string; programType: string }>;
-          }>;
-          for (const t of data) {
-            cache.types[t.id] = {
-              name: t.name,
-              isActive: t.isActive,
-              isDeleted: t.isDeleted,
-              childIds: t.details,
-              partnerIds: (t.approvedPrograms ?? []).map((p) => p.partnerId),
-            };
-            for (const p of t.approvedPrograms ?? []) {
-              if (p.partnerId && p.programType) cache.partnerCodes[p.partnerId] = p.programType;
-            }
-          }
-        }
+        if (response.ok()) mergeTypes(cache, await response.json());
         await sleep(DELAY_BETWEEN_CHUNKS_MS);
       }
 
@@ -389,26 +324,7 @@ export function attachCategoryTreeListener(page: Page, excelRef: CategorySink): 
 
       for (const batch of chunk(idsToFetch, CHUNK_SIZE)) {
         const response = await route.fetch({ postData: JSON.stringify(batch) });
-        if (response.ok()) {
-          const data = (await response.json()) as Array<{
-            id: string;
-            name: string;
-            isActive: boolean;
-            isDeleted: boolean;
-            approvedPrograms?: Array<{ partnerId: string; programType: string }>;
-          }>;
-          for (const d of data) {
-            cache.details[d.id] = {
-              name: d.name,
-              isActive: d.isActive,
-              isDeleted: d.isDeleted,
-              partnerIds: (d.approvedPrograms ?? []).map((p) => p.partnerId),
-            };
-            for (const p of d.approvedPrograms ?? []) {
-              if (p.partnerId && p.programType) cache.partnerCodes[p.partnerId] = p.programType;
-            }
-          }
-        }
+        if (response.ok()) mergeDetails(cache, await response.json());
         await sleep(DELAY_BETWEEN_CHUNKS_MS);
       }
 
