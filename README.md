@@ -36,6 +36,7 @@ Most of what used to need `npm run …` is now in the web app's **Advanced** men
 - **Check this year** (also *and its files* / *and every file's contents*): the `verify` command. The result is a panel on the Summary tab.
 - **Back up this year (zip)**, with or without documents: the `backup` command, as one download with a manifest of SHA-256 hashes.
 - **Ready to file**: the `plan` command, on the Summary tab.
+- **Get the StepUp bookmarklet**: a bookmark that, clicked on StepUp's own Dashboard, reads the list StepUp already shows you and sends it here (asking before anything is saved). Your StepUp sign-in never leaves StepUp's page.
 - **Bring in StepUp's list**: pick a saved copy of StepUp's reimbursements list (the CLI's `.cache/stepup-search-responses.json`, or a raw response) and every year's `_stepup` folder, History and the open year's ledger are brought up to date: the `statuses --from-capture` command, with no login.
 
 What still needs the command line is everything that talks to StepUp itself (filing, live status sync, learning categories and

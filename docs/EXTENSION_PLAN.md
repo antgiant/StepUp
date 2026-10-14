@@ -46,6 +46,36 @@ to the open ledger year (`applyStepUpStatuses`), then refresh.
 5. Chrome puts a per-site "local network" permission in front of requests from an HTTPS page to localhost (Chrome 142+,
    last opt-out removed in 156), so "web app talks to a local helper" is not the end state either.
 
+### 2a. Auth facts verified from a real session (2026-10-13)
+
+No ids are recorded here on purpose (public repo); the scope ids are StepUp's own public `appsettings.json` values.
+
+- Sign-in is **MSAL.js v2 with Azure AD B2C** (user flow `b2c_1a_signupsignin`), authorization code + PKCE.
+- **Tokens are in `sessionStorage`** of the StepUp tab (not `localStorage`), in the standard MSAL v2 layout: one
+  `credentialType: "AccessToken"` entry per API, `target` ending `<api-guid>/access_as_user`, `secret` a plaintext JWT,
+  **60-minute** lifetime. An ID token and a ~24 h refresh token are there too. **Never read or use the refresh token**:
+  B2C may rotate it and sign the page out.
+- API scopes: reimbursement `5bd9fe13-76ed-4dbb-b8c3-7811dbf16276`, provider `429e3036-53d2-4215-a413-05b7ced0fa9d`,
+  comment `1a7dc840-32bb-4be5-9f43-cbd9d470e9e2` (not yet investigated), plus person, financial, infrastructure and
+  application APIs we do not use.
+- **The list request:** `POST …/api/reimbursements/V2/search?v=<.NET ticks>` with `content-type: application/json`,
+  `authorization: Bearer <access token>` and body
+  `{"Keywords":null,"CurrentPage":null,"PageSize":null,"OrderBy":null,"SortOrder":0,"MultiOrderBy":{},"Filters":
+  {"GuardianId":<scholar_personId claim>,"ExcludedStatuses":["Canceled"]},"ApplyDefaultFilters":true,"ContextBag":{},
+  "IncludeGlobalSearchTotal":false,"SkipCount":false}`. No paging: one ~5.9 MB response in ~4 s holds every year.
+  Telemetry headers (`request-id`, `traceparent`, …) are not needed.
+- **`GuardianId` is the `scholar_personId` claim** of the access (and ID) token. A missing id gives 500, another value
+  401: the API enforces it against the token. Other candidates (`sub`, `localAccountId`, `azp`, `nonce`) are refused.
+- Calling the API with that token **from the StepUp page's own origin works**; from anywhere else CORS refuses (§2.1).
+
+Consequences: the extension and the bookmarklet read the token from `sessionStorage` (no fetch hooking needed to get
+it), and fetching the list needs no page navigation. Phase 0 questions 1–2 and the token part of 4 are answered; the
+remaining spikes are about the wizard (value-setting, file upload, trusted clicks).
+
+The **bookmarklet is built** (`packages/web/src/stepUpBridge.ts`): it does exactly the above and hands only the list to the
+web app by `postMessage` (hello/ready handshake, origin-checked on both sides, confirmation before anything is saved). It
+is the template for the extension's status capture.
+
 Unknowns that only a logged-in human session can answer are §5 (Phase 0). Nothing in later phases may be started on a
 guess about them.
 
@@ -148,11 +178,10 @@ StepUp (`MAX_RECEIPT_BYTES`), so this is small.
 Write a throwaway unpacked extension that logs, never writes. Answer each question in `docs/EXTENSION_SPIKES.md` with
 evidence (redacted) and a decision. Do not start Phase 1 until 1–4 are answered; 5–7 gate Phase 4.
 
-1. **Where is the Authorization header?** Observe StepUp's own requests from a MAIN-world `fetch`/XHR wrapper. Confirm the
-   header is visible, whether it refreshes mid-session, and how the wrapper behaves with Blazor's HTTP client (it uses
-   `fetch` via JS interop; confirm).
-2. **Can the extension call the list endpoint itself?** `fetch` the search endpoint from the content script's MAIN world
-   with that header. If yes, status sync needs no page navigation at all.
+1. ~~Where is the Authorization header?~~ **Answered (§2a):** `sessionStorage`, MSAL v2 layout; refresh during a long run
+   is picked up by re-reading it (MSAL renews on page activity). Still check that a wrapper sees Blazor's own calls, for
+   the learners.
+2. ~~Can the extension call the list endpoint itself?~~ **Answered (§2a):** yes, from the StepUp origin.
 3. **Does the 6 MB list survive messaging?** Chrome messages are JSON-serialised with size limits; chunk or compress
    (`CompressionStream`) and measure.
 4. **Does the bridge work?** `window.postMessage` from the web app to a content script on its origin, round trip to the
