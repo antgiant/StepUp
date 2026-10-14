@@ -28,7 +28,10 @@ copy has not caught up, so the newer local change stands until the next read.
   left out), and an item whose amount StepUp holds differently from the ledger's is flagged Adjusted (with both amounts shown on
   the item) at any stage except a denial.
 - Excel years: the StepUp enhancement in `buildLegacyImport` replaces the sheet's status, amounts and message.
-- The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`).
+- The CLI applies each reimbursement to its own school year's ledger or workbook (`packages/cli/src/yearSync.ts`). Writing StepUp's
+  list into `<year>/_stepup/` is `archiveStepUpList` in `packages/shared/src/stepup/sync.ts`, shared by the CLI and the web app
+  (Advanced → Bring in StepUp's list). Keep it environment-agnostic: no Node imports.
+- The plan to replace the CLI with a browser extension is `docs/EXTENSION_PLAN.md`.
 
 ## History
 

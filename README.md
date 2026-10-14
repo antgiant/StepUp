@@ -29,6 +29,19 @@ In addition to the web interface there is also a semi-automated Playwright helpe
 - Passively accumulates the **known vendor/provider list** too (`.cache/vendor-listing-cache.json`), from the "Who did you pay?" dropdown's own API responses whenever they naturally load — local cache only for now, not yet synced into a spreadsheet table.
 - Also passively syncs `Pre-Auth` status (matched by `Pre-Auth #`) from StepUp's Pre-Authorization list API, same throttled pattern — currently dormant since no rows have a `Pre-Auth #` recorded yet. (Full Pre-Auth *submission* automation — a separate wizard from reimbursements — isn't built yet; see `todo.md`.)
 
+## What moved from the command line to the web app
+
+Most of what used to need `npm run …` is now in the web app's **Advanced** menu and Summary tab, using the same shared code:
+
+- **Check this year** (also *and its files* / *and every file's contents*): the `verify` command. The result is a panel on the Summary tab.
+- **Back up this year (zip)**, with or without documents: the `backup` command, as one download with a manifest of SHA-256 hashes.
+- **Ready to file**: the `plan` command, on the Summary tab.
+- **Bring in StepUp's list**: pick a saved copy of StepUp's reimbursements list (the CLI's `.cache/stepup-search-responses.json`, or a raw response) and every year's `_stepup` folder, History and the open year's ledger are brought up to date: the `statuses --from-capture` command, with no login.
+
+What still needs the command line is everything that talks to StepUp itself (filing, live status sync, learning categories and
+vendors), because only a program running next to StepUp's own page can. The plan for replacing that with a browser extension
+is in [`docs/EXTENSION_PLAN.md`](docs/EXTENSION_PLAN.md).
+
 ## Repo layout
 
 npm workspaces monorepo. Everything is still run from the repo root, so `.env`, `.cache/`, `.chrome-profile/` and `data/` stay where they were.
