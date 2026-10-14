@@ -1,18 +1,6 @@
 import "dotenv/config";
-import {
-  clockLooksWrong,
-  hasErrors,
-  openLedgerFolders,
-  serverClockSkewMs,
-  sha256OfBytes,
-  verifyLedger,
-  type Finding,
-} from "@step-up/shared";
-import { downloadTo } from "./storage/index.js";
+import { clockLooksWrong, hasErrors, openLedgerFolders, serverClockSkewMs, verifyFiles, verifyLedger, type Finding } from "@step-up/shared";
 import { openYearLedger } from "./ledgerYear.js";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 
 /**
  * npm run verify -- 2026-2027 [--files] [--hash]
@@ -35,28 +23,7 @@ async function main() {
   if (files) {
     const docs = Object.values(opened.ledger.state.documents).filter((d) => d.driveItemId);
     console.log(`Checking ${docs.length} file(s) in ${opened.storage.label}${hash ? " (downloading each to check its contents)" : ""}...`);
-    const gone: string[] = [];
-    const wrongSize: string[] = [];
-    const wrongHash: string[] = [];
-    const tmp = hash ? await mkdtemp(path.join(os.tmpdir(), "stepup-verify-")) : undefined;
-    for (const d of docs) {
-      try {
-        const item = await opened.storage.stat(opened.driveId, d.driveItemId!);
-        if (d.sizeBytes !== undefined && item.size !== undefined && item.size !== d.sizeBytes) wrongSize.push(d.id);
-        if (hash && d.sha256 && tmp) {
-          const dest = path.join(tmp, "f");
-          await downloadTo(opened.storage, opened.driveId, d.driveItemId!, dest);
-          const bytes = await readFile(dest);
-          if ((await sha256OfBytes(bytes)) !== d.sha256) wrongHash.push(d.id);
-        }
-      } catch {
-        gone.push(d.id);
-      }
-    }
-    if (tmp) await rm(tmp, { recursive: true, force: true });
-    if (gone.length) findings.push({ severity: "error", code: "file-missing-in-onedrive", message: `${gone.length} registered file(s) can't be found in ${opened.storage.label} (deleted or moved?).`, ids: gone.slice(0, 10) });
-    if (wrongSize.length) findings.push({ severity: "warn", code: "file-size-changed", message: `${wrongSize.length} file(s) have a different size than when they were registered (edited?).`, ids: wrongSize.slice(0, 10) });
-    if (wrongHash.length) findings.push({ severity: "error", code: "file-contents-changed", message: `${wrongHash.length} file(s) no longer match their recorded SHA-256 (changed or corrupted).`, ids: wrongHash.slice(0, 10) });
+    findings.push(...(await verifyFiles(opened.storage, opened.driveId, opened.ledger.state, { hash })));
   }
 
   // A tiny write is the only way to learn the storage's idea of the time; do it in the reports folder, and only for the clock check.
