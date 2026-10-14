@@ -131,6 +131,25 @@ unfinished draft's status word is **`Draft`**. A student's `scholarships[]` carr
   are. The report now has a **short version** (only calls that matter for filing and learning, response shapes dropped for
   big lists) and keeps **every distinct shape** of a call, so a save before and after an item are both there.
 
+### What the item values settled (from a recording made with made-up numbers)
+
+- **Arithmetic:** with quantity 2, cost per item 10.00 and tax/shipping 5.00 the item's `itemAmount` was **25.00** =
+  `Quantity x CostPerItem + AdditionalCosts`; `taxPercent` stayed `0`. "Tax, shipping, etc." is `AdditionalCosts`.
+- **Dates:** a purchase date is `"YYYY-MM-DDT00:00:00"` (no zone) in `purchaseDate`; a date that is not set is
+  `"0001-01-01T00:00:00"`, which is also what `PurchaseMinDate`, `PurchaseMaxDate`, `ServiceMinDate`, `ServiceMaxDate`,
+  `assignedDate`, `paymentDate` and an unset `serviceDate` hold. `invoiceDate` is `null`.
+- **Provider:** `vendorCode` is the provider's `ProviderCode` ("PC_...") and `vendorName` its `Name`; the service-provider
+  fields stay `null` unless the category needs a person (not yet recorded).
+- **Numbers:** `lineItemNumber` is `<reimbursement number>-<line>`; `doeCode` is repeated from the category; statuses on
+  an item are `"Draft"`; `receiptId` is the receipt's `Id`; `ItemUrl` and `serviceInvoiceNumber` are plain text.
+- **Built:** `shared/stepup/draft.ts` builds every one of these requests as data (no network), and
+  `shared/test/draft.test.ts` pins each request's field names to the recorded set, so a change by StepUp fails a test.
+  It writes nothing to StepUp and is not connected to the agent: sending is gated on the owner's decisions (D2, D6).
+
+Not yet known: how a **service provider** (a person) is written; what `ServiceProviderPersonIdString` holds; whether the
+page chooses an item's `Id` itself (the draft's and receipt's are chosen by the page, so the builder assumes the same);
+and the **submit** call, which was never exercised.
+
 ### Next recording (needed before an item can be written)
 
 Turn on **Record, keeping what I type into an item** and enter made-up values, so the field arithmetic is learned:

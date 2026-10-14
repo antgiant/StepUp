@@ -36,6 +36,7 @@ export * from "./stepup/archive.js";
 export * from "./stepup/overlay.js";
 export * from "./stepup/sync.js";
 export * from "./stepup/learn.js";
+export * from "./stepup/draft.js";
 export * from "./history/index.js";
 export * from "./reference/categories.js";
 export * from "./reference/sync.js";
