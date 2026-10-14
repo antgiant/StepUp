@@ -19,6 +19,8 @@ interface Setup {
   tokens?: Array<{ target: string; expiresOn: number; claims?: Record<string, unknown> }>;
   popup?: boolean;
   appAnswers?: boolean;
+  /** The app also says what it already knows right after "ready" (it does once its workspace is open). */
+  appCache?: { lastSyncAt: number };
   fetchStatus?: number;
   fetchBody?: unknown;
   handler?: (url: string, body: unknown) => unknown;
@@ -38,7 +40,10 @@ function make(setup: Setup = {}) {
   const popup: AppWindow = {
     postMessage(data, origin) {
       sent.push({ data: data as never, origin });
-      if ((data as { type: string }).type === "stepup-hello" && setup.appAnswers !== false) deliver({ origin: APP, source: popup, data: { type: "stepup-ready" } });
+      if ((data as { type: string }).type === "stepup-hello" && setup.appAnswers !== false) {
+        deliver({ origin: APP, source: popup, data: { type: "stepup-ready" } });
+        if (setup.appCache) deliver({ origin: APP, source: popup, data: { type: "stepup-cache", categories: { lastSyncAt: setup.appCache.lastSyncAt, categories: {}, types: {}, details: {}, partnerCodes: {} } } });
+      }
     },
   };
   let now = Date.now();
@@ -273,6 +278,52 @@ describe("what StepUp's page really sends", () => {
   });
 });
 
+describe("learning on its own after the click", () => {
+  const PROVIDER = "429e3036-53d2-4215-a413-05b7ced0fa9d/access_as_user";
+  const handler = (url: string, body: unknown) => {
+    if (/categories\/search/.test(url)) return { Results: [{ Id: "c1", Name: "Cat", Types: ["t1"], IsActive: true, IsDeleted: false, RequiresServiceDate: true }] };
+    if (/typesbyids/.test(url)) return (body as string[]).map((id) => ({ id, name: `T ${id}`, details: ["d1"], isActive: true, isDeleted: false, requiresServiceDate: null }));
+    if (/detailsbyids/.test(url)) return (body as string[]).map((id) => ({ id, name: `D ${id}`, isActive: true, isDeleted: false }));
+    if (/vendors\/search/.test(url)) return { Results: [{ Id: "v1", Name: "Book Shop", DBAName: null }] };
+    return listBody();
+  };
+  const tokens = [{ target: REIMBURSEMENT_SCOPE, expiresOn: soon(), claims: { scholar_personId: "person-1" } }, { target: PROVIDER, expiresOn: soon(), claims: {} }];
+
+  it("asks for the category tree and the provider list itself, once a day, with the recorded request shape", async () => {
+    const r = make({ tokens, handler, appCache: { lastSyncAt: 0 } });
+    await r.agent.start();
+    const urls = r.requests.map((q) => q.url);
+    expect(urls).toContain("https://reimbursementapi-prod.stepupforstudents.org/api/categories/search");
+    expect(urls).toContain("https://reimbursementapi-prod.stepupforstudents.org/api/categories/typesbyids");
+    expect(urls).toContain("https://reimbursementapi-prod.stepupforstudents.org/api/categories/detailsbyids");
+    expect(urls).toContain("https://providerapi-prod.stepupforstudents.org/api/vendors/search");
+    const search = r.requests.find((q) => /categories\/search/.test(q.url))!.body as { Filters: unknown; PageSize: unknown; CurrentPage: unknown };
+    expect(search).toMatchObject({ Filters: { IsActive: true }, PageSize: null, CurrentPage: null });
+    const cache = r.sent.filter((s) => s.data["kind"] === "categories").at(-1)!.data["cache"] as { categories: Record<string, { requiresServiceDate?: boolean | null }>; types: Record<string, unknown>; details: Record<string, unknown>; lastSyncAt: number };
+    expect(cache.categories["c1"]!.requiresServiceDate).toBe(true);
+    expect(Object.keys(cache.types)).toEqual(["t1"]);
+    expect(Object.keys(cache.details)).toEqual(["d1"]);
+    expect(cache.lastSyncAt).toBeGreaterThan(0);
+    expect(r.sent.find((s) => s.data["kind"] === "vendors")!.data["entries"]).toEqual([{ id: "v1", businessProfileId: "", name: "Book Shop", categoryIds: [] }]);
+  });
+
+  it("does not repeat it within a day, or before the app has said what it knows", async () => {
+    const recent = make({ tokens, handler, appCache: { lastSyncAt: Date.now() } });
+    await recent.agent.start();
+    expect(recent.requests.some((q) => /categories\/search/.test(q.url))).toBe(false);
+
+    const unknown = make({ tokens, handler });
+    await unknown.agent.start();
+    expect(unknown.requests.some((q) => /categories\/search/.test(q.url))).toBe(false);
+  });
+
+  it("does not use a response that no longer looks right", async () => {
+    const r = make({ tokens, handler: (url, body) => (/categories\/search/.test(url) ? { Results: [{ Id: 5 }] } : handler(url, body)), appCache: { lastSyncAt: 0 } });
+    await r.agent.start();
+    expect(r.sent.some((s) => s.data["kind"] === "categories")).toBe(false);
+  });
+});
+
 describe("students and balances", () => {
   const STUDENTS = "https://personapi-prod.stepupforstudents.org/api/guardian/0f8fad5b-d9cb-469f-a165-70867728950e/studentScholarship/";
   const BALANCES = "https://infrastructureapi-prod.stepupforstudents.org/api/balancecheck/bulk/details";
@@ -328,6 +379,43 @@ describe("recording", () => {
   it("describes shapes and normalises addresses", () => {
     expect(shapeOf({ b: [1, 2], a: "x", c: { d: null } })).toBe("{a:string,b:[2xnumber],c:{d:null}}");
     expect(normalizeUrl("https://reimbursementapi-prod.stepupforstudents.org/api/r/12/0f8fad5b-d9cb-469f-a165-70867728950e?v=9&page=2")).toBe("reimbursementapi-prod/api/r/{n}/{guid}?page");
+  });
+});
+
+describe("what the recorder keeps of values", () => {
+  it("samples only settings and statuses, never other values", async () => {
+    const r = make();
+    await r.agent.start();
+    r.fromApp({ type: "stepup-record", on: true });
+    r.agent.observed({
+      via: "fetch", method: "POST", url: "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/v2", status: 200, ms: 3,
+      requestBody: JSON.stringify({ externalStatus: "Draft", programType: 2, skipValidation: false, studentName: "Private Name", submitDate: "0001-01-01T00:00:00", lineItems: [{ itemAmount: 12.34, vendorName: "Private Shop", externalStatus: "Draft", PartitionVersion: 1 }] }),
+      responseText: "{}",
+    });
+    r.agent.observed({
+      via: "fetch", method: "POST", url: "https://reimbursementapi-prod.stepupforstudents.org/api/other", status: 200, ms: 3,
+      requestBody: JSON.stringify({ submitDate: "2026-09-01T10:00:00", sortOrder: 0 }), responseText: "{}",
+    });
+    r.fromApp({ type: "stepup-report" });
+    const calls = (r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { calls: Record<string, { samples?: Record<string, unknown> }> }).calls;
+    expect(calls["POST reimbursementapi-prod/api/reimbursements/v2"]!.samples).toEqual({ externalStatus: "Draft", programType: 2, skipValidation: false, PartitionVersion: 1, submitDate: "0001-01-01T00:00:00" });
+    expect(calls["POST reimbursementapi-prod/api/other"]!.samples).toEqual({ sortOrder: 0 });
+    const text = JSON.stringify(calls);
+    for (const secret of ["Private Name", "Private Shop", "12.34", "2026-09-01"]) expect(text).not.toContain(secret);
+  });
+
+  it("notes uploads to storage that only the browser's own timeline sees, without file names or signatures", async () => {
+    const r = make();
+    await r.agent.start();
+    r.fromApp({ type: "stepup-record", on: true });
+    r.agent.recorder.resource("https://myacct.blob.core.windows.net/receipts/private-name.pdf?sv=1&sig=SECRET", "fetch", 480000);
+    r.agent.recorder.resource("https://apply.stepupforstudents.org/css/site.css", "css", 10);
+    r.fromApp({ type: "stepup-report" });
+    const rep = r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { calls: Record<string, { via: string[]; bytes?: number }> };
+    expect(Object.keys(rep.calls)).toEqual(["RESOURCE *.blob.core.windows.net/{path}?sig&sv"]);
+    expect(rep.calls["RESOURCE *.blob.core.windows.net/{path}?sig&sv"]).toMatchObject({ via: ["fetch"], bytes: 480000 });
+    const text = JSON.stringify(rep);
+    for (const secret of ["private-name", "SECRET", "myacct"]) expect(text).not.toContain(secret);
   });
 });
 

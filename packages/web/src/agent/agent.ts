@@ -20,12 +20,30 @@ import {
 import type { Observed } from "./observe.js";
 import type { AgentToApp, AppToAgent } from "./protocol.js";
 import { Recorder } from "./recorder.js";
-import { findAccessToken, tokenFresh, PERSON_SCOPE } from "./token.js";
+import { findAccessToken, tokenFresh, PERSON_SCOPE, PROVIDER_SCOPE, type StepUpToken } from "./token.js";
 
 /** Bumped when the messages between the agent and the app change in a way an older open app tab would not understand. */
 export const AGENT_PROTOCOL = 1;
 
 const API = "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/V2/search";
+const CATEGORIES_SEARCH = "https://reimbursementapi-prod.stepupforstudents.org/api/categories/search";
+const CATEGORY_TYPES = "https://reimbursementapi-prod.stepupforstudents.org/api/categories/typesbyids";
+const VENDORS_SEARCH = "https://providerapi-prod.stepupforstudents.org/api/vendors/search";
+
+/** The request envelope every StepUp "search" takes (seen in recordings); only `Filters` differs between calls. */
+const envelope = (filters: Record<string, unknown>) => ({
+  ApplyDefaultFilters: true,
+  ContextBag: {},
+  CurrentPage: null,
+  Filters: filters,
+  IncludeGlobalSearchTotal: false,
+  Keywords: null,
+  MultiOrderBy: {},
+  OrderBy: null,
+  PageSize: null,
+  SkipCount: false,
+  SortOrder: 0,
+});
 const CHUNK = 50;
 const CHUNK_DELAY_MS = 400;
 const HANDSHAKE_TRIES = 75;
@@ -137,6 +155,60 @@ export class StepUpAgent {
     this.post({ type: "stepup-list", results });
     say(`Sent ${results.length} reimbursements to Step Up Helper. Switch to its tab to see what changed.`);
     await this.readStudents(token.guardian);
+    await this.refreshLearned();
+  }
+
+  /**
+   * Once a day, after a click: StepUp's category tree and provider list, asked for directly with the page's own sign-in
+   * (the same calls the page makes, with the request shapes recorded from it). Nothing waits for a person to open a dropdown.
+   */
+  private async refreshLearned(): Promise<void> {
+    // The app says what it already knows a moment after it connects; without that, a day's work might be repeated.
+    for (let i = 0; i < 25 && this.ready && !this.cacheKnown; i++) await this.host.sleep(200);
+    if (this.expanding || !this.ready || !this.cacheKnown || !expansionDue(this.categories, this.host.now())) return;
+    const token = findAccessToken(this.host.storage);
+    if (!token || !tokenFresh(token, this.host.now(), 5 * 60_000)) return;
+    this.expanding = true;
+    try {
+      const found = await this.callApi(CATEGORIES_SEARCH, envelope({ IsActive: true }), token);
+      if (found !== undefined && checkStepUpShape("categories-search", found).length === 0) {
+        mergeCategorySearch(this.categories, found);
+        await this.expandTree(token, CATEGORY_TYPES, []);
+      }
+      const providerToken = findAccessToken(this.host.storage, PROVIDER_SCOPE);
+      if (providerToken && tokenFresh(providerToken, this.host.now(), 5 * 60_000)) {
+        const vendors = await this.callApi(VENDORS_SEARCH, envelope({}), providerToken);
+        const touched = vendors === undefined ? [] : mergeVendors(this.vendors, vendors, []);
+        if (touched.length) this.post({ type: "stepup-learned", kind: "vendors", entries: touched });
+      }
+    } catch {
+      /* best effort: tried again at the next click */
+    } finally {
+      this.expanding = false;
+    }
+  }
+
+  /** One of StepUp's own calls with the page's sign-in; the parsed body, or undefined when it was refused. */
+  private async callApi(url: string, body: unknown, token: StepUpToken): Promise<unknown | undefined> {
+    const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(body) });
+    return r.ok ? await r.json() : undefined;
+  }
+
+  /** Types, then their details, in small batches with a pause between (as the command line always did). Records the day. */
+  private async expandTree(token: StepUpToken, typesUrl: string, requested: string[]): Promise<void> {
+    const each = async (url: string, ids: string[], merge: (c: CategoryCache, d: unknown) => number): Promise<void> => {
+      for (const batch of chunks(ids, CHUNK)) {
+        if (this.disposed) return;
+        const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(batch) });
+        if (r.ok) merge(this.categories, await r.json());
+        else if (r.status === 401 || r.status === 403) return;
+        await this.host.sleep(CHUNK_DELAY_MS);
+      }
+    };
+    await each(typesUrl, typeIdsToExpand(this.categories, requested), mergeTypes);
+    await each(typesUrl.replace(/typesbyids/i, "detailsbyids"), detailIdsToExpand(this.categories), mergeDetails);
+    this.categories.lastSyncAt = this.host.now();
+    this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
   }
 
   /** The student list is a plain read with the person-API sign-in; best effort (a refusal just means it is not learned now). */
@@ -278,20 +350,7 @@ export class StepUpAgent {
     if (!token || !tokenFresh(token, this.host.now(), 5 * 60_000)) return;
     this.expanding = true;
     try {
-      const call = async (url: string, ids: string[], merge: (c: CategoryCache, d: unknown) => number): Promise<void> => {
-        for (const batch of chunks(ids, CHUNK)) {
-          if (this.disposed) return;
-          const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(batch) });
-          if (r.ok) merge(this.categories, await r.json());
-          else if (r.status === 401 || r.status === 403) return;
-          await this.host.sleep(CHUNK_DELAY_MS);
-        }
-      };
-      await call(typesUrl, typeIdsToExpand(this.categories, requested), mergeTypes);
-      // The details of every type just learned. Same service and path as types, so derived from the address the page used.
-      await call(typesUrl.replace(/typesbyids/i, "detailsbyids"), detailIdsToExpand(this.categories), mergeDetails);
-      this.categories.lastSyncAt = this.host.now();
-      this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
+      await this.expandTree(token, typesUrl, requested);
     } catch {
       /* best effort: it is tried again the next time the page asks */
     } finally {

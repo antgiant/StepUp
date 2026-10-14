@@ -80,10 +80,25 @@ declare global {
   history.pushState = wrap(origPush);
   history.replaceState = wrap(origReplace);
 
+  // Uploads to storage do not go through the wrapped fetch; the resource timeline still shows that they happened.
+  let timing: PerformanceObserver | undefined;
+  try {
+    timing = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        const r = e as PerformanceResourceTiming;
+        agent?.recorder.resource(r.name, r.initiatorType, r.encodedBodySize || r.transferSize || 0);
+      }
+    });
+    timing.observe({ type: "resource", buffered: false });
+  } catch {
+    /* not available: uploads are simply not listed */
+  }
+
   window.__stepUpHelper = {
     agent,
     dispose: () => {
       observers.dispose();
+      timing?.disconnect();
       history.pushState = origPush;
       history.replaceState = origReplace;
       agent?.dispose();

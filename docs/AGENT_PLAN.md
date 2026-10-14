@@ -27,6 +27,31 @@ What the first recording established (all 2026-10-14, one real session):
 - Two defects found and fixed: request bodies were not captured (Blazor sends bytes) and the provider list moved to
   `providerapi … /vendors/search`.
 
+What the second recording (2026-10-14, request bodies included, field names only, two levels deep) added:
+
+- **The draft is written whole.** `POST …/reimbursements/v2` (create) and `PUT …/reimbursements/v2/{id}` (every save, and the
+  one before a delete) send the full reimbursement object: ids and names of the guardian, student and program
+  (`guardianId`, `studentId`, `programId`, `internalProgramId`, `programType` as a number, `studentSequenceNumber`), status
+  fields, `lineItems`, `receipts`, `additionalDocuments`, `submitDate`, and `Id` / `PartitionVersion`.
+  **The draft's `Id` is chosen by the page** (it is in the create request), so the agent can choose it too.
+- **A line item** carries both capitalised and lower-case fields: `CostPerItem`, `AdditionalCosts`, `Quantity`, `ItemUrl`,
+  `PurchaseMinDate`/`PurchaseMaxDate`, `ServiceMinDate`/`ServiceMaxDate`, `ServiceProviderPersonIdString`, with
+  `categoryId`/`categoryTypeId`/`categoryDetailId` (and names), `itemAmount`, `taxPercent`, `purchaseDate`, `serviceDate`,
+  `vendorName`/`vendorCode`, `serviceInvoiceNumber`, `educationalBenefit`, `receiptId`.
+- **A receipt** is registered on the draft as `{Id, blobSasUri, fileType, sourceFileName, ...}` after `POST …/documents-sasuri`
+  (request: `ReimbursementDocuments.ReceiptDocuments[]`, `ReimbursementId`, `EntityId`, `ShouldUpload`) returns upload
+  addresses; `POST …/sasuri {GeneratedFileName}` returns a read address. **The upload to storage itself was not seen**: that
+  code holds its own `fetch`, so the wrappers miss it (the recorder now also reads the browser's resource timeline for it).
+- `categories/search`'s request is the standard envelope with `Filters:{IsActive}`; the agent now calls it itself, then
+  expands types and details, and reads `vendors/search`, once a day after a click (no one has to open a dropdown).
+- **Both provider endpoints are live**: `vendors/search` (the full list) and `getbusinesssummarydropdown` (paged, with
+  `Filters:{ProgramType}`).
+- A SignalR hub (`infrastructureapi … /negotiate`) pushes notifications; a possible later source of status changes.
+
+Still unknown for B: the values of the status/enum fields on a new draft (the recorder now samples a fixed set of
+setting-like fields), the exact `ReceiptDocuments[]` item, how storage upload is authorised, and the submit call (never
+exercised, by design).
+
 ## 2. Principles (non-negotiable)
 
 1. **The agent never submits.** A person presses StepUp's own Submit. The agent may create and fill a draft; it may not
