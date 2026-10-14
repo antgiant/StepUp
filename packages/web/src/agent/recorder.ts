@@ -47,9 +47,12 @@ const SAMPLE_KEYS = new Set([
   "skipvalidation", "shouldupload", "filetype", "isnew", "ocrformatted", "hasduplicate", "resubmitted", "hasappealeditems",
   "appealed", "isduplicate", "reassigned", "schoolyear", "programname", "sortorder", "pagesize", "currentpage",
   "applydefaultfilters", "includeglobalsearchtotal", "skipcount", "excludedstatuses", "requestsourcetype", "status",
-  "commenttype", "commentrecordtype", "internalonly", "sourceentityname", "reasoncode", "callertype", "doctype", "wasread",
+  "commenttype", "commentrecordtype", "internalonly", "reasoncode", "callertype", "doctype", "wasread",
   "wasdeleted", "contactreason",
 ]);
+// Never sampled even though they sound like settings: these hold people's names (a comment's SourceEntityName is the
+// guardian's own name). A test asserts none of them is in SAMPLE_KEYS.
+export const NEVER_SAMPLED = ["sourceentityname", "personname", "studentname", "guardianname", "providername", "createdbyname", "assignedtoname", "modifiedbyname", "legalbusinessname", "dbaname", "name", "firstname", "lastname", "fullname"];
 
 const ID_LIKE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{5,})$/i;
 const MAX_INDEXED = 100_000;
@@ -211,27 +214,41 @@ export class Recorder {
       if (!e.headers.includes(h)) e.headers.push(h);
     }
     if (o.requestBytes !== undefined) e.bytes = o.requestBytes;
-    if (o.requestBody && e.req === undefined) {
+    if (o.requestBody) {
       try {
         const j = JSON.parse(o.requestBody) as unknown;
-        e.req = shapeOf(j);
-        e.origins = { ...this.provenance.trace(j), ...(e.origins ?? {}) };
-        e.samples = { ...samplesOf(j), ...(this.values ? valuesOf(j) : {}), ...(e.samples ?? {}) };
+        const shape = shapeOf(j);
+        const samples = { ...samplesOf(j), ...(this.values ? valuesOf(j) : {}) };
         const sd = (j as { submitDate?: unknown } | null)?.submitDate;
-        if (placeholderDate(sd)) e.samples["submitDate"] = sd as string;
+        if (placeholderDate(sd)) samples["submitDate"] = sd as string;
+        const origins = this.provenance.trace(j);
+        if (e.req === undefined) {
+          e.req = shape;
+          e.origins = origins;
+          e.samples = { ...samples, ...(e.samples ?? {}) };
+        } else if (e.req !== shape && !(e.reqVariants ?? []).some((v) => v.req === shape) && (e.reqVariants?.length ?? 0) < 5) {
+          // A save of the same draft with a different shape (for example after an item was added): kept as a variant.
+          (e.reqVariants ??= []).push({ req: shape, origins, samples });
+        } else if (e.req === shape && this.values) {
+          // The same shape again with different typed values: the latest values stand for it.
+          e.samples = { ...(e.samples ?? {}), ...valuesOf(j) };
+        }
       } catch {
-        e.req = "non-json";
+        if (e.req === undefined) e.req = "non-json";
       }
     }
-    if (o.responseText && e.res === undefined) {
-      try {
-        const j = resJson !== undefined ? resJson : (JSON.parse(o.responseText) as unknown);
-        e.res = shapeOf(Array.isArray(j) ? j.slice(0, 1) : j);
-        e.samples = { ...samplesOf(j), ...(e.samples ?? {}) };
+    if (o.responseText && resJson !== undefined) {
+      const body = Array.isArray(resJson) ? resJson.slice(0, 1) : resJson;
+      const shape = shapeOf(body);
+      if (e.res === undefined) {
+        e.res = shape;
         e.kb = Math.round(o.responseText.length / 1024);
-      } catch {
-        e.res = "non-json";
+        e.samples = { ...samplesOf(resJson), ...(e.samples ?? {}) };
+      } else if (e.res !== shape && !(e.resVariants ?? []).some((v) => v.res === shape) && (e.resVariants?.length ?? 0) < 3) {
+        (e.resVariants ??= []).push({ res: shape, samples: samplesOf(resJson) });
       }
+    } else if (o.responseText && e.res === undefined) {
+      e.res = "non-json";
     }
     this.calls.set(key, e);
   }

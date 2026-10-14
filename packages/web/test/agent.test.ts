@@ -429,6 +429,40 @@ describe("what the recorder keeps of values", () => {
     expect(on.calls["PUT reimbursementapi-prod/api/reimbursements/v2/{guid}"]!.samples).toMatchObject({ itemAmount: 25, CostPerItem: 10, Quantity: 2, AdditionalCosts: 5, vendorName: "Made Up Shop" });
   });
 
+  it("never samples a field that holds a person's name, even one that sounds like a setting", async () => {
+    const r = make();
+    await r.agent.start();
+    r.fromApp({ type: "stepup-record", on: true, values: true });
+    r.agent.observed({
+      via: "fetch", method: "POST", url: "https://commentapi-prod.stepupforstudents.org/api/comments/search", status: 200, ms: 3,
+      requestBody: JSON.stringify({ Filters: { InternalOnly: false } }),
+      responseText: JSON.stringify({ Results: [{ SourceEntityName: "Pat Example", PersonName: "Pat Example", StudentName: "Kid Example", CreatedByName: "Staff Person", ProviderName: "Shop", DBAName: "Shop", Name: "Pat", ReasonCode: "14", CommentType: "External" }] }),
+    });
+    r.fromApp({ type: "stepup-report" });
+    const text = JSON.stringify(r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"]);
+    for (const name of ["Pat Example", "Kid Example", "Staff Person", "Shop"]) expect(text).not.toContain(name);
+    expect(text).toContain('"ReasonCode":"14"');
+  });
+
+  it("keeps each distinct shape of a call, so a save before and after an item are both seen", async () => {
+    const r = make();
+    await r.agent.start();
+    r.fromApp({ type: "stepup-record", on: true, values: true });
+    const url = "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/v2/0f8fad5b-d9cb-469f-a165-70867728950e";
+    const put = (lineItems: unknown[]) => r.agent.observed({ via: "fetch", method: "PUT", url, status: 200, ms: 3, requestBody: JSON.stringify({ Id: "x", externalStatus: "Draft", lineItems }), responseText: JSON.stringify({ id: "x", lineItems }) });
+    put([]);
+    put([{ itemAmount: 25, Quantity: 2, CostPerItem: 10 }]);
+    put([{ itemAmount: 30, Quantity: 3, CostPerItem: 10 }]);
+    r.fromApp({ type: "stepup-report" });
+    const e = (r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { calls: Record<string, { n: number; req?: string; reqVariants?: Array<{ req: string; samples?: Record<string, unknown> }>; resVariants?: unknown[] }> }).calls["PUT reimbursementapi-prod/api/reimbursements/v2/{guid}"]!;
+    expect(e.n).toBe(3);
+    expect(e.req).toBe("{Id:string,externalStatus:string,lineItems:[]}");
+    expect(e.reqVariants).toHaveLength(1);
+    expect(e.reqVariants![0]!.req).toContain("lineItems:[1x{CostPerItem:number,Quantity:number,itemAmount:number}]");
+    expect(e.reqVariants![0]!.samples).toMatchObject({ itemAmount: 25, Quantity: 2, CostPerItem: 10 });
+    expect(e.resVariants).toHaveLength(1);
+  });
+
   it("notes uploads to storage that only the browser's own timeline sees, without file names or signatures", async () => {
     const r = make();
     await r.agent.start();

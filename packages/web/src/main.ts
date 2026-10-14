@@ -1569,10 +1569,31 @@ function bookmarkletPanel(): string {
     <p class="row"><button id="close-bookmarklet">Close</button></p></section>`;
 }
 
+/** The calls worth reading when building filing and learning from them; everything else is only counted in the short report. */
+const INTERESTING_CALL = /reimbursementapi-prod\/api\/(reimbursements|categories|documents-sasuri|sasuri|preauthorization)|blob\.core\.windows|providerapi-prod\/api\/(vendors|businesssummary)|infrastructureapi-prod\/api\/(programs|balancecheck)|commentapi|personapi-prod\/api\/guardian\/\{guid\}\/studentScholarship/i;
+
+/** The short version of a recording: only the calls above, and without their (long) response shapes unless they write or are small. */
+function shortReport(r: RecordingReport): unknown {
+  const calls: Record<string, unknown> = {};
+  let omitted = 0;
+  for (const [k, v] of Object.entries(r.calls)) {
+    if (!INTERESTING_CALL.test(k)) {
+      omitted++;
+      continue;
+    }
+    // A big list response (hundreds of reimbursements) is described once elsewhere; its request is what matters here.
+    const { res, kb, ...rest } = v;
+    calls[k] = /^(PUT|DELETE|POST) .*(reimbursements\/v2|documents-sasuri|categories\/search|vendors\/search|balancecheck|comments)/i.test(k) || (kb ?? 0) <= 30 ? v : rest;
+    void res;
+  }
+  return { ...r, calls, omittedCalls: omitted };
+}
+let recordingShort = true;
+
 function agentSection(): string {
   const connected = Boolean(agentWin && !agentWin.win.closed);
   const known = `${Object.keys(learned.categories.categories).length} categories, ${Object.keys(learned.categories.types).length} types, ${Object.keys(learned.categories.details).length} details and ${Object.keys(learned.vendors).length} providers are known.`;
-  const report = recordingReport ? esc(JSON.stringify(recordingReport, null, 1)) : "";
+  const report = recordingReport ? esc(JSON.stringify(recordingShort ? shortReport(recordingReport) : recordingReport, null, 1)) : "";
   return `<h4>StepUp connection</h4>
     <p class="note">${connected ? "A StepUp page is connected: while it stays open, this app learns from what you do there." : "No StepUp page is connected. Click the bookmark on StepUp's Dashboard."} ${esc(known)}</p>
     ${connected ? `<p class="row">${recordingOn
@@ -1580,7 +1601,7 @@ function agentSection(): string {
       : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>
          <br><button data-agent="record-values">Record, keeping what I type into an item</button> <small>(use made-up amounts, dates and names: it keeps those fields' values so the arithmetic can be learned)</small>`}</p>` : ""}
     ${report ? `<p class="note">This is only the shape of the calls. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${report}</textarea>
-      <p class="row"><button data-agent="copy">Copy</button></p>` : ""}`;
+      <p class="row"><button data-agent="copy">Copy</button> <button data-agent="short-toggle">${recordingShort ? "Show everything" : "Show the short version"}</button> <small>${report.length.toLocaleString()} characters shown</small></p>` : ""}`;
 }
 
 function pendingStepUpBanner(): string {
@@ -3117,8 +3138,9 @@ root.addEventListener("click", async (ev) => {
     if (what === "record-on" || what === "record-values") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true, values: what === "record-values" }); }
     else if (what === "record-off") { toAgent({ type: "stepup-record", on: false }); toAgent({ type: "stepup-report" }); recordingOn = false; }
     else if (what === "report") toAgent({ type: "stepup-report" });
+    else if (what === "short-toggle") recordingShort = !recordingShort;
     else if (what === "copy" && recordingReport) {
-      try { await navigator.clipboard.writeText(JSON.stringify(recordingReport, null, 1)); status = "Copied."; } catch { status = "Your browser would not let this page copy; select the text and copy it."; }
+      try { await navigator.clipboard.writeText(JSON.stringify(recordingShort ? shortReport(recordingReport) : recordingReport, null, 1)); status = "Copied."; } catch { status = "Your browser would not let this page copy; select the text and copy it."; }
     }
     render();
   } else if (t.id === "stepup-result-close") {

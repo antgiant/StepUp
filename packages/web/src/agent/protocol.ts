@@ -27,5 +27,5 @@ export interface RecordingReport {
   startedAt?: string;
   loads: Array<{ at: string; page: string }>;
   pages: string[];
-  calls: Record<string, { n: number; via: string[]; status: number[]; ms?: number; kb?: number; req?: string; res?: string; headers?: string[]; bytes?: number; samples?: Record<string, string | number | boolean | null>; origins?: Record<string, string> }>;
+  calls: Record<string, { n: number; via: string[]; status: number[]; ms?: number; kb?: number; req?: string; res?: string; headers?: string[]; bytes?: number; samples?: Record<string, string | number | boolean | null>; origins?: Record<string, string>; /** Other request shapes seen for the same call (for example a save with an item). */ reqVariants?: Array<{ req: string; origins?: Record<string, string>; samples?: Record<string, string | number | boolean | null> }>; resVariants?: Array<{ res: string; samples?: Record<string, string | number | boolean | null> }> }>;
 }

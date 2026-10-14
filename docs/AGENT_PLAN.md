@@ -112,6 +112,25 @@ and pages 20 at a time; `vendors/search` is the full list (request: the standard
 unfinished draft's status word is **`Draft`**. A student's `scholarships[]` carries `programName`, `programYear`, `status`
 (`Funded`), **`awardAmount` and `fundedAmount`**: the award per year, so awards need not be typed at all.
 
+### The fifth recording (values mode), what it settled
+
+- **The balance request is buildable by the agent.** `balancecheck/bulk/details` takes `{ "<student sequence number>":
+  ["<internal program id>", ...] }`: the keys are `StudentSequenceNumber` values and the strings are `InternalProgramId`
+  values, both taken from the reimbursements list (distinct program ids per student). The agent can therefore ask for
+  balances itself on a click, instead of waiting for the Dashboard to.
+- **Program ids need no `programs/search`.** A new draft's `programId` and `internalProgramId` equal the student's
+  scholarship `internalProgramId`; `guardianId`, `guardianSequenceNumber`, `studentId` and `studentSequenceNumber` equal the
+  same fields on any earlier reimbursement of that student in the list (or the student/guardian records).
+- **Comments are fetched by guardian**: `comments/search` with `Filters.SourceEntityId` = the guardian id and
+  `InternalOnly: false` returns every external comment (`ReasonCode`, `ReasonDescription`, `CommentText`,
+  `ParentRecordSequenceNumber`, `CommentType: "External"`). A comment belongs to a reimbursement through
+  `ParentRecordSequenceNumber`. (C4 can be built on this.)
+- **A privacy slip, fixed:** a comment's `SourceEntityName` is the guardian's own name and had been whitelisted as a
+  "setting". It, and every name-like field, is now never sampled, with a test. Reports before this build may contain it.
+- The paste of this recording was cut off at the chat's size limit inside the `DELETE` call, which is where the item values
+  are. The report now has a **short version** (only calls that matter for filing and learning, response shapes dropped for
+  big lists) and keeps **every distinct shape** of a call, so a save before and after an item are both there.
+
 ### Next recording (needed before an item can be written)
 
 Turn on **Record, keeping what I type into an item** and enter made-up values, so the field arithmetic is learned:
