@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STEPUP_ORIGIN, bookmarkletCode, bookmarkletHref, isStepUpHello, stepUpListFrom } from "../src/stepUpBridge.js";
+import { BOOKMARKLET_FILE, STEPUP_ORIGIN, bookmarkletScript, isStepUpHello, loaderCode, loaderHref, stepUpListFrom } from "../src/stepUpBridge.js";
 
 const APP = "https://app.example";
 const SCOPE = "5bd9fe13-76ed-4dbb-b8c3-7811dbf16276/access_as_user";
@@ -12,7 +12,7 @@ interface Setup {
   appAnswers?: boolean;
 }
 
-/** Runs the bookmarklet's real source against a pretend StepUp page. */
+/** Runs the served script's real source against a pretend StepUp page, started the way the loader starts it. */
 async function run(setup: Setup) {
   const store = new Map<string, string>();
   (setup.tokens ?? []).forEach((t, i) =>
@@ -33,6 +33,7 @@ async function run(setup: Setup) {
   let opened: unknown[] | undefined;
   const requests: Array<{ url: string; init: { headers: Record<string, string>; body: string } }> = [];
   const document = {
+    currentScript: { src: `${APP}/${BOOKMARKLET_FILE}?v=123` },
     body: { appendChild: (d: { textContent: string }) => toasts.push(d.textContent) },
     createElement: () => ({ style: {}, textContent: "", remove() {} }),
   };
@@ -41,14 +42,14 @@ async function run(setup: Setup) {
     requests.push({ url, init });
     return { ok: (setup.fetchStatus ?? 200) < 300, status: setup.fetchStatus ?? 200, json: async () => setup.fetchBody ?? { Results: [{ Id: "r1" }, { Id: "r2" }] } };
   };
-  const fn = new Function("sessionStorage", "window", "document", "fetch", "addEventListener", "removeEventListener", `return ${bookmarkletCode(APP)}`);
+  const fn = new Function("sessionStorage", "window", "document", "fetch", "addEventListener", "removeEventListener", `return ${bookmarkletScript()}`);
   await fn(sessionStorage, window, document, fetchFn, (_: string, l: (e: unknown) => void) => listeners.push(l), (_: string, l: (e: unknown) => void) => listeners.splice(listeners.indexOf(l), 1));
   return { toasts, posted, opened, requests };
 }
 
 const soon = Math.floor(Date.now() / 1000) + 3000;
 
-describe("the bookmarklet", () => {
+describe("the bookmarklet script", () => {
   it("reads the reimbursement token, asks for the list as the dashboard does, and sends only the list", async () => {
     const r = await run({ tokens: [{ target: "other-api/access_as_user", expiresOn: soon }, { target: SCOPE, expiresOn: soon, claims: { scholar_personId: "person-9" } }] });
     expect(r.opened).toEqual([`${APP}/#stepup-import`, "stepup-helper"]);
@@ -88,11 +89,40 @@ describe("the bookmarklet", () => {
     expect(r.posted.some((p) => (p as { type: string }).type === "stepup-list")).toBe(false);
     expect(r.toasts.at(-1)).toMatch(/StepUp answered 401/);
   });
+});
 
-  it("is a javascript: link that decodes back to the same source", () => {
-    const href = bookmarkletHref(APP);
+describe("the loader", () => {
+  it("finds the app from its own address, so the same file works on any host", async () => {
+    const r = await run({ tokens: [{ target: SCOPE, expiresOn: soon, claims: { scholar_personId: "person-3" } }] });
+    expect(r.opened).toEqual([`${APP}/#stepup-import`, "stepup-helper"]);
+    expect(JSON.parse(r.requests[0]!.init.body).Filters.GuardianId).toBe("person-3");
+  });
+
+  it("asks to be started from its bookmark when it has no address to go by", () => {
+    const alerts: string[] = [];
+    new Function("document", "alert", `return ${bookmarkletScript()}`)({ currentScript: null }, (m: string) => alerts.push(m));
+    expect(alerts[0]).toMatch(/start this from its bookmark/);
+  });
+
+  it("the loader adds the app's current script to the page, and says so if it cannot load", () => {
+    const added: Array<{ src: string; onerror?: () => void }> = [];
+    const alerts: string[] = [];
+    const document = {
+      createElement: () => ({ src: "" } as { src: string; onerror?: () => void }),
+      head: { appendChild: (el: { src: string; onerror?: () => void }) => added.push(el) },
+    };
+    new Function("document", "alert", `return ${loaderCode(`${APP}/sub/`)}`)(document, (m: string) => alerts.push(m));
+    expect(added).toHaveLength(1);
+    expect(added[0]!.src).toMatch(new RegExp(`^${APP}/sub/${BOOKMARKLET_FILE.replace(".", "\\.")}\\?v=\\d+$`));
+    added[0]!.onerror?.();
+    expect(alerts[0]).toMatch(/could not be loaded/);
+  });
+
+  it("is a javascript: link that decodes back to the same source, and stays small", () => {
+    const href = loaderHref(APP + "/");
     expect(href.startsWith("javascript:")).toBe(true);
-    expect(decodeURIComponent(href.slice("javascript:".length))).toBe(bookmarkletCode(APP));
+    expect(decodeURIComponent(href.slice("javascript:".length))).toBe(loaderCode(APP + "/"));
+    expect(loaderCode("https://stepup.example/").length).toBeLessThan(500);
   });
 });
 

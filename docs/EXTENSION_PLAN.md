@@ -75,6 +75,12 @@ remaining spikes are about the wizard (value-setting, file upload, trusted click
 The **bookmarklet is built** (`packages/web/src/stepUpBridge.ts`): it does exactly the above and hands only the list to the
 web app by `postMessage` (hello/ready handshake, origin-checked on both sides, confirmation before anything is saved). It
 is the template for the extension's status capture.
+It is served as `stepup-bookmarklet.js` (a Vite plugin emits it from the same source) and people keep a tiny loader bookmark
+that adds that script to StepUp's page on each click, so updates need no new bookmark. Trade-off, stated in the UI: whoever
+controls this site controls what runs on StepUp's page. The loader is the only bookmarklet option; a self-contained,
+never-changing one was built and then removed by the owner's decision, to be revisited only if someone asks for it.
+StepUp sends no Content-Security-Policy (header or meta) today; if that changes the loader reports it and the extension
+is the fallback.
 
 Unknowns that only a logged-in human session can answer are §5 (Phase 0). Nothing in later phases may be started on a
 guess about them.

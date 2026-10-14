@@ -31,12 +31,10 @@ export const isStepUpHello = (origin: string, data: unknown): boolean =>
   origin === STEPUP_ORIGIN && Boolean(data) && typeof data === "object" && (data as { type?: unknown }).type === "stepup-hello";
 
 /**
- * The bookmarklet's source for an app served from `appOrigin`. Plain JavaScript on purpose: it is read by people before
- * they trust it, and it must not depend on anything this app's bundler does to code.
+ * What the bookmarklet does once it is running on StepUp's page. Needs `APP` (this app's origin, for postMessage) and `HOME`
+ * (this app's address, to open it). Plain JavaScript on purpose: it must not depend on anything this app's bundler does to code.
  */
-export function bookmarkletCode(appOrigin: string): string {
-  return `(async()=>{
-const APP=${JSON.stringify(appOrigin)},SCOPE=${JSON.stringify(SCOPE)},API=${JSON.stringify(API)};
+const BODY = `const SCOPE=${JSON.stringify(SCOPE)},API=${JSON.stringify(API)};
 const say=m=>{const d=document.createElement("div");d.textContent="Step Up Helper: "+m;d.style.cssText="position:fixed;z-index:2147483647;top:12px;left:50%;transform:translateX(-50%);max-width:80vw;padding:10px 16px;background:#1a2b4c;color:#fff;font:15px system-ui;border-radius:8px;box-shadow:0 4px 16px #0006";document.body.appendChild(d);setTimeout(()=>d.remove(),9000)};
 try{
 let tok;
@@ -46,9 +44,9 @@ if(!tok)return say("I could not find your StepUp sign-in. Open StepUp's Dashboar
 if(tok.expiresOn*1000-Date.now()<60000)return say("Your StepUp sign-in just expired. Reload this page, then click again.");
 let guardian;try{guardian=JSON.parse(atob(tok.secret.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).scholar_personId}catch(e){}
 if(!guardian)return say("StepUp's sign-in did not say who you are, so nothing was fetched.");
-const w=window.open(APP+"/#stepup-import","stepup-helper");
+const w=window.open(HOME+"#stepup-import","stepup-helper");
 if(!w)return say("The pop-up was blocked. Allow pop-ups for StepUp, then click again.");
-say("Reading your reimbursements from StepUp\\u2026");
+say("Reading your reimbursements from StepUp\u2026");
 let ready=false;
 const onMsg=e=>{if(e.origin===APP&&e.source===w&&e.data&&e.data.type==="stepup-ready")ready=true};
 addEventListener("message",onMsg);
@@ -63,9 +61,29 @@ clearInterval(ping);removeEventListener("message",onMsg);
 if(!ready)return say("Step Up Helper did not answer. Open it, sign in, and click again.");
 w.postMessage({type:"stepup-list",results},APP);
 say("Sent "+results.length+" reimbursements to Step Up Helper.");
-}catch(err){say("Something went wrong: "+(err&&err.message||err))}
+}catch(err){say("Something went wrong: "+(err&&err.message||err))}`;
+
+/** The file this app serves as `stepup-bookmarklet.js`: it finds its own address, so the same file works on any host. */
+export const BOOKMARKLET_FILE = "stepup-bookmarklet.js";
+
+export function bookmarkletScript(): string {
+  return `(async()=>{
+const SRC=document.currentScript&&document.currentScript.src;
+if(!SRC){alert("Step Up Helper: start this from its bookmark.");return}
+const APP=new URL(SRC).origin,HOME=new URL("./",SRC).href;
+${BODY}
 })()`;
 }
 
+/**
+ * The bookmark people keep: a few lines that load `stepup-bookmarklet.js` from the app each time it is clicked, so an update
+ * to the app reaches everyone without anyone re-creating a bookmark. Trade-off: whoever controls the app's site controls what
+ * runs on StepUp's page (a self-contained bookmark was dropped; bring it back only if someone asks for it).
+ */
+export function loaderCode(appHome: string): string {
+  const url = new URL(BOOKMARKLET_FILE, appHome).href;
+  return `(()=>{const s=document.createElement("script");s.src=${JSON.stringify(url)}+"?v="+Date.now();s.onerror=()=>alert("Step Up Helper could not be loaded. Check your connection, then click again.");(document.head||document.documentElement).appendChild(s)})()`;
+}
+
 /** The `javascript:` link to drag to the bookmarks bar. */
-export const bookmarkletHref = (appOrigin: string): string => "javascript:" + encodeURIComponent(bookmarkletCode(appOrigin));
+export const loaderHref = (appHome: string): string => "javascript:" + encodeURIComponent(loaderCode(appHome));

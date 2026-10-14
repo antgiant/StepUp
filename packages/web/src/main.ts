@@ -124,7 +124,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
-import { bookmarkletCode, isStepUpHello, stepUpListFrom } from "./stepUpBridge.js";
+import { isStepUpHello, loaderHref, stepUpListFrom } from "./stepUpBridge.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
@@ -1377,17 +1377,18 @@ window.addEventListener("message", (ev) => {
   render();
 });
 
+const appHome = (): string => new URL("./", location.href).href;
+
 function bookmarkletPanel(): string {
   if (!bookmarkletOpen) return "";
-  const code = "javascript:" + encodeURIComponent(bookmarkletCode(location.origin));
   return `<section class="panel"><h3 class="panel-title">StepUp bookmarklet<small>Brings StepUp's list in with one click; works in any desktop browser and in Safari on iPhone and iPad</small></h3>
     <ol>
-      <li>Drag this link to your bookmarks bar: <a href="${esc(code)}" class="btn" draggable="true">Send StepUp's list</a>
+      <li>Drag this link to your bookmarks bar: <a href="${esc(loaderHref(appHome()))}" class="btn" draggable="true">Send StepUp's list</a>
         <small>(or <button id="copy-bookmarklet">copy it</button> and paste it as the address of a new bookmark)</small></li>
       <li>Sign in to StepUp and open its Dashboard.</li>
       <li>Click the bookmark. This app opens, and asks before anything is saved.</li>
     </ol>
-    <p class="note">It reads your StepUp sign-in only inside StepUp's own page, asks StepUp for the same list its dashboard shows, and sends just that list here. Your sign-in never leaves StepUp's page and is never stored. The code is the link itself; paste it into a text editor to read it.</p>
+    <p class="note">The bookmark only loads a small script from this site each time you click it, so updates reach you without making a new bookmark. The script reads your StepUp sign-in only inside StepUp's own page, asks StepUp for the same list its dashboard shows, and sends just that list here. Your sign-in never leaves StepUp's page and is never stored.</p>
     <p class="row"><button id="close-bookmarklet">Close</button></p></section>`;
 }
 
@@ -2859,7 +2860,7 @@ root.addEventListener("click", async (ev) => {
     render();
   } else if (t.id === "copy-bookmarklet") {
     try {
-      await navigator.clipboard.writeText("javascript:" + encodeURIComponent(bookmarkletCode(location.origin)));
+      await navigator.clipboard.writeText(loaderHref(appHome()));
       status = "Copied. Paste it as the address of a new bookmark.";
     } catch {
       status = "Your browser would not let this page copy; drag the link to the bookmarks bar instead.";
