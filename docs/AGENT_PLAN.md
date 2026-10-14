@@ -1,6 +1,7 @@
 # Plan: the bookmarklet agent replaces the command line, and uses what StepUp already knows
 
-Status: **PLAN.** Written 2026-10-14 after the first real recording of StepUp's traffic. Supersedes the "extension" route in
+Status: **PLAN, revised 2026-10-14**: the owner decided against writing to StepUp through its API (see "Decision" in §3 B). Filing is
+form autofill, fail-closed, with a person pressing every Continue and Submit. Supersedes the "extension" route in
 `docs/EXTENSION_PLAN.md` for now (an extension stays a possible later wrapper; §9). Read `CLAUDE.md` first.
 
 > **Public repo rule:** never commit real names, amounts, ids, file names, tokens or captured responses. Fixtures are
@@ -160,11 +161,12 @@ number `TEST-1`, vendor chosen from the list, benefit message `test`, URL `https
 
 ## 2. Principles (non-negotiable)
 
-1. **The agent never submits.** A person presses StepUp's own Submit. The agent may create and fill a draft; it may not
-   take any step that sends it for review. This is enforced in code, not by convention (§4, "the write gate").
+1. **The agent never writes to StepUp and never submits.** It reads, and (later) fills fields of the form the person has open.
+   A person presses every Continue and Submit. "Never writes" is enforced in code (`isAllowedOwnRead`), not by convention.
 2. **The app is the brain, StepUp's page is the hands.** The agent reads the page's own sign-in, never sends it anywhere,
    never stores it, and never touches the refresh token. The app owns all storage and every decision.
-3. **Same calls the page makes, nothing else.** No guessed endpoints. Anything the agent calls was seen in a recording.
+3. **Reads only, and only calls the page itself makes.** No guessed endpoints; anything the agent requests was seen in a
+   recording, and extra reads of its own are off unless the owner turns them on.
 4. **Visible and reversible.** Every write to StepUp is announced on the page, recorded in the ledger (History), and
    limited to drafts the agent itself created and can name by id.
 5. **Shape-checked.** A StepUp response that no longer looks right stops the run with a message; nothing is written from it.
@@ -188,38 +190,42 @@ The agent now records request bodies and header names. Needed, on a throwaway dr
 Output: a scrubbed shapes report, kept as `docs/fixtures/stepup-shapes-2026-10.md` (field names and types only).
 Acceptance: every field the CLI's `fillItemDetails` sets has a named counterpart in a request body.
 
-### B. Direct filing: "Fill the draft for me" (L) — **milestones M2–M4**
+### B. Filing: form autofill, fail-closed (L) — **milestones M2–M4**
 
-Instead of clicking through the form (Playwright's job in the CLI), the agent makes the page's own calls, then hands the
-draft to the person at the Summary step to check and submit.
+> **Decision (2026-10-14, owner):** do **not** write to StepUp through its API. StepUp changes this form every few weeks or
+> months; a draft written by calls could be accepted and still be wrong (a new required field, a changed rule), and
+> automated writes are the more worrying thing for a ban or a terms-of-use problem. A form that refuses input fails
+> safely. So filing is **autofill of StepUp's own form, on the page the person has open**, and when anything is not exactly
+> as expected it **does nothing and says so**.
 
-| Step | What it does | Replaces (CLI) |
+The recordings made so far are kept as knowledge (§1 and the tables above) and are used only to **read and verify**, never to
+write. `isAllowedOwnRead` (agent.ts) makes this a property of the code: the agent can make only a short list of known reads,
+and a test fails if a write, an upload, a delete or a submit path is ever allowed.
+
+| Step | What it does | How it stays safe |
 |---|---|---|
-| B1 draft lifecycle | create a draft for a student; read it back; delete one the agent made | `selectStudent`, `ensureOnNewReimbursementForm`, `draftTracker` |
-| B2 receipt upload | request storage addresses, upload the file (≤ 5 MB, from the app), record it on the draft | `uploadFile` |
-| B3 items | write one line item per ledger item: category ids, amounts, tax, dates, vendor/provider, benefit message, URL | `fillItemDetails`, `autoCheckDetectedItems` |
-| B4 verify | read the draft back and compare with the plan: item count, each amount, total | `readSummaryTotal` |
-| B5 hand-off | send the page to `…/SubmitReimbursement/{id}/5`; the person reviews and submits | `waitForStepChange`, summary pause |
-| B6 record | on seeing the submission (the page's own call and the next list), write reimbursement # and line numbers to the ledger | `readReimbursementId`, `markSubmitted` |
+| B1 recognise | Identify which wizard step is on screen: URL pattern plus a signature of expected labels, placeholders and ids (from the CLI's `reimbursementFlow.ts`: student select, upload input, item fields) | If the signature does not match exactly, stop: "StepUp's form has changed here: <what is different>". Nothing is touched |
+| B2 fill | Put the plan's values into the fields of the **current step only**, one item at a time, when the person asks (a button in the app or on a small panel on the page) | Only fields the signature names; never a button that moves on; never Submit |
+| B3 read back | After filling, read every field back from the page and compare with what was meant | Any difference stops the run and shows both values |
+| B4 verify the save | When the person presses Continue, StepUp's own save is observed (read-only) and its body compared with the plan: amount, quantity, category ids, dates | A mismatch is shown at once, before the person goes on |
+| B5 hand over | The person reviews and presses StepUp's Continue and Submit. The agent only reports "filled step 3, matches the plan" | Human-paced, one step at a time, no background work |
+| B6 record | When the person has submitted, the next list read (their click) brings the reimbursement number and line numbers into the ledger | Nothing is written to StepUp; the ledger learns by reading |
 
-Inputs come from existing shared code: `planSubmissions` groups items per purchase and child; `claims`/`drafts`/`record`
-in `shared/submit` already model claiming, resuming and recording. The app sends the receipt bytes (it holds the storage
-token) and the plan; the agent returns progress, then the verified draft.
+Uploading a receipt is the one step that may not be scriptable (a file chooser needs a person's action in some browsers).
+If it is not, the app shows which receipt to choose and the person chooses it; everything else still applies.
 
-**The write gate.** All StepUp writes go through one function with an allow-list of (method, path pattern) pairs taken from
-the recording: create draft, save draft, storage-address requests, blob upload, delete a draft whose id the agent created
-in this session or recorded as its own. Anything else throws. A test fails if a path that can submit is ever added, and a
-second test asserts the agent module never contains a call to a submit endpoint.
+**Spikes that decide what B2 can do** (Phase 0, `docs/EXTENSION_PLAN.md` §5, 5–7), each on a throwaway draft with the
+owner present: are scripted values accepted by Blazor's and Radzen's controls (text, number, date, the student and category
+dropdowns); can a file be attached by script; does StepUp ignore anything that is not a real click. A control that does not
+pass is left for the person, and the app says so.
 
-**Dry run.** Every filing step can run in "show me" mode: the requests it would send are built and displayed, none sent.
-Used first against the fixtures, then live on a throwaway draft.
+**What the form map is for.** Alongside the network recorder there will be a **form map**: on request, the labels, ids,
+placeholders and control types of the current step (never values), so the signature in B1 is built from the real page and
+can be re-checked whenever StepUp changes.
 
-**Fallback.** If StepUp rejects a draft written this way (server-side checks the page does in the browser, OCR linkage,
-duplicate-document hashes), the remaining option is to drive the form's controls from the page. That is the original
-Phase 0 spike set (`docs/EXTENSION_PLAN.md` §5) and is only started if B3 fails its live test.
-
-Acceptance (M4): a ledger purchase with two items is filled into a draft whose totals match, the page opens at Summary
-with everything populated, the person submits, and the ledger shows the reimbursement # and line numbers without any CLI.
+Acceptance (M4): on a throwaway draft, a ledger purchase with two items is filled step by step; each step reads back equal;
+StepUp's own saves match the plan; a deliberately changed label makes the run stop and say what changed; and nothing was
+sent by the agent except the reads it is allowed.
 
 ### C. Use what StepUp already knows (M, parallel to B, read-only so low risk)
 
@@ -275,9 +281,9 @@ equivalents), the Excel workbook write-back (decision D1), and `.cache` handling
 |---|---|---|
 | **M0** | A: second recording, scrubbed shapes kept | owner records one walkthrough |
 | **M1** | D: connection state, reconnect, update notice; vendors learned from `vendors/search` verified in a real session | owner confirms providers appear in `_stepup-cache` |
-| **M2** | B1–B2 behind the write gate, dry-run first, then live on a throwaway draft | draft appears in StepUp, receipt attached |
-| **M3** | B3–B4: items written and verified against the plan | totals match on a real receipt |
-| **M4** | B5–B6: hand-off and recording of the submission | one real filing end to end |
+| **M2** | B1 + B3: recognise a step, and read back; the form map | owner records the form map on a throwaway draft |
+| **M3** | B2 for the controls the spikes pass (fill, then read back) | spikes 5–7 pass or are scoped |
+| **M4** | B4–B6: verify StepUp's own save against the plan; record the submission by reading | one real filing, person pressing every button |
 | **M5** | C1–C3 as chosen; E: retire the CLI | owner uses it for a full filing round |
 
 C1–C4 can be interleaved after M1 whenever B is waiting on a recording or a test.
@@ -297,7 +303,7 @@ C1–C4 can be interleaved after M1 whenever B is waiting on a recording or a te
 
 | Risk | Mitigation |
 |---|---|
-| StepUp rejects or silently mishandles API-written drafts | dry run, verify-by-readback (B4), fallback to form driving |
+| StepUp changes the form (every few weeks to months) | recognise by signature and stop (B1); read back (B3); verify the save (B4); the form map re-checks the page |
 | StepUp changes endpoints or shapes without notice | shape checks, one table of patterns, recorder to re-learn quickly |
 | A write goes to the wrong draft or student | only drafts created by this run or recorded as ours; ids shown on the page; delete never touches others |
 | Token expires mid-run (60 min) | re-read from storage before each phase; stop cleanly and resume from the draft record |
@@ -309,12 +315,12 @@ C1–C4 can be interleaved after M1 whenever B is waiting on a recording or a te
 ## 7. Decisions needed from the owner
 
 - **D1 Excel write-back**: drop it (recommended). The web already overlays `_stepup` on Excel years.
-- **D2 API filing**: comfortable with the agent making the page's own draft calls instead of driving the form? It is a
-  different character of automation from Playwright clicking, though it uses the same sign-in and calls.
+- **D2 API filing: decided, no** (2026-10-14). Filing is form autofill, fail-closed; the agent makes reads only.
 - **D3 Which of C1–C6** to take (recommended: C1, C2, C3; C4 if reasons matter; C5/C6 later).
 - **D4 Learned data location**: `_stepup-cache` in the workspace (current) vs. sent as a prefilled GitHub issue.
 - **D5 Auto-apply**: keep "confirm once per session"?
-- **D6 Throwaway drafts**: permission to create and delete drafts on the real account for testing.
+- **D6 Throwaway drafts**: permission to create and abandon drafts on the real account for testing the autofill (a person
+  creates and abandons them with StepUp's own buttons; the agent only fills).
 
 ## 8. Definition of done for "the CLI is retired"
 

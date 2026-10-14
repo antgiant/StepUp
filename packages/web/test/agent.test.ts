@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { StepUpAgent, signatureOf, type AgentHost, type AppWindow } from "../src/agent/agent.js";
+import { StepUpAgent, isAllowedOwnRead, signatureOf, type AgentHost, type AppWindow } from "../src/agent/agent.js";
 import { observeTraffic } from "../src/agent/observe.js";
 import { findAccessToken, REIMBURSEMENT_SCOPE } from "../src/agent/token.js";
 import { shapeOf, normalizeUrl } from "../src/agent/recorder.js";
@@ -21,6 +21,8 @@ interface Setup {
   appAnswers?: boolean;
   /** The app also says what it already knows right after "ready" (it does once its workspace is open). */
   appCache?: { lastSyncAt: number };
+  /** Whether the app has turned on the agent's own extra reads (it is off by default). */
+  activeReads?: boolean;
   fetchStatus?: number;
   fetchBody?: unknown;
   handler?: (url: string, body: unknown) => unknown;
@@ -42,6 +44,7 @@ function make(setup: Setup = {}) {
       sent.push({ data: data as never, origin });
       if ((data as { type: string }).type === "stepup-hello" && setup.appAnswers !== false) {
         deliver({ origin: APP, source: popup, data: { type: "stepup-ready" } });
+        if (setup.activeReads !== undefined) deliver({ origin: APP, source: popup, data: { type: "stepup-settings", activeReads: setup.activeReads } });
         if (setup.appCache) deliver({ origin: APP, source: popup, data: { type: "stepup-cache", categories: { lastSyncAt: setup.appCache.lastSyncAt, categories: {}, types: {}, details: {}, partnerCodes: {} } } });
       }
     },
@@ -194,6 +197,7 @@ describe("learning from the page's own requests", () => {
 
   it("expands types and details once a day, using the page's own address and sign-in, and not before the app has said what it knows", async () => {
     const r = make({
+      activeReads: true,
       handler: (url, body) => {
         const ids = body as string[];
         if (/typesbyids/.test(url)) return ids.map((id) => ({ id, name: `Type ${id}`, details: [`d-${id}`], isActive: true, isDeleted: false }));
@@ -278,6 +282,30 @@ describe("what StepUp's page really sends", () => {
   });
 });
 
+describe("what the agent may do by itself", () => {
+  it("by default makes only the one request a click asks for, and watches the rest", async () => {
+    const r = make({ appCache: { lastSyncAt: 0 } });
+    await r.agent.start();
+    expect(r.requests).toHaveLength(1);
+    expect(r.requests[0]!.url).toMatch(/reimbursements\/V2\/search/);
+    // What the page itself loads is still learned from.
+    r.agent.observed(obs("https://reimbursementapi-prod.stepupforstudents.org/api/categories/search", { Results: [{ Id: "c1", Name: "Cat", Types: [], IsActive: true, IsDeleted: false }] }));
+    expect(r.sent.some((s) => s.data["kind"] === "categories")).toBe(true);
+    expect(r.requests).toHaveLength(1);
+  });
+
+  it("will only ever make requests that are reads StepUp's own pages make", () => {
+    const base = "https://reimbursementapi-prod.stepupforstudents.org/api";
+    expect(isAllowedOwnRead("POST", `${base}/reimbursements/V2/search?v=1`)).toBe(true);
+    expect(isAllowedOwnRead("POST", `${base}/categories/typesbyids`)).toBe(true);
+    expect(isAllowedOwnRead("GET", "https://personapi-prod.stepupforstudents.org/api/guardian/0f8fad5b-d9cb-469f-a165-70867728950e/studentScholarship/")).toBe(true);
+    // Anything that creates, changes, uploads, deletes or submits is refused, whatever the path:
+    for (const [m, u] of [["POST", `${base}/reimbursements/v2`], ["PUT", `${base}/reimbursements/v2/0f8fad5b-d9cb-469f-a165-70867728950e`], ["DELETE", `${base}/reimbursements/V2/0f8fad5b-d9cb-469f-a165-70867728950e`], ["POST", `${base}/documents-sasuri`], ["POST", `${base}/reimbursements/v2/submit`], ["PUT", "https://acct.blob.core.windows.net/c/f?sig=x"], ["GET", `${base}/reimbursements/V2/search`], ["POST", "https://evil.example/reimbursements/V2/search"]] as const) {
+      expect(isAllowedOwnRead(m, u), `${m} ${u}`).toBe(false);
+    }
+  });
+});
+
 describe("learning on its own after the click", () => {
   const PROVIDER = "429e3036-53d2-4215-a413-05b7ced0fa9d/access_as_user";
   const handler = (url: string, body: unknown) => {
@@ -290,7 +318,7 @@ describe("learning on its own after the click", () => {
   const tokens = [{ target: REIMBURSEMENT_SCOPE, expiresOn: soon(), claims: { scholar_personId: "person-1" } }, { target: PROVIDER, expiresOn: soon(), claims: {} }];
 
   it("asks for the category tree and the provider list itself, once a day, with the recorded request shape", async () => {
-    const r = make({ tokens, handler, appCache: { lastSyncAt: 0 } });
+    const r = make({ tokens, handler, appCache: { lastSyncAt: 0 }, activeReads: true });
     await r.agent.start();
     const urls = r.requests.map((q) => q.url);
     expect(urls).toContain("https://reimbursementapi-prod.stepupforstudents.org/api/categories/search");
@@ -308,17 +336,17 @@ describe("learning on its own after the click", () => {
   });
 
   it("does not repeat it within a day, or before the app has said what it knows", async () => {
-    const recent = make({ tokens, handler, appCache: { lastSyncAt: Date.now() } });
+    const recent = make({ tokens, handler, appCache: { lastSyncAt: Date.now() }, activeReads: true });
     await recent.agent.start();
     expect(recent.requests.some((q) => /categories\/search/.test(q.url))).toBe(false);
 
-    const unknown = make({ tokens, handler });
+    const unknown = make({ tokens, handler, activeReads: true });
     await unknown.agent.start();
     expect(unknown.requests.some((q) => /categories\/search/.test(q.url))).toBe(false);
   });
 
   it("does not use a response that no longer looks right", async () => {
-    const r = make({ tokens, handler: (url, body) => (/categories\/search/.test(url) ? { Results: [{ Id: 5 }] } : handler(url, body)), appCache: { lastSyncAt: 0 } });
+    const r = make({ tokens, handler: (url, body) => (/categories\/search/.test(url) ? { Results: [{ Id: 5 }] } : handler(url, body)), appCache: { lastSyncAt: 0 }, activeReads: true });
     await r.agent.start();
     expect(r.sent.some((s) => s.data["kind"] === "categories")).toBe(false);
   });
@@ -332,12 +360,13 @@ describe("students and balances", () => {
   it("reads the student list itself after the click, with the person-API sign-in, and sends no private fields", async () => {
     const PERSON = "cb885232-83b3-49bc-99cb-55d5b14c52ae/access_as_user";
     const r = make({
-      tokens: [{ target: REIMBURSEMENT_SCOPE, expiresOn: soon(), claims: { scholar_personId: "person-1" } }, { target: PERSON, expiresOn: soon(), claims: {} }],
+      tokens: [{ target: REIMBURSEMENT_SCOPE, expiresOn: soon(), claims: { scholar_personId: "0f8fad5b-d9cb-469f-a165-70867728950e" } }, { target: PERSON, expiresOn: soon(), claims: {} }],
       handler: (url) => (/studentScholarship/.test(url) ? [student] : listBody()),
+      activeReads: true,
     });
     await r.agent.start();
     const call = r.requests.find((q) => /studentScholarship/.test(q.url))!;
-    expect(call.url).toBe("https://personapi-prod.stepupforstudents.org/api/guardian/person-1/studentScholarship/");
+    expect(call.url).toBe("https://personapi-prod.stepupforstudents.org/api/guardian/0f8fad5b-d9cb-469f-a165-70867728950e/studentScholarship/");
     const msg = r.sent.find((s) => s.data["kind"] === "students")!;
     expect(msg.data["students"]).toEqual([{ sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", isActive: true, programs: ["FES-UA"], scholarships: [{ program: "FES-UA" }] }]);
     expect(JSON.stringify(r.sent)).not.toContain("2012");

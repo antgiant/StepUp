@@ -1430,6 +1430,16 @@ let agentWin: { win: Window; origin: string } | undefined;
 /** True once the person has said yes to a list this session: later lists from the same page are then applied without asking. */
 let agentTrusted = false;
 let recordingOn = false;
+/** Whether the agent may ask StepUp for the category list, providers and students itself. Off unless the person turns it on. */
+const ACTIVE_KEY = "stepup.activeReads";
+let activeReads = ((): boolean => {
+  try {
+    return localStorage.getItem(ACTIVE_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+const sendSettings = (): void => toAgent({ type: "stepup-settings", activeReads });
 let recordingReport: RecordingReport | undefined;
 const learned: { key?: string; loading?: Promise<void>; categories: CategoryCache; vendors: Record<string, VendorEntry>; people: StepUpPeople; dirty: boolean; timer?: ReturnType<typeof setTimeout>; queue: Promise<void> } =
   { categories: emptyCategoryCache(), vendors: {}, people: emptyPeople(), dirty: false, queue: Promise.resolve() };
@@ -1514,6 +1524,7 @@ window.addEventListener("message", (ev) => {
     case "stepup-hello":
       agentWin = { win: ev.source as Window, origin: ev.origin };
       (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
+      sendSettings();
       sendAgentCache();
       if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
       render();
@@ -1595,6 +1606,9 @@ function agentSection(): string {
   const known = `${Object.keys(learned.categories.categories).length} categories, ${Object.keys(learned.categories.types).length} types, ${Object.keys(learned.categories.details).length} details and ${Object.keys(learned.vendors).length} providers are known.`;
   const report = recordingReport ? esc(JSON.stringify(recordingShort ? shortReport(recordingReport) : recordingReport, null, 1)) : "";
   return `<h4>StepUp connection</h4>
+    <p class="note">Asking StepUp for the category list, providers and students itself is <strong>${activeReads ? "on" : "off"}</strong>.
+      ${activeReads ? "About 40 small requests, at most once a day, each one a request StepUp's own pages make." : "Off, the only request this makes itself is the reimbursements list when you click; everything else is learned from what StepUp's page loads while you use it."}
+      <button data-agent="active-toggle">${activeReads ? "Turn off" : "Turn on"}</button></p>
     <p class="note">${connected ? "A StepUp page is connected: while it stays open, this app learns from what you do there." : "No StepUp page is connected. Click the bookmark on StepUp's Dashboard."} ${esc(known)}</p>
     ${connected ? `<p class="row">${recordingOn
       ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
@@ -3139,6 +3153,11 @@ root.addEventListener("click", async (ev) => {
     else if (what === "record-off") { toAgent({ type: "stepup-record", on: false }); toAgent({ type: "stepup-report" }); recordingOn = false; }
     else if (what === "report") toAgent({ type: "stepup-report" });
     else if (what === "short-toggle") recordingShort = !recordingShort;
+    else if (what === "active-toggle") {
+      activeReads = !activeReads;
+      try { localStorage.setItem(ACTIVE_KEY, activeReads ? "1" : "0"); } catch { /* kept for this visit only */ }
+      sendSettings();
+    }
     else if (what === "copy" && recordingReport) {
       try { await navigator.clipboard.writeText(JSON.stringify(recordingShort ? shortReport(recordingReport) : recordingReport, null, 1)); status = "Copied."; } catch { status = "Your browser would not let this page copy; select the text and copy it."; }
     }

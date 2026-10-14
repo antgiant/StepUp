@@ -14,8 +14,13 @@ export type AppToAgent =
   | { type: "stepup-ready" }
   /** What the workspace already knows, so the agent builds on it and keeps to the once-a-day expansion. */
   | { type: "stepup-cache"; categories: CategoryCache }
-  /** Ask the agent to read the student list again now (it does this on every click as well). */
+  /** Ask the agent to read the student list again now (only when active reads are on). */
   | { type: "stepup-refresh-students" }
+  /**
+   * What the agent may do on its own. Off by default: with it off the agent makes exactly one request of its own (the list a
+   * click asks for) and otherwise only watches what StepUp's page itself loads.
+   */
+  | { type: "stepup-settings"; activeReads: boolean }
   | { type: "stepup-record"; on: boolean; /** Also keep the values typed into items; only when the person is entering made-up ones. */ values?: boolean }
   | { type: "stepup-report" };
 

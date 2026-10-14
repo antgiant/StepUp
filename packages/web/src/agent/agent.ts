@@ -50,6 +50,21 @@ const HANDSHAKE_TRIES = 75;
 const HANDSHAKE_MS = 400;
 const QUEUE_LIMIT = 100;
 
+/**
+ * The only requests the agent ever makes itself, and the only methods it may use: reads. Every one is a call StepUp's own
+ * page makes (a search or a plain GET). Anything else throws, so the agent cannot create, change, upload or submit anything;
+ * all writes to StepUp are made by StepUp's own page when a person uses it.
+ */
+const OWN_READS: Array<{ method: "GET" | "POST"; url: RegExp }> = [
+  { method: "POST", url: /^https:\/\/reimbursementapi-prod\.stepupforstudents\.org\/api\/reimbursements\/V2\/search(\?|$)/i },
+  { method: "GET", url: /^https:\/\/personapi-prod\.stepupforstudents\.org\/api\/guardian\/[0-9a-f-]{36}\/studentScholarship\/?(\?[^#]*)?$/i },
+  { method: "POST", url: /^https:\/\/reimbursementapi-prod\.stepupforstudents\.org\/api\/categories\/(search|typesbyids|detailsbyids)(\?[^#]*)?$/i },
+  { method: "POST", url: /^https:\/\/providerapi-prod\.stepupforstudents\.org\/api\/vendors\/search(\?[^#]*)?$/i },
+];
+
+/** Whether a request is one the agent is allowed to make (exported for the tests). */
+export const isAllowedOwnRead = (method: string, url: string): boolean => OWN_READS.some((r) => r.method === method.toUpperCase() && r.url.test(url));
+
 export interface AppWindow {
   postMessage(data: unknown, origin: string): void;
   closed?: boolean;
@@ -96,6 +111,8 @@ export class StepUpAgent {
   readonly recorder: Recorder;
   private lastListSignature: string | undefined;
   private expanding = false;
+  /** Off until the app says so: the agent then only watches the page, plus the one list a click asks for. */
+  private activeReads = false;
   private unlisten: (() => void) | undefined;
   private disposed = false;
   private readonly appOrigin: string;
@@ -138,7 +155,7 @@ export class StepUpAgent {
 
     let results: unknown[] | undefined;
     try {
-      const r = await this.host.fetch(`${API}?v=${this.ticks()}`, {
+      const r = await this.ownRead(`${API}?v=${this.ticks()}`, {
         method: "POST",
         headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` },
         body: JSON.stringify({ Keywords: null, CurrentPage: null, PageSize: null, OrderBy: null, SortOrder: 0, MultiOrderBy: {}, Filters: { GuardianId: token.guardian, ExcludedStatuses: ["Canceled"] }, ApplyDefaultFilters: true, ContextBag: {}, IncludeGlobalSearchTotal: false, SkipCount: false }),
@@ -161,8 +178,10 @@ export class StepUpAgent {
     this.lastListSignature = signatureOf(results);
     this.post({ type: "stepup-list", results });
     say(`Sent ${results.length} reimbursements to Step Up Helper. Switch to its tab to see what changed.`);
-    await this.readStudents(token.guardian);
-    await this.refreshLearned();
+    if (this.activeReads) {
+      await this.readStudents(token.guardian);
+      await this.refreshLearned();
+    }
   }
 
   /**
@@ -197,7 +216,7 @@ export class StepUpAgent {
 
   /** One of StepUp's own calls with the page's sign-in; the parsed body, or undefined when it was refused. */
   private async callApi(url: string, body: unknown, token: StepUpToken): Promise<unknown | undefined> {
-    const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(body) });
+    const r = await this.ownRead(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(body) });
     if (!r.ok) return undefined;
     const json = await r.json();
     this.recorder.noteOwnResponse("POST", url, json);
@@ -209,7 +228,7 @@ export class StepUpAgent {
     const each = async (url: string, ids: string[], merge: (c: CategoryCache, d: unknown) => number): Promise<void> => {
       for (const batch of chunks(ids, CHUNK)) {
         if (this.disposed) return;
-        const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(batch) });
+        const r = await this.ownRead(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(batch) });
         if (r.ok) {
           const json = await r.json();
           this.recorder.noteOwnResponse("POST", url, json);
@@ -229,7 +248,7 @@ export class StepUpAgent {
     const token = findAccessToken(this.host.storage, PERSON_SCOPE);
     if (!token || !tokenFresh(token, this.host.now())) return;
     try {
-      const r = await this.host.fetch(`https://personapi-prod.stepupforstudents.org/api/guardian/${guardian}/studentScholarship/`, {
+      const r = await this.ownRead(`https://personapi-prod.stepupforstudents.org/api/guardian/${guardian}/studentScholarship/`, {
         method: "GET",
         headers: { authorization: `Bearer ${token.secret}` },
       });
@@ -241,6 +260,12 @@ export class StepUpAgent {
     } catch {
       /* not learned now; the dashboard asks for it itself too */
     }
+  }
+
+  /** The one way the agent makes a request of its own: refuses anything that is not a known read. */
+  private async ownRead(url: string, init: RequestInit): Promise<Response> {
+    if (!isAllowedOwnRead(init.method ?? "GET", url)) throw new Error(`The agent does not make this request: ${init.method ?? "GET"} ${url}`);
+    return this.host.fetch(url, init);
   }
 
   private ticks(): string {
@@ -283,9 +308,12 @@ export class StepUpAgent {
         break;
       case "stepup-refresh-students": {
         const t = findAccessToken(this.host.storage);
-        if (t?.guardian) void this.readStudents(t.guardian);
+        if (this.activeReads && t?.guardian) void this.readStudents(t.guardian);
         break;
       }
+      case "stepup-settings":
+        this.activeReads = m.activeReads === true;
+        break;
     }
   }
 
@@ -360,7 +388,7 @@ export class StepUpAgent {
    * in small batches with a pause between them, as the command line always did.
    */
   private async maybeExpand(typesUrl: string, requested: string[]): Promise<void> {
-    if (this.expanding || !this.ready || !this.cacheKnown || !expansionDue(this.categories, this.host.now())) return;
+    if (!this.activeReads || this.expanding || !this.ready || !this.cacheKnown || !expansionDue(this.categories, this.host.now())) return;
     const token = findAccessToken(this.host.storage);
     if (!token || !tokenFresh(token, this.host.now(), 5 * 60_000)) return;
     this.expanding = true;
