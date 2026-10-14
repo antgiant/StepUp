@@ -222,6 +222,57 @@ describe("learning from the page's own requests", () => {
   });
 });
 
+describe("what StepUp's page really sends", () => {
+  it("reads request bodies sent as bytes, and the names (never values) of headers", async () => {
+    const seen: Array<{ requestBody?: string; requestBytes?: number; requestHeaders?: string[]; method: string }> = [];
+    const g = { fetch: (async () => new Response("{}")) as typeof fetch };
+    observeTraffic(g, (x) => seen.push(x));
+    const bytes = new TextEncoder().encode(JSON.stringify({ Filters: { GuardianId: "x" } }));
+    await g.fetch("https://reimbursementapi-prod.stepupforstudents.org/api/a", { method: "POST", body: bytes, headers: { Authorization: "Bearer secret", "Content-Type": "application/json" } });
+    await g.fetch("https://reimbursementapi-prod.stepupforstudents.org/api/b", { method: "PUT", body: new Blob(['["id1"]']) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seen[0]).toMatchObject({ requestBody: '{"Filters":{"GuardianId":"x"}}', requestHeaders: ["authorization", "content-type"] });
+    expect(JSON.stringify(seen)).not.toContain("Bearer secret");
+    expect(seen[1]).toMatchObject({ requestBody: '["id1"]', requestBytes: 7, method: "PUT" });
+  });
+
+  it("measures, rather than reads, a large upload", async () => {
+    const seen: Array<{ requestBody?: string; requestBytes?: number }> = [];
+    const g = { fetch: (async () => new Response("")) as typeof fetch };
+    observeTraffic(g, (x) => seen.push(x));
+    await g.fetch("https://acct.blob.core.windows.net/c/file.pdf?sv=1&sig=abc", { method: "PUT", body: new Uint8Array(2_000_000) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seen[0]!.requestBody).toBeUndefined();
+    expect(seen[0]!.requestBytes).toBe(2_000_000);
+  });
+
+  it("records the shape of a body that arrived as bytes, and a storage upload without its file name or signature", async () => {
+    const r = make();
+    await r.agent.start();
+    r.fromApp({ type: "stepup-record", on: true });
+    r.agent.observed({ via: "fetch", method: "PUT", url: "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/v2/0f8fad5b-d9cb-469f-a165-70867728950e", status: 200, ms: 4, requestBody: JSON.stringify({ lineItems: [{ itemAmount: 12.5, vendorName: "Private Shop" }] }), requestHeaders: ["authorization", "content-type"], responseText: "{}" });
+    r.agent.observed({ via: "fetch", method: "PUT", url: "https://myacct.blob.core.windows.net/receipts/some-private-name.pdf?sv=2024&sig=SECRET", status: 201, ms: 9, requestBytes: 480_000, requestHeaders: ["x-ms-blob-type"], responseText: "" });
+    r.fromApp({ type: "stepup-report" });
+    const rep = r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { calls: Record<string, { req?: string; headers?: string[]; bytes?: number }> };
+    expect(rep.calls["PUT reimbursementapi-prod/api/reimbursements/v2/{guid}"]).toMatchObject({ req: "{lineItems:[1x{itemAmount:number,vendorName:string}]}", headers: ["authorization", "content-type"] });
+    const blob = rep.calls["PUT *.blob.core.windows.net/{path}?sig&sv"];
+    expect(blob).toMatchObject({ headers: ["x-ms-blob-type"], bytes: 480000 });
+    const text = JSON.stringify(rep);
+    for (const secret of ["Private Shop", "some-private-name", "SECRET", "myacct"]) expect(text).not.toContain(secret);
+  });
+
+  it("learns providers from vendors/search, which is what the page uses now", async () => {
+    const r = make();
+    await r.agent.start();
+    r.agent.observed(obs("https://providerapi-prod.stepupforstudents.org/api/vendors/search", { Results: [{ Id: "v1", Name: "Book Shop", DBAName: null }, { Id: "v2", Name: "Legal Name", DBAName: "Trading Name" }, { Id: "v3" }] }, 200, { Filters: {} }));
+    const v = r.sent.find((s) => s.data["kind"] === "vendors")!;
+    expect(v.data["entries"]).toEqual([
+      { id: "v1", businessProfileId: "", name: "Book Shop", categoryIds: [] },
+      { id: "v2", businessProfileId: "", name: "Trading Name", categoryIds: [] },
+    ]);
+  });
+});
+
 describe("recording", () => {
   it("records which calls were made and the names and types of their fields, never values", async () => {
     const r = make();

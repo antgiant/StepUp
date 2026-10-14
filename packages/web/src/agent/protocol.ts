@@ -21,5 +21,5 @@ export interface RecordingReport {
   startedAt?: string;
   loads: Array<{ at: string; page: string }>;
   pages: string[];
-  calls: Record<string, { n: number; via: string[]; status: number[]; ms?: number; kb?: number; req?: string; res?: string }>;
+  calls: Record<string, { n: number; via: string[]; status: number[]; ms?: number; kb?: number; req?: string; res?: string; headers?: string[]; bytes?: number }>;
 }

@@ -53,7 +53,8 @@ export const STEPUP_PATTERNS = {
   categoriesSearch: /reimbursementapi-prod\.stepupforstudents\.org\/api\/categories\/search/i,
   categoryTypes: /reimbursementapi-prod\.stepupforstudents\.org\/api\/categories\/typesbyids/i,
   categoryDetails: /reimbursementapi-prod\.stepupforstudents\.org\/api\/categories\/detailsbyids/i,
-  vendorDropdown: /providerapi-prod\.stepupforstudents\.org\/api\/businesssummary\/getbusinesssummarydropdown/i,
+  /** The provider list behind "Who did you pay?". Older: `getbusinesssummarydropdown`; seen in 2026-10: `vendors/search`. */
+  vendorDropdown: /providerapi-prod\.stepupforstudents\.org\/api\/(?:businesssummary\/getbusinesssummarydropdown|vendors\/search)/i,
 } as const;
 
 interface CategorySearchBody {
@@ -177,16 +178,21 @@ export function categoriesOfRequest(requestText: string, cache: CategoryCache): 
   return [...mentioned].filter((id) => known.has(id));
 }
 
-/** Adds a provider list response to what is known (names are only added; categories are accumulated). Returns the entries that are new or changed. */
+/**
+ * Adds a provider list response to what is known (names are only added; categories are accumulated). Returns the entries
+ * that are new or changed. Handles both responses StepUp has used: the older `{ Id, BusinessProfileId, DBAName }` and the
+ * newer `{ Id, Name, DBAName, ... }` (the display name is the DBA name when there is one).
+ */
 export function mergeVendors(cache: Record<string, VendorEntry>, body: unknown, categoryIds: string[]): VendorEntry[] {
-  const results = (body as { Results?: Array<{ Id: string; BusinessProfileId: string; DBAName: string }> } | null)?.Results;
+  const results = (body as { Results?: Array<{ Id?: string; BusinessProfileId?: string; DBAName?: string | null; Name?: string | null }> } | null)?.Results;
   if (!Array.isArray(results)) return [];
   const touched: VendorEntry[] = [];
   for (const r of results) {
-    if (!r?.Id || !r.DBAName) continue;
+    const name = (r?.DBAName || r?.Name || "").trim();
+    if (!r?.Id || !name) continue;
     const had = cache[r.Id];
     const merged = [...new Set([...(had?.categoryIds ?? []), ...categoryIds])];
-    const next: VendorEntry = { id: r.Id, businessProfileId: r.BusinessProfileId, name: r.DBAName, categoryIds: merged };
+    const next: VendorEntry = { id: r.Id, businessProfileId: r.BusinessProfileId ?? had?.businessProfileId ?? "", name, categoryIds: merged };
     if (!had || had.name !== next.name || (had.categoryIds ?? []).length !== merged.length) touched.push(next);
     cache[r.Id] = next;
   }

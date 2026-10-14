@@ -16,6 +16,8 @@ export function shapeOf(v: unknown, depth = 0): string {
 export function normalizeUrl(u: string, base = "https://x.invalid/"): string {
   try {
     const x = new URL(u, base);
+    // Storage addresses carry file names and signatures: only the kind of call is kept.
+    if (/\.blob\.core\.windows\.net$/i.test(x.host)) return `*.blob.core.windows.net/{path}${x.search ? `?${[...x.searchParams.keys()].sort().join("&")}` : ""}`;
     const path = x.pathname.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "{guid}").replace(/\/\d+/g, "/{n}");
     const q = [...x.searchParams.keys()].filter((k) => k !== "v").sort().join("&");
     return `${x.host.replace(/\.stepupforstudents\.org$/, "")}${path}${q ? `?${q}` : ""}`;
@@ -24,7 +26,7 @@ export function normalizeUrl(u: string, base = "https://x.invalid/"): string {
   }
 }
 
-const OURS = /stepupforstudents\.org/;
+const OURS = /stepupforstudents\.org|\.blob\.core\.windows\.net/;
 const NOISE = /monitor\.azure|applicationinsights/;
 
 /** Records which of StepUp's endpoints the page calls, with the shapes of requests and responses, while switched on. */
@@ -54,6 +56,11 @@ export class Recorder {
     if (!e.via.includes(o.via)) e.via.push(o.via);
     if (!e.status.includes(o.status)) e.status.push(o.status);
     e.ms = o.ms;
+    for (const h of o.requestHeaders ?? []) {
+      e.headers ??= [];
+      if (!e.headers.includes(h)) e.headers.push(h);
+    }
+    if (o.requestBytes !== undefined) e.bytes = o.requestBytes;
     if (o.requestBody && e.req === undefined) {
       try {
         e.req = shapeOf(JSON.parse(o.requestBody));
