@@ -112,6 +112,17 @@ import {
   archiveStepUpList,
   resultsFromSavedList,
   applyStepUpStatuses,
+  applyObservedCategories,
+  categoryCacheFrom,
+  emptyCategoryCache,
+  mergeCategoryCaches,
+  nodesFromCategoryCache,
+  readLearned,
+  writeLearned,
+  CATEGORY_CACHE_FILE,
+  VENDOR_CACHE_FILE,
+  type CategoryCache,
+  type VendorEntry,
   messageOf,
   type ApiLineItem,
   type Finding,
@@ -124,7 +135,8 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
-import { isStepUpHello, loaderHref, stepUpListFrom } from "./stepUpBridge.js";
+import { agentMessageFrom, loaderHref } from "./stepUpBridge.js";
+import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
@@ -1025,6 +1037,7 @@ function attach(next: OpenWorkspace | undefined): void {
       referenceBase = publishedRef;
     }
     void loadYearReference(next);
+    sendAgentCache();
     if (next.carried.children) {
       const pms = next.carried.paymentMethods ? ` and ${next.carried.paymentMethods} payment method(s)` : "";
       status = `Added ${next.carried.children} student(s)${pms} from last year.`;
@@ -1401,15 +1414,120 @@ function stepUpResultPanel(): string {
 let pendingStepUp: unknown[] | undefined;
 let bookmarkletOpen = false;
 
-window.addEventListener("message", (ev) => {
-  if (isStepUpHello(ev.origin, ev.data)) {
-    (ev.source as Window | null)?.postMessage({ type: "stepup-ready" }, ev.origin);
-    return;
+// ---- the agent running on StepUp's page (see src/agent): lists, what it learned, and what it recorded
+
+let agentWin: { win: Window; origin: string } | undefined;
+/** True once the person has said yes to a list this session: later lists from the same page are then applied without asking. */
+let agentTrusted = false;
+let recordingOn = false;
+let recordingReport: RecordingReport | undefined;
+const learned: { key?: string; loading?: Promise<void>; categories: CategoryCache; vendors: Record<string, VendorEntry>; dirty: boolean; timer?: ReturnType<typeof setTimeout>; queue: Promise<void> } =
+  { categories: emptyCategoryCache(), vendors: {}, dirty: false, queue: Promise.resolve() };
+
+function toAgent(m: AppToAgent): void {
+  if (!agentWin || agentWin.win.closed) return;
+  try {
+    agentWin.win.postMessage(m, agentWin.origin);
+  } catch {
+    agentWin = undefined;
   }
-  const list = stepUpListFrom(ev.origin, ev.data);
-  if (!list) return;
-  pendingStepUp = list;
+}
+
+/** What the workspace already knows from earlier sessions (kept in `_stepup-cache` beside the year folders). */
+function loadLearned(): Promise<void> {
+  const ws = workspace;
+  if (!ws) return Promise.resolve();
+  const key = keyOf(ws.pointer);
+  if (learned.key === key && learned.loading) return learned.loading;
+  learned.key = key;
+  learned.categories = emptyCategoryCache();
+  learned.vendors = {};
+  learned.loading = (async () => {
+    try {
+      learned.categories = categoryCacheFrom(await readLearned(storage, ws.driveId, ws.pointer.rootId, CATEGORY_CACHE_FILE));
+      learned.vendors = (await readLearned<Record<string, VendorEntry>>(storage, ws.driveId, ws.pointer.rootId, VENDOR_CACHE_FILE)) ?? {};
+    } catch {
+      /* nothing kept yet, or not readable: start fresh */
+    }
+  })();
+  return learned.loading;
+}
+
+function sendAgentCache(): void {
+  if (!agentWin || !workspace) return;
+  void loadLearned().then(() => toAgent({ type: "stepup-cache", categories: learned.categories }));
+}
+
+/** Writes what was learned a few seconds after the last news, so browsing StepUp does not write on every click. */
+function scheduleLearnedWrite(): void {
+  learned.dirty = true;
+  clearTimeout(learned.timer);
+  learned.timer = setTimeout(() => {
+    const ws = workspace;
+    if (!ws || !learned.dirty) return;
+    learned.dirty = false;
+    void (async () => {
+      try {
+        await writeLearned(storage, ws.driveId, ws.pointer.rootId, CATEGORY_CACHE_FILE, learned.categories);
+        await writeLearned(storage, ws.driveId, ws.pointer.rootId, VENDOR_CACHE_FILE, learned.vendors);
+      } catch {
+        learned.dirty = true; // try again with the next piece of news
+      }
+    })();
+  }, 4000);
+}
+
+async function takeInLearnedCategories(cache: unknown): Promise<void> {
+  await loadLearned();
+  learned.categories = mergeCategoryCaches(learned.categories, categoryCacheFrom(cache));
+  scheduleLearnedWrite();
+  // The open ledger year also records new categories and changes (what the command line's ledger sync always did).
+  const base = referenceBase ?? publishedRef;
+  if (workspace && !workspace.legacy && base) {
+    const r = applyObservedCategories(ledger, base, nodesFromCategoryCache(learned.categories));
+    if (r.added + r.updated > 0) {
+      await save();
+      status = `StepUp's category list taught this year ${r.added} new and ${r.updated} changed categor${r.added + r.updated === 1 ? "y" : "ies"}.`;
+    }
+  }
   render();
+}
+
+window.addEventListener("message", (ev) => {
+  const m = agentMessageFrom(ev.origin, ev.data);
+  if (!m) return;
+  switch (m.type) {
+    case "stepup-hello":
+      agentWin = { win: ev.source as Window, origin: ev.origin };
+      (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
+      sendAgentCache();
+      if (recordingOn) toAgent({ type: "stepup-record", on: true });
+      render();
+      break;
+    case "stepup-list":
+      if (agentTrusted && workspace) void guarded(() => bringInStepUpList(m.results), "Bringing in StepUp's list…");
+      else {
+        pendingStepUp = m.results;
+        render();
+      }
+      break;
+    case "stepup-learned":
+      if (m.kind === "categories") learned.queue = learned.queue.then(() => takeInLearnedCategories(m.cache)).catch(() => undefined);
+      else {
+        learned.queue = learned.queue.then(async () => {
+          await loadLearned();
+          for (const e of m.entries) learned.vendors[e.id] = { id: e.id, businessProfileId: e.businessProfileId, name: e.name, categoryIds: [...new Set([...(learned.vendors[e.id]?.categoryIds ?? []), ...(e.categoryIds ?? [])])] };
+          scheduleLearnedWrite();
+          render();
+        }).catch(() => undefined);
+      }
+      break;
+    case "stepup-recording":
+      recordingReport = m.report;
+      recordingOn = m.report.on;
+      render();
+      break;
+  }
 });
 
 const appHome = (): string => new URL("./", location.href).href;
@@ -1424,7 +1542,21 @@ function bookmarkletPanel(): string {
       <li>Click the bookmark. This app opens, and asks before anything is saved.</li>
     </ol>
     <p class="note">The bookmark only loads a small script from this site each time you click it, so updates reach you without making a new bookmark. The script reads your StepUp sign-in only inside StepUp's own page, asks StepUp for the same list its dashboard shows, and sends just that list here. Your sign-in never leaves StepUp's page and is never stored.</p>
+    ${agentSection()}
     <p class="row"><button id="close-bookmarklet">Close</button></p></section>`;
+}
+
+function agentSection(): string {
+  const connected = Boolean(agentWin && !agentWin.win.closed);
+  const known = `${Object.keys(learned.categories.categories).length} categories, ${Object.keys(learned.categories.types).length} types, ${Object.keys(learned.categories.details).length} details and ${Object.keys(learned.vendors).length} providers are known.`;
+  const report = recordingReport ? esc(JSON.stringify(recordingReport, null, 1)) : "";
+  return `<h4>StepUp connection</h4>
+    <p class="note">${connected ? "A StepUp page is connected: while it stays open, this app learns from what you do there." : "No StepUp page is connected. Click the bookmark on StepUp's Dashboard."} ${esc(known)}</p>
+    ${connected ? `<p class="row">${recordingOn
+      ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
+      : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>`}</p>` : ""}
+    ${report ? `<p class="note">This is only the shape of the calls. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${report}</textarea>
+      <p class="row"><button data-agent="copy">Copy</button></p>` : ""}`;
 }
 
 function pendingStepUpBanner(): string {
@@ -2783,7 +2915,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
+    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.dataset["agent"] !== undefined || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
@@ -2886,7 +3018,17 @@ root.addEventListener("click", async (ev) => {
   } else if (t.id === "stepup-apply") {
     const list = pendingStepUp;
     pendingStepUp = undefined;
+    agentTrusted = true;
     if (list) await guarded(() => bringInStepUpList(list), "Bringing in StepUp's list…");
+  } else if (t.dataset["agent"] !== undefined) {
+    const what = t.dataset["agent"];
+    if (what === "record-on") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true }); }
+    else if (what === "record-off") { toAgent({ type: "stepup-record", on: false }); toAgent({ type: "stepup-report" }); recordingOn = false; }
+    else if (what === "report") toAgent({ type: "stepup-report" });
+    else if (what === "copy" && recordingReport) {
+      try { await navigator.clipboard.writeText(JSON.stringify(recordingReport, null, 1)); status = "Copied."; } catch { status = "Your browser would not let this page copy; select the text and copy it."; }
+    }
+    render();
   } else if (t.id === "stepup-result-close") {
     stepUpResult = undefined;
     render();

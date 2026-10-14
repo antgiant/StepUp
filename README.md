@@ -37,6 +37,7 @@ Most of what used to need `npm run …` is now in the web app's **Advanced** men
 - **Back up this year (zip)**, with or without documents: the `backup` command, as one download with a manifest of SHA-256 hashes.
 - **Ready to file**: the `plan` command, on the Summary tab.
 - **Get the StepUp bookmarklet**: a bookmark that, clicked on StepUp's own Dashboard, reads the list StepUp already shows you and sends it here (asking before anything is saved). The bookmark itself only loads `stepup-bookmarklet.js` from this site, so updates need no new bookmark. Your StepUp sign-in never leaves StepUp's page.
+- **While a StepUp page stays connected** (after a click on the bookmark), the app also learns StepUp's category list and the providers offered in "Who did you pay?", the way the CLI's filing run did, and keeps them in a `_stepup-cache` folder in the workspace. *Advanced → Get the StepUp bookmarklet* shows the connection and can record which calls StepUp makes (field names only), which is how the remaining CLI features get built.
 - **Bring in StepUp's list**: pick a saved copy of StepUp's reimbursements list (the CLI's `.cache/stepup-search-responses.json`, or a raw response) and every year's `_stepup` folder, History and the open year's ledger are brought up to date: the `statuses --from-capture` command, with no login.
 
 What still needs the command line is everything that talks to StepUp itself (filing, live status sync, learning categories and

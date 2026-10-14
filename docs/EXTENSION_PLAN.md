@@ -85,6 +85,26 @@ is the fallback.
 Unknowns that only a logged-in human session can answer are §5 (Phase 0). Nothing in later phases may be started on a
 guess about them.
 
+## 2b. Bookmarklet-first route (2026-10-14): status of each CLI piece
+
+The owner chose to move the CLI into the bookmarklet's agent (`packages/web/src/agent`, bundled as
+`stepup-bookmarklet.js`) rather than wait for an extension. The agent runs on StepUp's page after a click, owns nothing,
+and hands data to the app over `postMessage`; §3's design (app = brain, page = hands) still holds, with the
+agent in place of the extension's content script. Limits that come with it: it exists only after a click and is lost on a
+full reload, so the first Dashboard load's own calls are missed and a person clicks again after a reload.
+
+| CLI piece | Status in the agent |
+|---|---|
+| status list (`statuses`, `statusSync` capture, `archive`) | **Done**: fetched on click, and re-sent when the dashboard fetches a changed list; applied by the app (`bringInStepUpList`) |
+| category tree (`categorySync`) | **Done**: observed `categories/search`, `typesbyids`, `detailsbyids`; once-a-day expansion; merge code shared with the CLI (`shared/stepup/learn.ts`); the app keeps it in `_stepup-cache/` and teaches the open ledger year |
+| vendor listing (`vendorListingSync`) | **Done**: observed `getbusinesssummarydropdown`, tagged with the category asked about; kept in `_stepup-cache/` |
+| traffic recorder (replaces `inspect`) | **Done**: switched on from the app; reports only endpoint paths and field names/types |
+| pre-auth sync (`preauthSync`) | Not ported: dormant, nothing consumes it |
+| draft tracker (`draftTracker`) | **Next**, with filing |
+| filing flow (`reimbursementFlow`, `main`) | **Blocked on Phase 0 spikes 5–7** (scripted input into Blazor/Radzen, file upload, trusted clicks); the recorder is how the missing request shapes get collected |
+| Excel write-back | Dropped (decision D1 still open) |
+| `reference:*` maintainer tools | Stay in the CLI; they now read what the app keeps (`_stepup-cache/`) once pointed at it |
+
 ## 3. Architecture
 
 ```

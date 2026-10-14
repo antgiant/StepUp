@@ -1,0 +1,298 @@
+import {
+  STEPUP_PATTERNS,
+  categoriesOfRequest,
+  categoryCacheFrom,
+  checkStepUpShape,
+  chunks,
+  detailIdsToExpand,
+  emptyCategoryCache,
+  expansionDue,
+  mergeCategorySearch,
+  mergeDetails,
+  mergeTypes,
+  mergeVendors,
+  typeIdsToExpand,
+  type CategoryCache,
+  type VendorEntry,
+} from "@step-up/shared/web";
+import type { Observed } from "./observe.js";
+import type { AgentToApp, AppToAgent } from "./protocol.js";
+import { Recorder } from "./recorder.js";
+import { findAccessToken, tokenFresh } from "./token.js";
+
+/** Bumped when the messages between the agent and the app change in a way an older open app tab would not understand. */
+export const AGENT_PROTOCOL = 1;
+
+const API = "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/V2/search";
+const CHUNK = 50;
+const CHUNK_DELAY_MS = 400;
+const HANDSHAKE_TRIES = 75;
+const HANDSHAKE_MS = 400;
+const QUEUE_LIMIT = 100;
+
+export interface AppWindow {
+  postMessage(data: unknown, origin: string): void;
+  closed?: boolean;
+}
+
+/** Everything the agent needs from the page it runs in; the real one is built in main.ts, tests supply fakes. */
+export interface AgentHost {
+  storage: Pick<Storage, "length" | "key" | "getItem">;
+  /** The page's own `fetch`, not observed: the agent's own calls go through it. */
+  fetch: typeof fetch;
+  /** Opens (or reuses) the app's window. Must be called from the click that started the bookmarklet. */
+  open(url: string, name: string): AppWindow | null;
+  addMessageListener(fn: (e: { origin: string; source: unknown; data: unknown }) => void): () => void;
+  /** One message box on the page; `keep` leaves it up until the next message. */
+  say(text: string, keep?: boolean): void;
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  /** Where the app lives, with a trailing slash. */
+  appHome: string;
+  currentPage(): string;
+}
+
+/** What survives replacing the agent with a newer copy of itself (a second click loads the latest script). */
+export interface AgentState {
+  categories: CategoryCache;
+  vendors: Record<string, VendorEntry>;
+  recording: Recorder;
+  lastListSignature?: string;
+}
+
+/**
+ * The part of Step Up Helper that runs on StepUp's own page. It reads the person's StepUp sign-in from the page's session
+ * storage (never sending it anywhere), asks StepUp for the reimbursements list the way the dashboard does, watches the
+ * page's own requests for what is worth learning, and hands only that data to the app. The app owns all storage.
+ */
+export class StepUpAgent {
+  private win: AppWindow | null = null;
+  private ready = false;
+  private cacheKnown = false;
+  private queue: AgentToApp[] = [];
+  private categories: CategoryCache;
+  private vendors: Record<string, VendorEntry>;
+  readonly recorder: Recorder;
+  private lastListSignature: string | undefined;
+  private expanding = false;
+  private unlisten: (() => void) | undefined;
+  private disposed = false;
+  private readonly appOrigin: string;
+
+  constructor(private readonly host: AgentHost, carried?: AgentState) {
+    this.appOrigin = new URL(host.appHome).origin;
+    this.categories = carried?.categories ?? emptyCategoryCache();
+    this.vendors = carried?.vendors ?? {};
+    this.recorder = carried?.recording ?? new Recorder();
+    this.lastListSignature = carried?.lastListSignature;
+    this.unlisten = host.addMessageListener((e) => this.onAppMessage(e));
+  }
+
+  state(): AgentState {
+    return { categories: this.categories, vendors: this.vendors, recording: this.recorder, lastListSignature: this.lastListSignature };
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.unlisten?.();
+  }
+
+  /** The bookmark was clicked: connect to the app and bring the current list in. Opens the app's window before anything else. */
+  async start(): Promise<void> {
+    const say = this.host.say.bind(this.host);
+    const token = findAccessToken(this.host.storage);
+    if (!token) return say("I could not find your StepUp sign-in. Open StepUp's Dashboard and click again.");
+    if (!tokenFresh(token, this.host.now())) return say("Your StepUp sign-in just expired. Reload this page, then click again.");
+    if (!token.guardian) return say("StepUp's sign-in did not say who you are, so nothing was fetched.");
+
+    this.ready = false;
+    this.win = this.host.open(`${this.host.appHome}#stepup-import`, "stepup-helper");
+    if (!this.win) return say("The pop-up was blocked. Allow pop-ups for StepUp, then click again.");
+    say("Asking StepUp for your reimbursements (a few seconds)…", true);
+    const connected = this.handshake();
+
+    let results: unknown[] | undefined;
+    try {
+      const r = await this.host.fetch(`${API}?v=${this.ticks()}`, {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` },
+        body: JSON.stringify({ Keywords: null, CurrentPage: null, PageSize: null, OrderBy: null, SortOrder: 0, MultiOrderBy: {}, Filters: { GuardianId: token.guardian, ExcludedStatuses: ["Canceled"] }, ApplyDefaultFilters: true, ContextBag: {}, IncludeGlobalSearchTotal: false, SkipCount: false }),
+      });
+      if (!r.ok) return say(`StepUp answered ${r.status}. Reload this page and click again.`);
+      say("StepUp answered. Reading the list…", true);
+      const body = (await r.json()) as { Results?: unknown };
+      if (!Array.isArray(body.Results)) return say("StepUp's list was not in the expected form, so nothing was sent.");
+      const problems = checkStepUpShape("reimbursements-search", body);
+      if (problems.length) return say("StepUp's list no longer looks the way this expects (the site may have changed), so nothing was sent.");
+      results = body.Results;
+    } catch (err) {
+      return say(`Something went wrong: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    say(`Got ${results.length} reimbursements. Waiting for Step Up Helper…`, true);
+    if (!(await connected)) return say("Step Up Helper did not answer. Open it, sign in, and click again.");
+    this.lastListSignature = signatureOf(results);
+    this.post({ type: "stepup-list", results });
+    say(`Sent ${results.length} reimbursements to Step Up Helper. Switch to its tab to see what changed.`);
+  }
+
+  private ticks(): string {
+    return String(BigInt(this.host.now()) * 10000n + 621355968000000000n);
+  }
+
+  private async handshake(): Promise<boolean> {
+    for (let i = 0; i < HANDSHAKE_TRIES && !this.ready && !this.disposed; i++) {
+      try {
+        this.win?.postMessage({ type: "stepup-hello", version: AGENT_PROTOCOL } satisfies AgentToApp, this.appOrigin);
+      } catch {
+        /* the window is gone */
+      }
+      if (this.ready) break; // the app answered while it was being greeted: no need to wait out the interval
+      await this.host.sleep(HANDSHAKE_MS);
+    }
+    if (this.ready) this.flush();
+    return this.ready;
+  }
+
+  private onAppMessage(e: { origin: string; source: unknown; data: unknown }): void {
+    if (e.origin !== this.appOrigin || !this.win || e.source !== this.win || !e.data || typeof e.data !== "object") return;
+    const m = e.data as AppToAgent;
+    switch (m.type) {
+      case "stepup-ready":
+        this.ready = true;
+        this.flush();
+        break;
+      case "stepup-cache":
+        // What the workspace already knows: build on it, so the once-a-day expansion is not repeated by every new session.
+        this.categories = mergeKnown(this.categories, categoryCacheFrom(m.categories));
+        this.cacheKnown = true;
+        break;
+      case "stepup-record":
+        if (m.on) this.recorder.start(new Date(this.host.now()).toISOString(), this.host.currentPage());
+        else this.recorder.stop();
+        break;
+      case "stepup-report":
+        this.post({ type: "stepup-recording", report: this.recorder.report() });
+        break;
+    }
+  }
+
+  private post(m: AgentToApp): void {
+    if (this.win && this.ready && !this.win.closed) {
+      try {
+        this.win.postMessage(m, this.appOrigin);
+        return;
+      } catch {
+        /* fall through to the queue */
+      }
+    }
+    // The app's window is not there (closed, or still loading): keep a little, and send it when the next click reconnects.
+    if (m.type === "stepup-list") return;
+    this.queue.push(m);
+    if (this.queue.length > QUEUE_LIMIT) this.queue.shift();
+  }
+
+  private flush(): void {
+    const pending = this.queue;
+    this.queue = [];
+    for (const m of pending) this.post(m);
+  }
+
+  /** Called for every request the page makes (see observe.ts). */
+  observed(o: Observed): void {
+    if (this.disposed) return;
+    this.recorder.note(o);
+    if (o.status < 200 || o.status >= 300 || !o.responseText) return;
+    const url = o.url;
+    const P = STEPUP_PATTERNS;
+    if (!P.reimbursementsSearch.test(url) && !P.categoriesSearch.test(url) && !P.categoryTypes.test(url) && !P.categoryDetails.test(url) && !P.vendorDropdown.test(url)) return;
+    let body: unknown;
+    try {
+      body = JSON.parse(o.responseText);
+    } catch {
+      return;
+    }
+
+    if (P.reimbursementsSearch.test(url)) {
+      // The dashboard asked for the list itself (any time after the click): pass it on if it is new.
+      const results = (body as { Results?: unknown }).Results;
+      if (!Array.isArray(results) || results.length === 0 || checkStepUpShape("reimbursements-search", body).length) return;
+      const sig = signatureOf(results);
+      if (sig === this.lastListSignature) return;
+      this.lastListSignature = sig;
+      this.post({ type: "stepup-list", results });
+    } else if (P.categoriesSearch.test(url)) {
+      if (checkStepUpShape("categories-search", body).length) return;
+      if (mergeCategorySearch(this.categories, body) > 0) this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
+    } else if (P.categoryTypes.test(url)) {
+      if (mergeTypes(this.categories, body) > 0) this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
+      void this.maybeExpand(url, idsIn(o.requestBody));
+    } else if (P.categoryDetails.test(url)) {
+      if (mergeDetails(this.categories, body) > 0) this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
+    } else if (P.vendorDropdown.test(url)) {
+      const ids = categoriesOfRequest(`${url}\n${o.requestBody ?? ""}`, this.categories);
+      const touched = mergeVendors(this.vendors, body, ids);
+      if (touched.length) this.post({ type: "stepup-learned", kind: "vendors", entries: touched });
+    }
+  }
+
+  /**
+   * Once a day, the first time the page itself asks about category types, ask for every type and detail we know the id of
+   * (a type's details only appear when asked for). Uses the page's own sign-in and the same address the page just used,
+   * in small batches with a pause between them, as the command line always did.
+   */
+  private async maybeExpand(typesUrl: string, requested: string[]): Promise<void> {
+    if (this.expanding || !this.ready || !this.cacheKnown || !expansionDue(this.categories, this.host.now())) return;
+    const token = findAccessToken(this.host.storage);
+    if (!token || !tokenFresh(token, this.host.now(), 5 * 60_000)) return;
+    this.expanding = true;
+    try {
+      const call = async (url: string, ids: string[], merge: (c: CategoryCache, d: unknown) => number): Promise<void> => {
+        for (const batch of chunks(ids, CHUNK)) {
+          if (this.disposed) return;
+          const r = await this.host.fetch(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${token.secret}` }, body: JSON.stringify(batch) });
+          if (r.ok) merge(this.categories, await r.json());
+          else if (r.status === 401 || r.status === 403) return;
+          await this.host.sleep(CHUNK_DELAY_MS);
+        }
+      };
+      await call(typesUrl, typeIdsToExpand(this.categories, requested), mergeTypes);
+      // The details of every type just learned. Same service and path as types, so derived from the address the page used.
+      await call(typesUrl.replace(/typesbyids/i, "detailsbyids"), detailIdsToExpand(this.categories), mergeDetails);
+      this.categories.lastSyncAt = this.host.now();
+      this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
+    } catch {
+      /* best effort: it is tried again the next time the page asks */
+    } finally {
+      this.expanding = false;
+    }
+  }
+}
+
+/** The request body of a `…byids` call is a JSON array of ids. */
+function idsIn(body: string | undefined): string[] {
+  try {
+    const v = JSON.parse(body ?? "[]") as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A cheap fingerprint of a list, so an identical repeat is not sent again. */
+export function signatureOf(results: unknown[]): string {
+  const text = JSON.stringify(results);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0;
+  return `${results.length}:${text.length}:${h}`;
+}
+
+function mergeKnown(mine: CategoryCache, theirs: CategoryCache): CategoryCache {
+  return {
+    lastSyncAt: Math.max(mine.lastSyncAt, theirs.lastSyncAt),
+    categories: { ...theirs.categories, ...mine.categories },
+    types: { ...theirs.types, ...mine.types },
+    details: { ...theirs.details, ...mine.details },
+    partnerCodes: { ...theirs.partnerCodes, ...mine.partnerCodes },
+  };
+}

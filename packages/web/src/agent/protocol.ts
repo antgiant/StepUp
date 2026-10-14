@@ -1,0 +1,25 @@
+import type { CategoryCache, VendorEntry } from "@step-up/shared/web";
+
+/** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
+export type AgentToApp =
+  | { type: "stepup-hello"; version: number }
+  | { type: "stepup-list"; results: unknown[] }
+  | { type: "stepup-learned"; kind: "categories"; cache: CategoryCache }
+  | { type: "stepup-learned"; kind: "vendors"; entries: VendorEntry[] }
+  | { type: "stepup-recording"; report: RecordingReport };
+
+export type AppToAgent =
+  | { type: "stepup-ready" }
+  /** What the workspace already knows, so the agent builds on it and keeps to the once-a-day expansion. */
+  | { type: "stepup-cache"; categories: CategoryCache }
+  | { type: "stepup-record"; on: boolean }
+  | { type: "stepup-report" };
+
+/** The shapes (never values) of the calls StepUp's page made while recording: enough to build the next feature from. */
+export interface RecordingReport {
+  on: boolean;
+  startedAt?: string;
+  loads: Array<{ at: string; page: string }>;
+  pages: string[];
+  calls: Record<string, { n: number; via: string[]; status: number[]; ms?: number; kb?: number; req?: string; res?: string }>;
+}

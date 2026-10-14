@@ -12,7 +12,7 @@ export const READ_ONLY_KEEP = [
   "#year-pick", "#dismiss-status", "#reload-app",
   // The StepUp bookmarklet: how to get it, and answering what it sent. Bringing the list in writes only `<year>/_stepup/`,
   // never the workbook (the same thing the command line has always done for an Excel year).
-  "#show-bookmarklet", "#copy-bookmarklet", "#close-bookmarklet", "#stepup-apply", "#stepup-ignore", "#stepup-result-close", "[data-stepup-year]",
+  "#show-bookmarklet", "#copy-bookmarklet", "#close-bookmarklet", "#stepup-apply", "#stepup-ignore", "#stepup-result-close", "[data-stepup-year]", "[data-agent]", "textarea[readonly]",
   "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
 ].join(",");
 

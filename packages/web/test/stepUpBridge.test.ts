@@ -1,110 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { BOOKMARKLET_FILE, STEPUP_ORIGIN, bookmarkletScript, isStepUpHello, loaderCode, loaderHref, stepUpListFrom } from "../src/stepUpBridge.js";
+import { BOOKMARKLET_FILE, STEPUP_ORIGIN, agentMessageFrom, isStepUpHello, loaderCode, loaderHref, stepUpListFrom } from "../src/stepUpBridge.js";
 
 const APP = "https://app.example";
-const SCOPE = "5bd9fe13-76ed-4dbb-b8c3-7811dbf16276/access_as_user";
-const jwt = (claims: Record<string, unknown>) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
-
-interface Setup {
-  tokens?: Array<{ target: string; expiresOn: number; claims?: Record<string, unknown> }>;
-  fetchStatus?: number;
-  fetchBody?: unknown;
-  appAnswers?: boolean;
-}
-
-/** Runs the served script's real source against a pretend StepUp page, started the way the loader starts it. */
-async function run(setup: Setup) {
-  const store = new Map<string, string>();
-  (setup.tokens ?? []).forEach((t, i) =>
-    store.set(`msal.2|acct|login|accesstoken|${i}`, JSON.stringify({ credentialType: "AccessToken", target: `https://x/${t.target}`, expiresOn: t.expiresOn, secret: jwt(t.claims ?? { scholar_personId: "person-1" }) })));
-  store.set("msal.version", "2.0");
-  const sessionStorage = { get length() { return store.size; }, key: (i: number) => [...store.keys()][i] ?? null, getItem: (k: string) => store.get(k) ?? null };
-
-  const listeners: Array<(e: unknown) => void> = [];
-  const toasts: string[] = [];
-  const posted: unknown[] = [];
-  const popup = {
-    postMessage(data: { type: string }, origin: string) {
-      expect(origin).toBe(APP);
-      posted.push(data);
-      if (data.type === "stepup-hello" && setup.appAnswers !== false) for (const l of listeners) l({ origin: APP, source: popup, data: { type: "stepup-ready" } });
-    },
-  };
-  let opened: unknown[] | undefined;
-  const requests: Array<{ url: string; init: { headers: Record<string, string>; body: string } }> = [];
-  const document = {
-    currentScript: { src: `${APP}/${BOOKMARKLET_FILE}?v=123` },
-    body: { appendChild: () => undefined },
-    // The page's single message box is updated in place, so every text it is given is recorded as it is set.
-    createElement: () => ({ style: {}, set textContent(v: string) { toasts.push(v); }, remove() {} }),
-  };
-  const window = { open: (...a: unknown[]) => ((opened = a), popup) };
-  const fetchFn = async (url: string, init: { headers: Record<string, string>; body: string }) => {
-    requests.push({ url, init });
-    return { ok: (setup.fetchStatus ?? 200) < 300, status: setup.fetchStatus ?? 200, json: async () => setup.fetchBody ?? { Results: [{ Id: "r1" }, { Id: "r2" }] } };
-  };
-  const fn = new Function("sessionStorage", "window", "document", "fetch", "addEventListener", "removeEventListener", `return ${bookmarkletScript()}`);
-  await fn(sessionStorage, window, document, fetchFn, (_: string, l: (e: unknown) => void) => listeners.push(l), (_: string, l: (e: unknown) => void) => listeners.splice(listeners.indexOf(l), 1));
-  return { toasts, posted, opened, requests };
-}
-
-const soon = Math.floor(Date.now() / 1000) + 3000;
-
-describe("the bookmarklet script", () => {
-  it("reads the reimbursement token, asks for the list as the dashboard does, and sends only the list", async () => {
-    const r = await run({ tokens: [{ target: "other-api/access_as_user", expiresOn: soon }, { target: SCOPE, expiresOn: soon, claims: { scholar_personId: "person-9" } }] });
-    expect(r.opened).toEqual([`${APP}/#stepup-import`, "stepup-helper"]);
-    expect(r.requests).toHaveLength(1);
-    const req = r.requests[0]!;
-    expect(req.url).toMatch(/^https:\/\/reimbursementapi-prod\.stepupforstudents\.org\/api\/reimbursements\/V2\/search\?v=\d+$/);
-    expect(JSON.parse(req.init.body).Filters).toEqual({ GuardianId: "person-9", ExcludedStatuses: ["Canceled"] });
-    expect(req.init.headers["authorization"]).toMatch(/^Bearer h\./);
-    const sent = r.posted.find((p) => (p as { type: string }).type === "stepup-list") as { results: unknown[] };
-    expect(sent.results).toHaveLength(2);
-    expect(JSON.stringify(r.posted)).not.toContain("Bearer");
-    expect(r.toasts.at(-1)).toMatch(/Sent 2 reimbursements/);
-  });
-
-  it("uses the token that expires last when there are several", async () => {
-    const r = await run({ tokens: [{ target: SCOPE, expiresOn: soon, claims: { scholar_personId: "newer" } }, { target: SCOPE, expiresOn: soon - 1000, claims: { scholar_personId: "older" } }] });
-    expect(JSON.parse(r.requests[0]!.init.body).Filters.GuardianId).toBe("newer");
-  });
-
-  it("does nothing, and says why, with no sign-in or an expired one", async () => {
-    const none = await run({ tokens: [{ target: "other/access_as_user", expiresOn: soon }] });
-    expect(none.opened).toBeUndefined();
-    expect(none.requests).toHaveLength(0);
-    expect(none.toasts.at(-1)).toMatch(/could not find your StepUp sign-in/);
-    const old = await run({ tokens: [{ target: SCOPE, expiresOn: Math.floor(Date.now() / 1000) + 10 }] });
-    expect(old.requests).toHaveLength(0);
-    expect(old.toasts.at(-1)).toMatch(/expired/);
-  });
-
-  it("refuses to fetch when the token does not say who the person is", async () => {
-    const r = await run({ tokens: [{ target: SCOPE, expiresOn: soon, claims: {} }] });
-    expect(r.requests).toHaveLength(0);
-  });
-
-  it("sends nothing when StepUp refuses the request", async () => {
-    const r = await run({ tokens: [{ target: SCOPE, expiresOn: soon }], fetchStatus: 401 });
-    expect(r.posted.some((p) => (p as { type: string }).type === "stepup-list")).toBe(false);
-    expect(r.toasts.at(-1)).toMatch(/StepUp answered 401/);
-  });
-});
 
 describe("the loader", () => {
-  it("finds the app from its own address, so the same file works on any host", async () => {
-    const r = await run({ tokens: [{ target: SCOPE, expiresOn: soon, claims: { scholar_personId: "person-3" } }] });
-    expect(r.opened).toEqual([`${APP}/#stepup-import`, "stepup-helper"]);
-    expect(JSON.parse(r.requests[0]!.init.body).Filters.GuardianId).toBe("person-3");
-  });
-
-  it("asks to be started from its bookmark when it has no address to go by", () => {
-    const alerts: string[] = [];
-    new Function("document", "alert", `return ${bookmarkletScript()}`)({ currentScript: null }, (m: string) => alerts.push(m));
-    expect(alerts[0]).toMatch(/start this from its bookmark/);
-  });
-
   it("the loader adds the app's current script to the page, and says so if it cannot load", () => {
     const added: Array<{ src: string; onerror?: () => void }> = [];
     const alerts: string[] = [];
@@ -128,6 +27,17 @@ describe("the loader", () => {
 });
 
 describe("receiving", () => {
+  it("accepts only known agent messages from StepUp's page", () => {
+    expect(agentMessageFrom(STEPUP_ORIGIN, { type: "stepup-hello", version: 1 })).toEqual({ type: "stepup-hello", version: 1 });
+    expect(agentMessageFrom("https://evil.example", { type: "stepup-hello", version: 1 })).toBeUndefined();
+    expect(agentMessageFrom(STEPUP_ORIGIN, { type: "stepup-learned", kind: "vendors", entries: [{ id: "a", name: "A", businessProfileId: "b" }, { nope: 1 }, null] })).toEqual({
+      type: "stepup-learned", kind: "vendors", entries: [{ id: "a", name: "A", businessProfileId: "b" }],
+    });
+    expect(agentMessageFrom(STEPUP_ORIGIN, { type: "stepup-learned", kind: "categories", cache: 5 })).toBeUndefined();
+    expect(agentMessageFrom(STEPUP_ORIGIN, { type: "run-something", code: "alert(1)" })).toBeUndefined();
+    expect(agentMessageFrom(STEPUP_ORIGIN, null)).toBeUndefined();
+  });
+
   it("accepts the list only from StepUp's page, in the right shape", () => {
     const msg = { type: "stepup-list", results: [{ Id: "a" }] };
     expect(stepUpListFrom(STEPUP_ORIGIN, msg)).toHaveLength(1);
