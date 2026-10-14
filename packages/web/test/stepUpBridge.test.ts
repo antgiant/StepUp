@@ -34,8 +34,9 @@ async function run(setup: Setup) {
   const requests: Array<{ url: string; init: { headers: Record<string, string>; body: string } }> = [];
   const document = {
     currentScript: { src: `${APP}/${BOOKMARKLET_FILE}?v=123` },
-    body: { appendChild: (d: { textContent: string }) => toasts.push(d.textContent) },
-    createElement: () => ({ style: {}, textContent: "", remove() {} }),
+    body: { appendChild: () => undefined },
+    // The page's single message box is updated in place, so every text it is given is recorded as it is set.
+    createElement: () => ({ style: {}, set textContent(v: string) { toasts.push(v); }, remove() {} }),
   };
   const window = { open: (...a: unknown[]) => ((opened = a), popup) };
   const fetchFn = async (url: string, init: { headers: Record<string, string>; body: string }) => {

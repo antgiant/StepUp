@@ -35,7 +35,9 @@ export const isStepUpHello = (origin: string, data: unknown): boolean =>
  * (this app's address, to open it). Plain JavaScript on purpose: it must not depend on anything this app's bundler does to code.
  */
 const BODY = `const SCOPE=${JSON.stringify(SCOPE)},API=${JSON.stringify(API)};
-const say=m=>{const d=document.createElement("div");d.textContent="Step Up Helper: "+m;d.style.cssText="position:fixed;z-index:2147483647;top:12px;left:50%;transform:translateX(-50%);max-width:80vw;padding:10px 16px;background:#1a2b4c;color:#fff;font:15px system-ui;border-radius:8px;box-shadow:0 4px 16px #0006";document.body.appendChild(d);setTimeout(()=>d.remove(),9000)};
+let box,hide;
+const say=(m,keep)=>{if(!box){box=document.createElement("div");box.style.cssText="position:fixed;z-index:2147483647;top:12px;left:50%;transform:translateX(-50%);max-width:80vw;padding:10px 16px;background:#1a2b4c;color:#fff;font:15px system-ui;border-radius:8px;box-shadow:0 4px 16px #0006";document.body.appendChild(box)}
+box.textContent="Step Up Helper: "+m;clearTimeout(hide);if(!keep)hide=setTimeout(()=>{box.remove();box=null},9000)};
 try{
 let tok;
 for(let i=0;i<sessionStorage.length;i++){let v;try{v=JSON.parse(sessionStorage.getItem(sessionStorage.key(i)))}catch(e){continue}
@@ -46,7 +48,7 @@ let guardian;try{guardian=JSON.parse(atob(tok.secret.split(".")[1].replace(/-/g,
 if(!guardian)return say("StepUp's sign-in did not say who you are, so nothing was fetched.");
 const w=window.open(HOME+"#stepup-import","stepup-helper");
 if(!w)return say("The pop-up was blocked. Allow pop-ups for StepUp, then click again.");
-say("Reading your reimbursements from StepUp\u2026");
+say("Asking StepUp for your reimbursements (a few seconds)\\u2026",true);
 let ready=false;
 const onMsg=e=>{if(e.origin===APP&&e.source===w&&e.data&&e.data.type==="stepup-ready")ready=true};
 addEventListener("message",onMsg);
@@ -54,13 +56,15 @@ const ping=setInterval(()=>{try{w.postMessage({type:"stepup-hello"},APP)}catch(e
 const ticks=String(BigInt(Date.now())*10000n+621355968000000000n);
 const r=await fetch(API+"?v="+ticks,{method:"POST",headers:{"content-type":"application/json; charset=utf-8",authorization:"Bearer "+tok.secret},body:JSON.stringify({Keywords:null,CurrentPage:null,PageSize:null,OrderBy:null,SortOrder:0,MultiOrderBy:{},Filters:{GuardianId:guardian,ExcludedStatuses:["Canceled"]},ApplyDefaultFilters:true,ContextBag:{},IncludeGlobalSearchTotal:false,SkipCount:false})});
 if(!r.ok){clearInterval(ping);removeEventListener("message",onMsg);return say("StepUp answered "+r.status+". Reload this page and click again.")}
+say("StepUp answered. Reading the list\\u2026",true);
 const results=(await r.json()).Results;
 if(!Array.isArray(results)){clearInterval(ping);removeEventListener("message",onMsg);return say("StepUp's list was not in the expected form, so nothing was sent.")}
+say("Got "+(Array.isArray(results)?results.length:0)+" reimbursements. Waiting for Step Up Helper\\u2026",true);
 for(let i=0;i<75&&!ready;i++)await new Promise(f=>setTimeout(f,400));
 clearInterval(ping);removeEventListener("message",onMsg);
 if(!ready)return say("Step Up Helper did not answer. Open it, sign in, and click again.");
 w.postMessage({type:"stepup-list",results},APP);
-say("Sent "+results.length+" reimbursements to Step Up Helper.");
+say("Sent "+results.length+" reimbursements to Step Up Helper. Switch to its tab to see what changed.");
 }catch(err){say("Something went wrong: "+(err&&err.message||err))}`;
 
 /** The file this app serves as `stepup-bookmarklet.js`: it finds its own address, so the same file works on any host. */

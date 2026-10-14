@@ -112,9 +112,25 @@ describe("archiveStepUpList", () => {
     expect(index?.index.reimbursements.find((r) => r.number === 2)?.lines[0]?.status).toBe("Paid");
   });
 
+  it("says what changed in each year, reports progress and where the time went", async () => {
+    const { target } = await setup();
+    await archiveStepUpList(target, [raw(1), raw(2), raw(3, "2024-2025")]);
+    const steps: string[] = [];
+    const next = await archiveStepUpList(target, [raw(1), raw(2, "2025-2026", "Paid"), raw(3, "2024-2025")], undefined, (t) => steps.push(t));
+    expect(next.years.map((y) => [y.label, y.changed])).toEqual([["2024-2025", 0], ["2025-2026", 1]]);
+    const changes = next.years.find((y) => y.label === "2025-2026")!.changes;
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.summary).toMatch(/#2/);
+    expect(changes[0]!.details?.some((d) => d.from === "Submitted" && d.to === "Paid")).toBe(true);
+    expect(steps[0]).toMatch(/Comparing 3 reimbursements/);
+    expect(steps.some((t) => /Saved 2 of 2 school years/.test(t))).toBe(true);
+    expect(next.timings.compareMs).toBeGreaterThanOrEqual(0);
+    expect(next.timings.saveMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("does nothing for an empty list", async () => {
     const { target } = await setup();
-    expect(await archiveStepUpList(target, [])).toEqual({ listed: 0, changed: 0, years: [] });
+    expect(await archiveStepUpList(target, [])).toEqual({ listed: 0, changed: 0, years: [], timings: { compareMs: 0, saveMs: 0 } });
   });
 });
 

@@ -1103,7 +1103,7 @@ function header(): string {
         ${workspace && storage.kind !== "browser" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
         ${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}
       </div></details>`}</nav></header>
-    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${pendingStepUpBanner()}${bookmarkletPanel()}${status ? `<p class="warn notice" role="status">${esc(status)} <button id="dismiss-status">Dismiss</button></p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
+    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${pendingStepUpBanner()}${stepUpResultPanel()}${bookmarkletPanel()}${status ? `<p class="warn notice" role="status">${esc(status)} <button id="dismiss-status">Dismiss</button></p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
 
 /** "Since you were last here": what other people and the command line did while this browser was away. */
@@ -1350,16 +1350,51 @@ function historyView(): string {
 async function bringInStepUpList(results: unknown[]): Promise<void> {
   const ws = workspace;
   if (!ws) return;
-  const done = await archiveStepUpList({ storage, driveId: ws.driveId, rootId: ws.pointer.rootId }, results);
+  const started = Date.now();
+  const done = await archiveStepUpList({ storage, driveId: ws.driveId, rootId: ws.pointer.rootId }, results, undefined, (text) => showBusy(text));
   // The command line does the same for every ledger year it can reach; other years show StepUp's side through `_stepup`.
+  let ledgerItems = 0;
   if (!ws.legacy) {
+    showBusy(`Updating ${ws.year.label}'s items…`);
     const lines = (results as Array<Record<string, unknown> & { SchoolYear?: string; LineItems?: Array<Record<string, unknown>> }>)
       .filter((r) => r.SchoolYear === ws.year.label)
       .flatMap((r) => (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem));
-    if (lines.length && applyStepUpStatuses(ledger, lines) > 0) await save();
+    if (lines.length) {
+      ledgerItems = applyStepUpStatuses(ledger, lines);
+      if (ledgerItems > 0) await save();
+    }
   }
-  status = done.listed === 0 ? "StepUp's list had no reimbursements that could be read." : done.changed === 0 ? `StepUp's list is already up to date (${done.listed} reimbursement(s)).` : `Brought in ${done.changed} changed reimbursement(s) of ${done.listed}: ${done.years.filter((y) => y.changed).map((y) => `${y.label} (${y.changed})`).join(", ")}.`;
-  await refreshInBackground(ws);
+  const total = (Date.now() - started) / 1000;
+  stepUpResult = done.listed === 0
+    ? { at: new Date().toISOString(), listed: 0, changed: 0, seconds: total, years: [], ledgerItems }
+    : { at: new Date().toISOString(), listed: done.listed, changed: done.changed, seconds: total, years: done.years, ledgerItems, compareSeconds: done.timings.compareMs / 1000, saveSeconds: done.timings.saveMs / 1000 };
+  // Only the open year's own view needs reading again, and only when something in it changed.
+  if (done.years.some((y) => y.label === ws.year.label && y.changed > 0)) await refreshInBackground(ws);
+  else render();
+}
+
+/** What the last "bring in" did, kept until dismissed: which reimbursements changed and how, and in which year to find it. */
+let stepUpResult: { at: string; listed: number; changed: number; seconds: number; years: Array<{ label: string; listed: number; changed: number; created: boolean; changes: HistoryChange[] }>; ledgerItems: number; compareSeconds?: number; saveSeconds?: number } | undefined;
+
+function stepUpResultPanel(): string {
+  const r = stepUpResult;
+  if (!r) return "";
+  if (r.listed === 0) return `<section class="panel"><h3 class="panel-title">StepUp's list</h3><p class="note">It had no reimbursements that could be read.</p><p class="row"><button id="stepup-result-close">Dismiss</button></p></section>`;
+  const open = workspace?.year.label;
+  const sections = r.years.filter((y) => y.changes.length || y.created).map((y) => {
+    const shown = y.changes.slice(0, 30);
+    const items = shown.map((c) => {
+      const details = (c.details ?? []).map((x) => `<li><strong>${esc(x.field)}</strong>: ${x.from !== undefined ? `${esc(x.from)} &rarr; ` : ""}${esc(x.to ?? "")}</li>`).join("");
+      return `<li>${esc(c.summary)}${details ? `<ul class="history-details">${details}</ul>` : ""}</li>`;
+    }).join("");
+    const where = y.label === open ? `<button data-go="history">See in History</button>` : `<button data-stepup-year="${esc(y.label)}">Open ${esc(y.label)}</button>`;
+    return `<h4>${esc(y.label)} <small>${y.changed} changed${y.label === open ? " (the year you have open)" : ""}</small> ${where}</h4><ul>${items}</ul>${y.changes.length > shown.length ? `<p class="note">…and ${y.changes.length - shown.length} more; they are all in that year's History.</p>` : ""}`;
+  }).join("");
+  const timing = r.compareSeconds !== undefined ? ` · compared in ${r.compareSeconds.toFixed(1)} s, saved in ${r.saveSeconds!.toFixed(1)} s` : "";
+  return `<section class="panel"><h3 class="panel-title">StepUp's list<small>${r.listed} reimbursement(s) read · ${r.changed} changed · ${new Date(r.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${r.seconds.toFixed(1)} s${timing}</small></h3>
+    ${r.changed === 0 && !sections ? `<p class="note">Nothing has changed since the last time.</p>` : sections}
+    ${r.ledgerItems ? `<p class="note">${r.ledgerItems} item(s) in ${esc(open ?? "this year")} were updated from it.</p>` : ""}
+    <p class="row"><button id="stepup-result-close">Dismiss</button></p></section>`;
 }
 
 /** A list sent by the bookmarklet, waiting for the person to say yes (nothing is written until they do). */
@@ -2748,7 +2783,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
+    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
@@ -2852,6 +2887,15 @@ root.addEventListener("click", async (ev) => {
     const list = pendingStepUp;
     pendingStepUp = undefined;
     if (list) await guarded(() => bringInStepUpList(list), "Bringing in StepUp's list…");
+  } else if (t.id === "stepup-result-close") {
+    stepUpResult = undefined;
+    render();
+  } else if (t.dataset["stepupYear"] && workspace) {
+    const pointer = workspace.pointer;
+    const label = t.dataset["stepupYear"];
+    clearDrill();
+    await guarded(() => switchYear(pointer, label), `Opening ${label}…`);
+    go({ name: "history" });
   } else if (t.id === "stepup-ignore") {
     pendingStepUp = undefined;
     render();
