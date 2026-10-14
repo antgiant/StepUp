@@ -4,6 +4,8 @@
  * sign the page out).
  */
 export const REIMBURSEMENT_SCOPE = "5bd9fe13-76ed-4dbb-b8c3-7811dbf16276/access_as_user";
+/** The person API's scope (public: it is in StepUp's own appsettings.json); the student list comes from there. */
+export const PERSON_SCOPE = "cb885232-83b3-49bc-99cb-55d5b14c52ae/access_as_user";
 
 export interface StepUpToken {
   secret: string;

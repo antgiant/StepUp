@@ -1,5 +1,6 @@
 import type { ReferenceNode } from "../reference/categories.js";
 import type { StorageProvider } from "../storage/types.js";
+import type { StepUpReimbursement } from "./archive.js";
 
 /**
  * What can be learned about StepUp from its own API responses as a person uses its site: the category -> type -> detail
@@ -15,6 +16,31 @@ export interface CachedNode {
   childIds?: string[];
   /** StepUp's PartnerId codes (e.g. "24") this node is approved for, if known. */
   partnerIds?: string[];
+  /** StepUp's own rules for the node. `null` = StepUp left it to the level above (types and details usually do); absent = not seen. */
+  requiresServiceDate?: boolean | null;
+  requiresVendor?: boolean | null;
+  requiresServiceProvider?: boolean | null;
+  requiresDocumentation?: boolean | null;
+  requiresAdditionalInfo?: boolean | null;
+  isTaxable?: boolean | null;
+}
+
+const flag = (v: unknown): boolean | null | undefined => (typeof v === "boolean" ? v : v === null ? null : undefined);
+
+/** The rule flags StepUp reports on a node, in either of its two spellings (`RequiresVendor` / `requiresVendor`). */
+function ruleFlags(x: Record<string, unknown>): Partial<CachedNode> {
+  const pick = (a: string, b: string) => flag(x[a] !== undefined ? x[a] : x[b]);
+  const out: Partial<CachedNode> = {};
+  const sets: Array<[keyof CachedNode, boolean | null | undefined]> = [
+    ["requiresServiceDate", pick("RequiresServiceDate", "requiresServiceDate")],
+    ["requiresVendor", pick("RequiresVendor", "requiresVendor")],
+    ["requiresServiceProvider", pick("RequiresServiceProvider", "requiresServiceProvider")],
+    ["requiresDocumentation", pick("RequiresDocumentation", "requiresDocumentation")],
+    ["requiresAdditionalInfo", pick("RequiresAdditionalInfo", "requiresAdditionalInfo")],
+    ["isTaxable", pick("IsTaxable", "isTaxable")],
+  ];
+  for (const [k, v] of sets) if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  return out;
 }
 
 export interface CategoryCache {
@@ -54,6 +80,8 @@ export const STEPUP_PATTERNS = {
   categoryTypes: /reimbursementapi-prod\.stepupforstudents\.org\/api\/categories\/typesbyids/i,
   categoryDetails: /reimbursementapi-prod\.stepupforstudents\.org\/api\/categories\/detailsbyids/i,
   /** The provider list behind "Who did you pay?". Older: `getbusinesssummarydropdown`; seen in 2026-10: `vendors/search`. */
+  studentScholarship: /personapi-prod\.stepupforstudents\.org\/api\/guardian\/[0-9a-f-]{36}\/studentScholarship\/?(?:funded)?(?:[?#]|$)/i,
+  balances: /infrastructureapi-prod\.stepupforstudents\.org\/api\/balancecheck\/bulk\/details/i,
   vendorDropdown: /providerapi-prod\.stepupforstudents\.org\/api\/(?:businesssummary\/getbusinesssummarydropdown|vendors\/search)/i,
 } as const;
 
@@ -80,6 +108,7 @@ export function mergeCategorySearch(cache: CategoryCache, body: unknown): number
       isDeleted: c.IsDeleted,
       childIds: c.Types,
       partnerIds: (c.ApprovedPrograms ?? []).map((p) => String(p.PartnerId)),
+      ...ruleFlags(c as unknown as Record<string, unknown>),
     };
   }
   return results.length;
@@ -94,7 +123,7 @@ export function mergeTypes(cache: CategoryCache, data: unknown): number {
   if (!Array.isArray(data)) return 0;
   const items = data as ByIdsItem[];
   for (const t of items) {
-    cache.types[t.id] = { name: t.name, isActive: t.isActive, isDeleted: t.isDeleted, childIds: t.details, partnerIds: (t.approvedPrograms ?? []).map((p) => p.partnerId) };
+    cache.types[t.id] = { name: t.name, isActive: t.isActive, isDeleted: t.isDeleted, childIds: t.details, partnerIds: (t.approvedPrograms ?? []).map((p) => p.partnerId), ...ruleFlags(t as unknown as Record<string, unknown>) };
   }
   notePartners(cache, items);
   return items.length;
@@ -105,7 +134,7 @@ export function mergeDetails(cache: CategoryCache, data: unknown): number {
   if (!Array.isArray(data)) return 0;
   const items = data as ByIdsItem[];
   for (const d of items) {
-    cache.details[d.id] = { name: d.name, isActive: d.isActive, isDeleted: d.isDeleted, partnerIds: (d.approvedPrograms ?? []).map((p) => p.partnerId) };
+    cache.details[d.id] = { name: d.name, isActive: d.isActive, isDeleted: d.isDeleted, partnerIds: (d.approvedPrograms ?? []).map((p) => p.partnerId), ...ruleFlags(d as unknown as Record<string, unknown>) };
   }
   notePartners(cache, items);
   return items.length;
@@ -128,20 +157,24 @@ export function chunks<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** A shared-tree node plus what StepUp itself says about needing a service date (`null`/absent: it did not say). */
+export type ObservedNode = ReferenceNode & { stepUpRequiresServiceDate?: boolean | null };
+
 /** The observed tree as shared-tree nodes (what the web app's reference and the ledger's category edits are made of). */
-export function nodesFromCategoryCache(cache: CategoryCache): ReferenceNode[] {
+export function nodesFromCategoryCache(cache: CategoryCache): ObservedNode[] {
   const parentOf = new Map<string, string>();
   for (const level of [cache.categories, cache.types]) {
     for (const [id, node] of Object.entries(level)) for (const child of node.childIds ?? []) parentOf.set(child, id);
   }
   const scholarships = (n: CachedNode) => [...new Set((n.partnerIds ?? []).map((id) => scholarshipDisplayName(cache.partnerCodes[id] ?? id)))].sort();
-  const make = (id: string, n: CachedNode): ReferenceNode => ({
+  const make = (id: string, n: CachedNode): ObservedNode => ({
     id,
     ...(parentOf.has(id) ? { parentId: parentOf.get(id)! } : {}),
     name: n.name,
     isActive: n.isActive && !n.isDeleted,
     eligibleScholarships: scholarships(n),
     requiresServiceDate: false,
+    ...(n.requiresServiceDate !== undefined ? { stepUpRequiresServiceDate: n.requiresServiceDate } : {}),
   });
   return [cache.categories, cache.types, cache.details].flatMap((level) => Object.entries(level).map(([id, n]) => make(id, n)));
 }
@@ -199,12 +232,180 @@ export function mergeVendors(cache: Record<string, VendorEntry>, body: unknown, 
   return touched;
 }
 
+// ---- the students StepUp knows, and what it says each has to spend
+
+/** A student as StepUp lists them. Only what the app needs: no birth date, school or other personal fields are kept. */
+export interface StepUpStudent {
+  /** StepUp's number for the student; balances are keyed by it. */
+  sequenceNumber: number;
+  /** StepUp's id for the student (what a reimbursement's `studentId` holds). */
+  id: string;
+  firstName: string;
+  lastName: string;
+  middleName?: string;
+  isActive?: boolean;
+  /** Names of the scholarships/programs it lists for the student, when it names them. */
+  programs: string[];
+}
+
+/** One program's money for one student, in cents, as StepUp reports it. */
+export interface StepUpBalance {
+  program: string;
+  programType?: number;
+  fundingCents: number;
+  spendingCents: number;
+  reservedCents: number;
+  availableCents: number;
+  adjustmentsCents: number;
+}
+
+const toCents = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) : 0);
+const text = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
+/** The students in a `studentScholarship` response (an array), without anything private beyond names and ids. */
+export function parseStudents(body: unknown): StepUpStudent[] {
+  if (!Array.isArray(body)) return [];
+  const out: StepUpStudent[] = [];
+  for (const raw of body as Array<Record<string, unknown>>) {
+    const seq = raw?.["sequenceNumber"];
+    const id = text(raw?.["id"]);
+    const first = text(raw?.["firstName"]);
+    const last = text(raw?.["lastName"]);
+    if (typeof seq !== "number" || !id || !first || !last) continue;
+    const programs = new Set<string>();
+    for (const list of [raw["scholarships"], raw["renewalPrograms"]]) {
+      if (!Array.isArray(list)) continue;
+      for (const p of list as Array<Record<string, unknown>>) {
+        const name = p && typeof p === "object" ? text(p["name"]) ?? text(p["scholarshipName"]) ?? text(p["programName"]) ?? text(p["programAlias"]) ?? text(p["program"]) : undefined;
+        if (name) programs.add(name);
+      }
+    }
+    out.push({ sequenceNumber: seq, id, firstName: first, lastName: last, ...(text(raw["middleName"]) ? { middleName: text(raw["middleName"])! } : {}), ...(typeof raw["isActive"] === "boolean" ? { isActive: raw["isActive"] } : {}), programs: [...programs].sort() });
+  }
+  return out;
+}
+
+/** `balancecheck/bulk/details`: `{ "<student sequence number>": [{ ProgramAlias, Funding, Spending, Reserved, Available, Adjustments }] }`. */
+export function parseBalances(body: unknown): Record<string, StepUpBalance[]> {
+  const out: Record<string, StepUpBalance[]> = {};
+  if (!body || typeof body !== "object" || Array.isArray(body)) return out;
+  for (const [seq, list] of Object.entries(body as Record<string, unknown>)) {
+    if (!/^\d+$/.test(seq) || !Array.isArray(list)) continue;
+    const rows: StepUpBalance[] = [];
+    for (const r of list as Array<Record<string, unknown>>) {
+      if (!r || typeof r !== "object" || typeof r["Funding"] !== "number") continue;
+      rows.push({
+        program: text(r["ProgramAlias"]) ?? "",
+        ...(typeof r["ProgramType"] === "number" ? { programType: r["ProgramType"] } : {}),
+        fundingCents: toCents(r["Funding"]),
+        spendingCents: toCents(r["Spending"]),
+        reservedCents: toCents(r["Reserved"]),
+        availableCents: toCents(r["Available"]),
+        adjustmentsCents: toCents(r["Adjustments"]),
+      });
+    }
+    if (rows.length) out[seq] = rows;
+  }
+  return out;
+}
+
+/** Students as the app receives them from the page (already parsed there): anything that is not shaped right is dropped. */
+export function sanitizeStudents(v: unknown): StepUpStudent[] {
+  if (!Array.isArray(v)) return [];
+  const out: StepUpStudent[] = [];
+  for (const s of v as Array<Record<string, unknown>>) {
+    if (!s || typeof s["sequenceNumber"] !== "number" || !text(s["id"]) || !text(s["firstName"]) || !text(s["lastName"])) continue;
+    out.push({
+      sequenceNumber: s["sequenceNumber"] as number,
+      id: text(s["id"])!,
+      firstName: text(s["firstName"])!,
+      lastName: text(s["lastName"])!,
+      ...(text(s["middleName"]) ? { middleName: text(s["middleName"])! } : {}),
+      ...(typeof s["isActive"] === "boolean" ? { isActive: s["isActive"] } : {}),
+      programs: Array.isArray(s["programs"]) ? (s["programs"] as unknown[]).filter((p): p is string => typeof p === "string") : [],
+    });
+  }
+  return out;
+}
+
+/** Balances as the app receives them from the page (already in cents). */
+export function sanitizeBalances(v: unknown): Record<string, StepUpBalance[]> {
+  const out: Record<string, StepUpBalance[]> = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? Math.round(x) : 0);
+  for (const [seq, list] of Object.entries(v as Record<string, unknown>)) {
+    if (!/^\d+$/.test(seq) || !Array.isArray(list)) continue;
+    const rows = (list as Array<Record<string, unknown>>).filter((r) => r && typeof r === "object").map((r): StepUpBalance => ({
+      program: typeof r["program"] === "string" ? r["program"] : "",
+      ...(typeof r["programType"] === "number" ? { programType: r["programType"] } : {}),
+      fundingCents: n(r["fundingCents"]),
+      spendingCents: n(r["spendingCents"]),
+      reservedCents: n(r["reservedCents"]),
+      availableCents: n(r["availableCents"]),
+      adjustmentsCents: n(r["adjustmentsCents"]),
+    }));
+    if (rows.length) out[seq] = rows;
+  }
+  return out;
+}
+
+/** What the workspace keeps about the person's students and balances (`student-balances.json`). */
+export interface StepUpPeople {
+  students: StepUpStudent[];
+  /** Keyed by the student's sequence number. */
+  balances: Record<string, StepUpBalance[]>;
+  studentsAt?: string;
+  balancesAt?: string;
+}
+export const emptyPeople = (): StepUpPeople => ({ students: [], balances: {} });
+
+/** The names a student could be known by in the ledger, most specific first (lower case, single spaces). */
+export function studentNameCandidates(s: Pick<StepUpStudent, "firstName" | "lastName" | "middleName">): string[] {
+  const norm = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+  return [...new Set([
+    norm(`${s.firstName} ${s.middleName ?? ""} ${s.lastName}`),
+    norm(`${s.firstName} ${s.lastName}`),
+    norm(`${s.lastName}, ${s.firstName}`),
+    norm(s.firstName),
+  ])];
+}
+
+/** Which ledger child (by id) is each StepUp student, by name; students with no match are left out. */
+export function matchStudentsToChildren(students: readonly StepUpStudent[], children: ReadonlyArray<{ id: string; name?: string }>): Map<number, string> {
+  const byName = new Map<string, string>();
+  for (const c of children) if (c.name) byName.set(c.name.toLowerCase().replace(/\s+/g, " ").trim(), c.id);
+  const out = new Map<number, string>();
+  for (const s of students) {
+    for (const cand of studentNameCandidates(s)) {
+      const id = byName.get(cand);
+      if (id) {
+        out.set(s.sequenceNumber, id);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** The name a new ledger child would get for a StepUp student (the same words StepUp's reimbursements use for them). */
+export const studentDisplayName = (s: Pick<StepUpStudent, "firstName" | "lastName">): string => `${s.firstName} ${s.lastName}`;
+
+// ---- drafts
+
+/** Reimbursements StepUp holds that were never submitted (and not cancelled): worth finishing or abandoning. */
+export function stepUpDrafts(reimbursements: readonly StepUpReimbursement[]): StepUpReimbursement[] {
+  return reimbursements
+    .filter((r) => !/cancel/i.test(r.status) && (/draft|incomplete|unsubmitted/i.test(r.status) || !r.submittedAt))
+    .sort((a, b) => b.number - a.number);
+}
+
 // ---- where the web app keeps what was learned
 
 /** A folder in the workspace root, beside the year folders; the maintainer tools read the same files. */
 export const LEARNED_DIR = "_stepup-cache";
 export const CATEGORY_CACHE_FILE = "category-tree-cache.json";
 export const VENDOR_CACHE_FILE = "vendor-listing-cache.json";
+export const PEOPLE_CACHE_FILE = "student-balances.json";
 
 export async function readLearned<T>(storage: StorageProvider, driveId: string, rootId: string, file: string): Promise<T | undefined> {
   const dir = await storage.find(driveId, rootId, LEARNED_DIR);

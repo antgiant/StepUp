@@ -11,6 +11,8 @@ import {
   mergeDetails,
   mergeTypes,
   mergeVendors,
+  parseBalances,
+  parseStudents,
   typeIdsToExpand,
   type CategoryCache,
   type VendorEntry,
@@ -18,7 +20,7 @@ import {
 import type { Observed } from "./observe.js";
 import type { AgentToApp, AppToAgent } from "./protocol.js";
 import { Recorder } from "./recorder.js";
-import { findAccessToken, tokenFresh } from "./token.js";
+import { findAccessToken, tokenFresh, PERSON_SCOPE } from "./token.js";
 
 /** Bumped when the messages between the agent and the app change in a way an older open app tab would not understand. */
 export const AGENT_PROTOCOL = 1;
@@ -134,6 +136,24 @@ export class StepUpAgent {
     this.lastListSignature = signatureOf(results);
     this.post({ type: "stepup-list", results });
     say(`Sent ${results.length} reimbursements to Step Up Helper. Switch to its tab to see what changed.`);
+    await this.readStudents(token.guardian);
+  }
+
+  /** The student list is a plain read with the person-API sign-in; best effort (a refusal just means it is not learned now). */
+  private async readStudents(guardian: string): Promise<void> {
+    const token = findAccessToken(this.host.storage, PERSON_SCOPE);
+    if (!token || !tokenFresh(token, this.host.now())) return;
+    try {
+      const r = await this.host.fetch(`https://personapi-prod.stepupforstudents.org/api/guardian/${guardian}/studentScholarship/`, {
+        method: "GET",
+        headers: { authorization: `Bearer ${token.secret}` },
+      });
+      if (!r.ok) return;
+      const students = parseStudents(await r.json());
+      if (students.length) this.post({ type: "stepup-learned", kind: "students", students });
+    } catch {
+      /* not learned now; the dashboard asks for it itself too */
+    }
   }
 
   private ticks(): string {
@@ -174,6 +194,11 @@ export class StepUpAgent {
       case "stepup-report":
         this.post({ type: "stepup-recording", report: this.recorder.report() });
         break;
+      case "stepup-refresh-students": {
+        const t = findAccessToken(this.host.storage);
+        if (t?.guardian) void this.readStudents(t.guardian);
+        break;
+      }
     }
   }
 
@@ -205,7 +230,7 @@ export class StepUpAgent {
     if (o.status < 200 || o.status >= 300 || !o.responseText) return;
     const url = o.url;
     const P = STEPUP_PATTERNS;
-    if (!P.reimbursementsSearch.test(url) && !P.categoriesSearch.test(url) && !P.categoryTypes.test(url) && !P.categoryDetails.test(url) && !P.vendorDropdown.test(url)) return;
+    if (!Object.values(P).some((re) => re.test(url))) return;
     let body: unknown;
     try {
       body = JSON.parse(o.responseText);
@@ -229,6 +254,12 @@ export class StepUpAgent {
       void this.maybeExpand(url, idsIn(o.requestBody));
     } else if (P.categoryDetails.test(url)) {
       if (mergeDetails(this.categories, body) > 0) this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });
+    } else if (P.studentScholarship.test(url)) {
+      const students = parseStudents(body);
+      if (students.length) this.post({ type: "stepup-learned", kind: "students", students });
+    } else if (P.balances.test(url)) {
+      const balances = parseBalances(body);
+      if (Object.keys(balances).length) this.post({ type: "stepup-learned", kind: "balances", balances });
     } else if (P.vendorDropdown.test(url)) {
       const ids = categoriesOfRequest(`${url}\n${o.requestBody ?? ""}`, this.categories);
       const touched = mergeVendors(this.vendors, body, ids);

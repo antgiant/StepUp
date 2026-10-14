@@ -6,7 +6,7 @@ export function shapeOf(v: unknown, depth = 0): string {
   if (v === null) return "null";
   if (Array.isArray(v)) return v.length ? `[${v.length}x${shapeOf(v[0], depth + 1)}]` : "[]";
   if (typeof v === "object") {
-    if (depth > 2) return "{...}";
+    if (depth > 4) return "{...}";
     return "{" + Object.keys(v as object).sort().map((k) => `${k}:${shapeOf((v as Record<string, unknown>)[k], depth + 1)}`).join(",") + "}";
   }
   return typeof v;

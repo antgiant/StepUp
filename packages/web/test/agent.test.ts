@@ -273,6 +273,37 @@ describe("what StepUp's page really sends", () => {
   });
 });
 
+describe("students and balances", () => {
+  const STUDENTS = "https://personapi-prod.stepupforstudents.org/api/guardian/0f8fad5b-d9cb-469f-a165-70867728950e/studentScholarship/";
+  const BALANCES = "https://infrastructureapi-prod.stepupforstudents.org/api/balancecheck/bulk/details";
+  const student = { sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", dob: "2012-01-01", isActive: true, scholarships: [{ name: "FES-UA" }] };
+
+  it("reads the student list itself after the click, with the person-API sign-in, and sends no private fields", async () => {
+    const PERSON = "cb885232-83b3-49bc-99cb-55d5b14c52ae/access_as_user";
+    const r = make({
+      tokens: [{ target: REIMBURSEMENT_SCOPE, expiresOn: soon(), claims: { scholar_personId: "person-1" } }, { target: PERSON, expiresOn: soon(), claims: {} }],
+      handler: (url) => (/studentScholarship/.test(url) ? [student] : listBody()),
+    });
+    await r.agent.start();
+    const call = r.requests.find((q) => /studentScholarship/.test(q.url))!;
+    expect(call.url).toBe("https://personapi-prod.stepupforstudents.org/api/guardian/person-1/studentScholarship/");
+    const msg = r.sent.find((s) => s.data["kind"] === "students")!;
+    expect(msg.data["students"]).toEqual([{ sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", isActive: true, programs: ["FES-UA"] }]);
+    expect(JSON.stringify(r.sent)).not.toContain("2012");
+  });
+
+  it("learns the same list, and balances, when the dashboard loads them", async () => {
+    const r = make();
+    await r.agent.start();
+    r.agent.observed(obs(STUDENTS, [student]));
+    r.agent.observed(obs(BALANCES, { "1001": [{ ProgramAlias: "FES-UA", ProgramType: 2, Funding: 100, Spending: 10, Reserved: 5, Available: 85, Adjustments: 0 }] }));
+    const kinds = r.sent.map((s) => s.data["kind"]);
+    expect(kinds).toContain("students");
+    const b = r.sent.find((s) => s.data["kind"] === "balances")!.data["balances"] as Record<string, Array<{ fundingCents: number }>>;
+    expect(b["1001"]![0]!.fundingCents).toBe(10000);
+  });
+});
+
 describe("recording", () => {
   it("records which calls were made and the names and types of their fields, never values", async () => {
     const r = make();

@@ -1,4 +1,4 @@
-import type { CategoryCache, VendorEntry } from "@step-up/shared/web";
+import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@step-up/shared/web";
 
 /** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
 export type AgentToApp =
@@ -6,12 +6,16 @@ export type AgentToApp =
   | { type: "stepup-list"; results: unknown[] }
   | { type: "stepup-learned"; kind: "categories"; cache: CategoryCache }
   | { type: "stepup-learned"; kind: "vendors"; entries: VendorEntry[] }
+  | { type: "stepup-learned"; kind: "students"; students: StepUpStudent[] }
+  | { type: "stepup-learned"; kind: "balances"; balances: Record<string, StepUpBalance[]> }
   | { type: "stepup-recording"; report: RecordingReport };
 
 export type AppToAgent =
   | { type: "stepup-ready" }
   /** What the workspace already knows, so the agent builds on it and keeps to the once-a-day expansion. */
   | { type: "stepup-cache"; categories: CategoryCache }
+  /** Ask the agent to read the student list again now (it does this on every click as well). */
+  | { type: "stepup-refresh-students" }
   | { type: "stepup-record"; on: boolean }
   | { type: "stepup-report" };
 

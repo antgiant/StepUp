@@ -113,6 +113,16 @@ import {
   resultsFromSavedList,
   applyStepUpStatuses,
   applyObservedCategories,
+  PEOPLE_CACHE_FILE,
+  childIdForName,
+  emptyPeople,
+  matchStudentsToChildren,
+  sanitizeBalances,
+  sanitizeStudents,
+  scholarshipNamesMatch as namesMatch,
+  stepUpDrafts,
+  studentDisplayName,
+  type StepUpPeople,
   categoryCacheFrom,
   emptyCategoryCache,
   mergeCategoryCaches,
@@ -135,7 +145,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
-import { agentMessageFrom, loaderHref } from "./stepUpBridge.js";
+import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
@@ -1421,8 +1431,8 @@ let agentWin: { win: Window; origin: string } | undefined;
 let agentTrusted = false;
 let recordingOn = false;
 let recordingReport: RecordingReport | undefined;
-const learned: { key?: string; loading?: Promise<void>; categories: CategoryCache; vendors: Record<string, VendorEntry>; dirty: boolean; timer?: ReturnType<typeof setTimeout>; queue: Promise<void> } =
-  { categories: emptyCategoryCache(), vendors: {}, dirty: false, queue: Promise.resolve() };
+const learned: { key?: string; loading?: Promise<void>; categories: CategoryCache; vendors: Record<string, VendorEntry>; people: StepUpPeople; dirty: boolean; timer?: ReturnType<typeof setTimeout>; queue: Promise<void> } =
+  { categories: emptyCategoryCache(), vendors: {}, people: emptyPeople(), dirty: false, queue: Promise.resolve() };
 
 function toAgent(m: AppToAgent): void {
   if (!agentWin || agentWin.win.closed) return;
@@ -1442,10 +1452,13 @@ function loadLearned(): Promise<void> {
   learned.key = key;
   learned.categories = emptyCategoryCache();
   learned.vendors = {};
+  learned.people = emptyPeople();
   learned.loading = (async () => {
     try {
       learned.categories = categoryCacheFrom(await readLearned(storage, ws.driveId, ws.pointer.rootId, CATEGORY_CACHE_FILE));
       learned.vendors = (await readLearned<Record<string, VendorEntry>>(storage, ws.driveId, ws.pointer.rootId, VENDOR_CACHE_FILE)) ?? {};
+      const people = await readLearned<StepUpPeople>(storage, ws.driveId, ws.pointer.rootId, PEOPLE_CACHE_FILE);
+      if (people) learned.people = { students: sanitizeStudents(people.students), balances: sanitizeBalances(people.balances), studentsAt: people.studentsAt, balancesAt: people.balancesAt };
     } catch {
       /* nothing kept yet, or not readable: start fresh */
     }
@@ -1470,6 +1483,7 @@ function scheduleLearnedWrite(): void {
       try {
         await writeLearned(storage, ws.driveId, ws.pointer.rootId, CATEGORY_CACHE_FILE, learned.categories);
         await writeLearned(storage, ws.driveId, ws.pointer.rootId, VENDOR_CACHE_FILE, learned.vendors);
+        await writeLearned(storage, ws.driveId, ws.pointer.rootId, PEOPLE_CACHE_FILE, learned.people);
       } catch {
         learned.dirty = true; // try again with the next piece of news
       }
@@ -1513,7 +1527,16 @@ window.addEventListener("message", (ev) => {
       break;
     case "stepup-learned":
       if (m.kind === "categories") learned.queue = learned.queue.then(() => takeInLearnedCategories(m.cache)).catch(() => undefined);
-      else {
+      else if (m.kind === "students" || m.kind === "balances") {
+        learned.queue = learned.queue.then(async () => {
+          await loadLearned();
+          const at = new Date().toISOString();
+          if (m.kind === "students") learned.people = { ...learned.people, students: sanitizeStudents(m.students), studentsAt: at };
+          else learned.people = { ...learned.people, balances: { ...learned.people.balances, ...sanitizeBalances(m.balances) }, balancesAt: at };
+          scheduleLearnedWrite();
+          render();
+        }).catch(() => undefined);
+      } else {
         learned.queue = learned.queue.then(async () => {
           await loadLearned();
           for (const e of m.entries) learned.vendors[e.id] = { id: e.id, businessProfileId: e.businessProfileId, name: e.name, categoryIds: [...new Set([...(learned.vendors[e.id]?.categoryIds ?? []), ...(e.categoryIds ?? [])])] };
@@ -1598,6 +1621,50 @@ function yearCheckPanel(): string {
     <p class="row"><button data-dismiss-check>Hide this</button></p></section>`;
 }
 
+/**
+ * StepUp's own numbers beside ours: each student's funding, spending, reserved and available money per program, with the
+ * award and remaining amount this year's ledger works from. Read-only, apart from two explicit actions: add a student the
+ * ledger lacks, and use StepUp's funding as a student's award.
+ */
+function stepUpSaysPanel(): string {
+  const people = learned.people;
+  if (people.students.length === 0 && Object.keys(people.balances).length === 0) return "";
+  const s = yearSummary(ledger.state, ctx());
+  const children = Object.values(ledger.state.children);
+  const matched = matchStudentsToChildren(people.students, children);
+  const mine = new Map(s.children.map((b) => [b.childId, b]));
+  const when = people.balancesAt ?? people.studentsAt;
+  const students = [...people.students].sort((a, b) => (b.isActive === false ? 0 : 1) - (a.isActive === false ? 0 : 1) || a.firstName.localeCompare(b.firstName));
+  const rows = students.map((st) => {
+    const childId = matched.get(st.sequenceNumber);
+    const bal = people.balances[String(st.sequenceNumber)] ?? [];
+    const ours = childId ? mine.get(childId) : undefined;
+    const name = esc(studentDisplayName(st));
+    const money = bal.length
+      ? `<table class="note"><thead><tr><th>Program</th><th>Funding</th><th>Spent</th><th>Reserved</th><th>Available</th><th></th></tr></thead><tbody>${bal.map((b) => `<tr><td>${esc(b.program || "(program)")}</td><td>${formatCents(b.fundingCents)}</td><td>${formatCents(b.spendingCents)}</td><td>${formatCents(b.reservedCents)}</td><td>${formatCents(b.availableCents)}</td>
+          <td>${childId && ours && ours.capCents !== b.fundingCents && b.fundingCents > 0 ? `<button data-use-award="${esc(childId)}|${b.fundingCents}">Use ${formatCents(b.fundingCents)} as the award</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="note">No balance seen yet. Click <strong>Dashboard</strong> in StepUp to have it sent.</p>`;
+    const us = ours ? `<p class="note">In this year's ledger: award ${formatCents(ours.capCents)}, remaining ${formatCents(ours.remainingCents)}.</p>` : childId ? "" : `<p class="note">Not in this year's ledger. <button data-add-student="${st.sequenceNumber}">Add ${name}</button></p>`;
+    return `<li><strong>${name}</strong>${st.isActive === false ? " <small>(not active)</small>" : ""}${money}${us}</li>`;
+  }).join("");
+  const orphans = Object.keys(people.balances).filter((seq) => !people.students.some((st) => String(st.sequenceNumber) === seq));
+  return `<section class="panel"><h3 class="panel-title">What StepUp says<small>students and balances as StepUp reports them${when ? ` · read ${esc(new Date(when).toLocaleString())}` : ""}</small></h3>
+    <ul>${rows}</ul>${orphans.length ? `<p class="note">${orphans.length} balance(s) are for students whose names have not been read yet; click the bookmark again.</p>` : ""}</section>`;
+}
+
+/** Reimbursements StepUp holds that were never submitted: worth finishing or abandoning. */
+function draftsPanel(): string {
+  const drafts = stepUpDrafts(workspace?.stepUp?.reimbursements ?? []);
+  if (drafts.length === 0) return "";
+  const rows = drafts.map((r) => {
+    const total = r.lines.reduce((n, l) => n + l.amountCents, 0);
+    const touched = r.modifiedAt ?? r.createdAt;
+    return `<li>#${r.number}${r.student ? ` for ${esc(r.student)}` : ""}: ${r.lines.length} item(s), ${formatCents(total)}${touched ? ` <small>· last touched ${esc(touched)}</small>` : ""}
+      <a href="${esc(`${STEPUP_ORIGIN}/SubmitReimbursement/${r.id}/1`)}" target="_blank" rel="noopener">Open in StepUp</a></li>`;
+  }).join("");
+  return `<section class="panel"><h3 class="panel-title">Unfinished drafts on StepUp<small>${drafts.length} started and not submitted; they hold the student's balance until finished or removed</small></h3><ul>${rows}</ul></section>`;
+}
+
 /** What the filing tool would send to StepUp, and what is holding the rest back. Only a look; filing happens in StepUp's own tab. */
 function planPanel(): string {
   if (readOnly() || !workspace) return "";
@@ -1629,7 +1696,7 @@ function summaryView(): string {
   return `<h2>Summary</h2>${banner}${deadlineForm}
     ${awards.length ? `<h3>Award for each student</h3>${awards.join("")}` : readOnly() ? "" : `<p>Add a student on the list page first.</p>`}
     ${Object.keys(filingNow()).length ? `<p class="banner">${Object.keys(filingNow()).length} item(s) are being filed with StepUp right now (see the list page).</p>` : ""}
-    ${yearCheckPanel()}${planPanel()}
+    ${yearCheckPanel()}${planPanel()}${stepUpSaysPanel()}${draftsPanel()}
     ${pivotTables(state, ctx())}
     ${readOnly() ? `<p class="row"><button id="legacy-download" class="primary">Download as a spreadsheet</button> <small>The same tracking sheet, summary and document list the app keeps for its own years.</small></p>` : ""}`;
 }
@@ -3020,6 +3087,26 @@ root.addEventListener("click", async (ev) => {
     pendingStepUp = undefined;
     agentTrusted = true;
     if (list) await guarded(() => bringInStepUpList(list), "Bringing in StepUp's list…");
+  } else if (t.dataset["addStudent"]) {
+    const st = learned.people.students.find((x) => String(x.sequenceNumber) === t.dataset["addStudent"]);
+    if (st && !workspace?.legacy) {
+      const name = studentDisplayName(st);
+      // The program, when StepUp's names for it and one of ours are the same words; otherwise it is chosen on the list page.
+      const known = [...st.programs, ...(learned.people.balances[String(st.sequenceNumber)] ?? []).map((b) => b.program)];
+      const scholarship = SCHOLARSHIPS.find(([v]) => known.some((k) => namesMatch(k, v)))?.[0];
+      ledger.set("child", childIdForName(name), { name, ...(scholarship ? { scholarship } : {}) }, { label: "child.created" });
+      await save();
+      status = `Added ${name} from StepUp${scholarship ? ` (${scholarship})` : "; choose the program on the list page"}.`;
+    }
+    render();
+  } else if (t.dataset["useAward"]) {
+    const [childId, cents] = (t.dataset["useAward"] ?? "").split("|");
+    if (childId && ledger.state.children[childId] && Number(cents) > 0 && !workspace?.legacy) {
+      ledger.set("child", childId, { capCents: Number(cents) }, { label: "child.awardSet" });
+      await save();
+      status = `Set ${ledger.state.children[childId]!.name ?? "the student"}'s award to ${formatCents(Number(cents))}, as StepUp reports.`;
+    }
+    render();
   } else if (t.dataset["agent"] !== undefined) {
     const what = t.dataset["agent"];
     if (what === "record-on") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true }); }

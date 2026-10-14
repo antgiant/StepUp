@@ -101,6 +101,22 @@ with everything populated, the person submits, and the ledger shows the reimburs
 | C5 | **Pre-auth list** | show pre-authorisations | dormant; only if the owner has a use |
 | C6 | **Drafts on StepUp** | list unsubmitted drafts automatically | the app already shows "unsubmitted StepUp draft" from claims; this makes it complete |
 
+**Status (2026-10-14):** C1, C2, C3 and C6 are built and tested; C4 and C5 are not.
+
+- **C1/C2** (`stepUpSaysPanel` on the Summary tab): students are read once on each click (person-API sign-in, a plain GET)
+  and again when the dashboard loads them; balances come only when the dashboard asks for them (its request body is not
+  known, so the agent does not call that endpoint itself yet). Nothing is written without a click: *Add <name>* creates a
+  child, *Use $X as the award* sets that child's award. Only names, ids, sequence numbers and program names are kept;
+  birth dates and school details never leave StepUp's page. Kept in `_stepup-cache/student-balances.json`.
+- **C3**: StepUp's `RequiresServiceDate` on a category is learned and may **raise** this year's requirement; it never lowers
+  one, so the maintainers' stricter rules stand. Types and details report `null` and inherit from the category.
+- **C6** (`draftsPanel`): drafts are what StepUp's list holds with a draft/incomplete status or no submit date, with a link
+  to open each in StepUp. The exact status word for a draft is not confirmed from a recording; the match is the
+  CLI's (`draft|incomplete|unsubmitted`) plus "never submitted".
+- **C4 not built**: it needs to be known whether a comment's `SourceEntityId` is a reimbursement or a line item, and the
+  recorder's report was cut off at the level that would say. The recorder now goes two levels deeper. **C5 not built**:
+  dormant, nothing would use it.
+
 Each is a small learner in `shared/stepup/learn.ts` (pure, tested with invented payloads), an agent observer, and an app
 handler. C1–C3 are the ones that remove the most manual work.
 

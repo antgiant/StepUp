@@ -44,6 +44,8 @@ export function agentMessageFrom(origin: string, data: unknown): AgentToApp | un
           Boolean(e) && typeof e === "object" && typeof (e as { id?: unknown }).id === "string" && typeof (e as { name?: unknown }).name === "string");
         return { type: "stepup-learned", kind: "vendors", entries };
       }
+      if (m["kind"] === "students" && Array.isArray(m["students"])) return { type: "stepup-learned", kind: "students", students: m["students"] as never };
+      if (m["kind"] === "balances" && m["balances"] && typeof m["balances"] === "object") return { type: "stepup-learned", kind: "balances", balances: m["balances"] as never };
       return undefined;
     case "stepup-recording":
       return m["report"] && typeof m["report"] === "object" ? { type: "stepup-recording", report: m["report"] as never } : undefined;

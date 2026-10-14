@@ -36,6 +36,7 @@ const FIELD_NAMES: Record<string, string> = {
   childId: "Student",
   scholarship: "Program",
   capCents: "Award",
+  requiresServiceDate: "Needs a service date",
   includeTax: "Include tax",
   archived: "Archived",
   filename: "File name",
