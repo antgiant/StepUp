@@ -20,6 +20,20 @@ describe("the Excel year mirrors the ledger view, read-only", () => {
     expect(main).not.toMatch(/legacy(Queue|Purchase|Statements|Summary)View|legacyTabs/);
   });
 
+  it("lets a person leave an Excel year and use the StepUp bookmarklet from it", () => {
+    // These controls are drawn outside <header>, so the guard would otherwise disable or remove them.
+    const keep = guard.slice(guard.indexOf("READ_ONLY_KEEP = ["), guard.indexOf('].join(",")'));
+    for (const id of ["year-pick", "dismiss-status", "reload-app", "show-bookmarklet", "copy-bookmarklet", "close-bookmarklet", "stepup-apply", "stepup-ignore"]) {
+      expect(keep, `#${id} must stay usable in the Excel view`).toContain(`#${id}`);
+    }
+    // ...and each of them is allowed through the Excel view's click filter.
+    for (const id of ["show-bookmarklet", "close-bookmarklet", "copy-bookmarklet", "stepup-apply", "stepup-ignore"]) {
+      expect(main, `#${id} must be reachable from the Excel view`).toContain(`t.id === "${id}"`);
+    }
+    // The Excel view's Advanced menu offers the bookmarklet.
+    expect(main).toMatch(/legacy-download">Download as a spreadsheet<\/button><button id="show-bookmarklet"/);
+  });
+
   it("keeps only viewing controls", () => {
     const keep = guard.slice(guard.indexOf("READ_ONLY_KEEP = ["), guard.indexOf('].join(",")'));
     for (const action of ["archive", "unarchive", "ready", "link", "upload", "rename", "dup", "edit", "remove", "read", "attach", "start", "use", "replace"]) {

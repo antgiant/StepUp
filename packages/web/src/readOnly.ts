@@ -7,7 +7,13 @@
  */
 export const READ_ONLY_KEEP = [
   "[data-go]", "[data-open]", "[data-statement]", "[data-preview]", "[data-preview-proof]", "[data-pcell]", "[data-pivot-reset]", "[data-drill-clear]",
-  "[data-clear='legacy-search']", "[data-clear='history-search']", "[data-history-more]", "[id^='history-']", "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
+  "[data-clear='legacy-search']", "[data-clear='history-search']", "[data-history-more]", "[id^='history-']",
+  // Page chrome that sits outside <header>: moving between years, closing a notice, loading a new version of the app.
+  "#year-pick", "#dismiss-status", "#reload-app",
+  // The StepUp bookmarklet: how to get it, and answering what it sent. Bringing the list in writes only `<year>/_stepup/`,
+  // never the workbook (the same thing the command line has always done for an Excel year).
+  "#show-bookmarklet", "#copy-bookmarklet", "#close-bookmarklet", "#stepup-apply", "#stepup-ignore",
+  "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
 ].join(",");
 
 export function enforceReadOnly(scope: ParentNode): void {
