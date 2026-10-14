@@ -339,7 +339,7 @@ describe("students and balances", () => {
     const call = r.requests.find((q) => /studentScholarship/.test(q.url))!;
     expect(call.url).toBe("https://personapi-prod.stepupforstudents.org/api/guardian/person-1/studentScholarship/");
     const msg = r.sent.find((s) => s.data["kind"] === "students")!;
-    expect(msg.data["students"]).toEqual([{ sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", isActive: true, programs: ["FES-UA"] }]);
+    expect(msg.data["students"]).toEqual([{ sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", isActive: true, programs: ["FES-UA"], scholarships: [{ program: "FES-UA" }] }]);
     expect(JSON.stringify(r.sent)).not.toContain("2012");
   });
 
@@ -407,6 +407,26 @@ describe("what the recorder keeps of values", () => {
     expect(calls["POST reimbursementapi-prod/api/other"]!.samples).toEqual({ sortOrder: 0 });
     const text = JSON.stringify(calls);
     for (const secret of ["Private Name", "Private Shop", "12.34", "2026-09-01"]) expect(text).not.toContain(secret);
+  });
+
+  it("keeps the values typed into an item only when asked, and never otherwise", async () => {
+    const body = { externalStatus: "Draft", lineItems: [{ itemAmount: 25, CostPerItem: 10, Quantity: 2, AdditionalCosts: 5, taxPercent: 0, purchaseDate: "2026-09-15T00:00:00", vendorName: "Made Up Shop", ItemUrl: "https://example.test/x" }] };
+    const run = async (values: boolean) => {
+      const r = make();
+      await r.agent.start();
+      r.fromApp({ type: "stepup-record", on: true, values });
+      r.agent.observed({ via: "fetch", method: "PUT", url: "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/v2/0f8fad5b-d9cb-469f-a165-70867728950e", status: 200, ms: 3, requestBody: JSON.stringify(body), responseText: "{}" });
+      r.fromApp({ type: "stepup-report" });
+      const rep = r.sent.find((s) => s.data.type === "stepup-recording")!.data["report"] as { values?: boolean; calls: Record<string, { samples?: Record<string, unknown> }> };
+      return rep;
+    };
+    const off = await run(false);
+    expect(off.values).toBe(false);
+    expect(JSON.stringify(off)).not.toContain("Made Up Shop");
+    expect(Object.keys(off.calls["PUT reimbursementapi-prod/api/reimbursements/v2/{guid}"]!.samples!)).toEqual(["externalStatus"]);
+    const on = await run(true);
+    expect(on.values).toBe(true);
+    expect(on.calls["PUT reimbursementapi-prod/api/reimbursements/v2/{guid}"]!.samples).toMatchObject({ itemAmount: 25, CostPerItem: 10, Quantity: 2, AdditionalCosts: 5, vendorName: "Made Up Shop" });
   });
 
   it("notes uploads to storage that only the browser's own timeline sees, without file names or signatures", async () => {

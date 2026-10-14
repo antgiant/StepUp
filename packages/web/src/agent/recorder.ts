@@ -114,6 +114,29 @@ export function samplesOf(v: unknown, into: Record<string, string | number | boo
   return into;
 }
 
+/**
+ * What a person types into an item (amounts, dates, names), kept only when they switch on "keep the values I type" and
+ * enter made-up ones: it is how the arithmetic between fields (amount, cost, quantity, tax) is learned.
+ */
+const VALUE_KEYS = new Set([
+  "itemamount", "costperitem", "additionalcosts", "quantity", "taxpercent", "purchasedate", "purchasemindate", "purchasemaxdate",
+  "servicedate", "servicemindate", "servicemaxdate", "invoicedate", "serviceinvoicenumber", "lineitemnumber", "vendorcode",
+  "vendorname", "itemurl", "educationalbenefit", "categoryname", "categorytypename", "categorydetailname",
+]);
+
+function valuesOf(v: unknown, into: Record<string, string | number | boolean | null> = {}, depth = 0): Record<string, string | number | boolean | null> {
+  if (depth > 6 || v === null || typeof v !== "object") return into;
+  if (Array.isArray(v)) {
+    for (const x of v.slice(0, 3)) valuesOf(x, into, depth + 1);
+    return into;
+  }
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (VALUE_KEYS.has(k.toLowerCase()) && !(k in into) && (val === null || typeof val === "boolean" || typeof val === "number" || (typeof val === "string" && val.length <= 120))) into[k] = val as never;
+    else if (val && typeof val === "object") valuesOf(val, into, depth + 1);
+  }
+  return into;
+}
+
 /** A placeholder date (year 0001) is a setting; a real date is not recorded. */
 const placeholderDate = (v: unknown): boolean => typeof v === "string" && /^0001-/.test(v);
 
@@ -123,6 +146,8 @@ const NOISE = /monitor\.azure|applicationinsights/;
 /** Records which of StepUp's endpoints the page calls, with the shapes of requests and responses, while switched on. */
 export class Recorder {
   on = false;
+  /** Also keep the values of the fields in VALUE_KEYS (the person has said they are entering made-up ones). */
+  values = false;
   startedAt?: string;
   private calls = new Map<string, RecordingReport["calls"][string]>();
   private pages: string[] = [];
@@ -137,6 +162,7 @@ export class Recorder {
     const r = new Recorder();
     if (!report) return r;
     r.on = Boolean(report.on);
+    r.values = Boolean((report as { values?: boolean }).values);
     r.startedAt = report.startedAt;
     r.loads = [...(report.loads ?? [])];
     r.pages = [...(report.pages ?? [])];
@@ -149,8 +175,9 @@ export class Recorder {
     this.provenance.index(`${method} ${normalizeUrl(url)}`, json);
   }
 
-  start(now: string, page: string): void {
+  start(now: string, page: string, values = false): void {
     this.on = true;
+    this.values = values;
     this.startedAt = now;
     this.loads.push({ at: now.slice(11, 19), page });
   }
@@ -189,7 +216,7 @@ export class Recorder {
         const j = JSON.parse(o.requestBody) as unknown;
         e.req = shapeOf(j);
         e.origins = { ...this.provenance.trace(j), ...(e.origins ?? {}) };
-        e.samples = { ...samplesOf(j), ...(e.samples ?? {}) };
+        e.samples = { ...samplesOf(j), ...(this.values ? valuesOf(j) : {}), ...(e.samples ?? {}) };
         const sd = (j as { submitDate?: unknown } | null)?.submitDate;
         if (placeholderDate(sd)) e.samples["submitDate"] = sd as string;
       } catch {
@@ -223,6 +250,6 @@ export class Recorder {
     this.calls.set(key, e);
   }
   report(): RecordingReport {
-    return { on: this.on, startedAt: this.startedAt, loads: this.loads, pages: [...new Set(this.pages)], calls: Object.fromEntries(this.calls) };
+    return { on: this.on, values: this.values, startedAt: this.startedAt, loads: this.loads, pages: [...new Set(this.pages)], calls: Object.fromEntries(this.calls) };
   }
 }

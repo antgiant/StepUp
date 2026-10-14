@@ -60,6 +60,66 @@ Still unknown for B: the values of the status/enum fields on a new draft (the re
 setting-like fields), the exact `ReceiptDocuments[]` item, how storage upload is authorised, and the submit call (never
 exercised, by design).
 
+### What the fourth recording established (2026-10-14; the first from a current build with ids traced and values sampled)
+
+All of this is shape and traced origin, never values. Where a word is quoted it is a setting StepUp uses, not personal data.
+
+**Creating a draft** (`POST …/reimbursements/v2`, about 1.4 KB):
+
+| Field | Where the page gets it |
+|---|---|
+| `Id` | made up by the page (the call's own response is the first place it appears) |
+| `guardianId` | `studentScholarship[].primaryGuardianId` |
+| `guardianSequenceNumber` | `guardians/{id}.sequenceNumber` |
+| `studentId`, `studentSequenceNumber` | `studentScholarship[].id`, `.sequenceNumber` |
+| `programId`, `internalProgramId` | `infrastructureapi … /programs/search` → `Results[].Id` (a call made at page load; its request is not yet recorded) |
+| `guardianName`, `studentName`, `programName` | the same sources (names) |
+| fixed words | `externalStatus` = `"Draft"`, `internalStatus` = `"Draft"`, `displayExternalStatus` = `"Draft"`, `displayInternalStatus` = `null`, `submitDate` = `"0001-01-01T00:00:00"`, `schoolYear` = `null`, `programType` = `0`, `PartitionVersion` = `0`, `skipValidation` = `false`, `lineItems` = `[]`, `receipts` = `[]` |
+
+The server replies with the stored draft: `sequenceNumber` (the reimbursement number), `schoolYear` (`"2026-2027"`),
+`programType` as text (`"FESUA"`), and `displayInternalStatus` = `"Draft"`. **A later save sends `programType` as the number
+`24`** (StepUp's partner id for the program), not `0`, and `schoolYear` as returned.
+
+**Receipt upload** is three calls, then a save:
+
+1. `POST …/documents-sasuri` with `ReimbursementDocuments.ReceiptDocuments[]` = `{ Id (made up), PartitionVersion: 0,
+   sourceFileName, everything else null }`, `ReimbursementId` and `EntityId` = the draft's id, `ShouldUpload: true`. The reply
+   gives the same item with `blobSasUri` (an upload address).
+2. `PUT <blobSasUri>`: an Azure blob upload with `x-ms-blob-type`, `x-ms-version`, `content-type`, `content-length`; 201 on
+   success. **This goes through `fetch`, so it is visible to the agent**; the older reading that it was hidden was wrong
+   (those earlier builds had not yet wrapped the storage host).
+3. `PUT …/reimbursements/v2/{id}` with `receipts[]` = `{ Id (the same), PartitionVersion: 0, blobSasUri, sourceFileName,
+   fileType: "data:application/pdf;base64," (a data-URI prefix, not a media type), others null }`. The reply carries
+   `generatedFileName` and `fileData` for the receipt.
+4. `POST …/sasuri { GeneratedFileName }` returns a read address, for the preview.
+
+**Saving and leaving**: every step change is a `PUT` of the whole draft; `GET …/reimbursements/v2/{id}` is polled while the
+page waits for the scan (`ocrFormatted`, `ocrTimeToProcessInSeconds` fill in). Abandoning is `DELETE …/V2/{id}` with the
+whole draft as its body. **No submit call was exercised, by design.**
+
+**A line item** in a save is the set (PascalCase is how StepUp's own model spells them; the rest are camelCase):
+`AdditionalCosts, CostPerItem, EvaluationFields, Id, ItemUrl, MatchedItemName, PartitionVersion, PreAuthSequenceNumber,
+PurchaseMaxDate, PurchaseMinDate, Quantity, ServiceMaxDate, ServiceMinDate, ServiceProviderPersonIdString` and
+`categoryId/categoryName, categoryTypeId/Name, categoryDetailId/Name, educationalBenefit, itemAmount, lineItemNumber,
+purchaseDate, serviceDate, serviceInvoiceNumber, serviceProviderCode/Name/PersonId/PersonName, taxPercent, vendorCode,
+vendorName, receiptId`, plus status fields. `receiptId` is the receipt's `Id`; the item's own `Id` is assigned by the
+server's reply to the first save that includes it. The arithmetic between `itemAmount`, `CostPerItem`, `Quantity`,
+`AdditionalCosts` and `taxPercent`, and the date formats, are **not yet known** (see "next recording").
+
+**Other facts:** `programs/search` supplies program ids and exists on the infrastructure API; `categories/search`'s
+approved programs carry `PartnerId` and `ProgramType: 24`; `getbusinesssummarydropdown` filters by `ProgramType: "FESUA"`
+and pages 20 at a time; `vendors/search` is the full list (request: the standard envelope with `Filters: {}`); an
+unfinished draft's status word is **`Draft`**. A student's `scholarships[]` carries `programName`, `programYear`, `status`
+(`Funded`), **`awardAmount` and `fundedAmount`**: the award per year, so awards need not be typed at all.
+
+### Next recording (needed before an item can be written)
+
+Turn on **Record, keeping what I type into an item** and enter made-up values, so the field arithmetic is learned:
+quantity 2, cost per item 10.00, tax/shipping 5.00, one purchase date and one service date (any, made up), an invoice
+number `TEST-1`, vendor chosen from the list, benefit message `test`, URL `https://example.test/x`. Also start recording
+**before** the Dashboard loads, or navigate away and back to the Dashboard while recording, so `programs/search` and
+`balancecheck/bulk/details` requests are caught.
+
 ## 2. Principles (non-negotiable)
 
 1. **The agent never submits.** A person presses StepUp's own Submit. The agent may create and fill a draft; it may not

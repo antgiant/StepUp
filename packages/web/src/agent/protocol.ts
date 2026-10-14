@@ -16,12 +16,14 @@ export type AppToAgent =
   | { type: "stepup-cache"; categories: CategoryCache }
   /** Ask the agent to read the student list again now (it does this on every click as well). */
   | { type: "stepup-refresh-students" }
-  | { type: "stepup-record"; on: boolean }
+  | { type: "stepup-record"; on: boolean; /** Also keep the values typed into items; only when the person is entering made-up ones. */ values?: boolean }
   | { type: "stepup-report" };
 
 /** The shapes (never values) of the calls StepUp's page made while recording: enough to build the next feature from. */
 export interface RecordingReport {
   on: boolean;
+  /** True when the values typed into items were kept as well (made-up ones, by the person's choice). */
+  values?: boolean;
   startedAt?: string;
   loads: Array<{ at: string; page: string }>;
   pages: string[];

@@ -246,6 +246,16 @@ export interface StepUpStudent {
   isActive?: boolean;
   /** Names of the scholarships/programs it lists for the student, when it names them. */
   programs: string[];
+  /** Each scholarship StepUp lists for the student: the program, its year and status, and what it awarded and funded. */
+  scholarships?: StepUpScholarship[];
+}
+
+export interface StepUpScholarship {
+  program: string;
+  year?: string;
+  status?: string;
+  awardCents?: number;
+  fundedCents?: number;
 }
 
 /** One program's money for one student, in cents, as StepUp reports it. */
@@ -280,7 +290,22 @@ export function parseStudents(body: unknown): StepUpStudent[] {
         if (name) programs.add(name);
       }
     }
-    out.push({ sequenceNumber: seq, id, firstName: first, lastName: last, ...(text(raw["middleName"]) ? { middleName: text(raw["middleName"])! } : {}), ...(typeof raw["isActive"] === "boolean" ? { isActive: raw["isActive"] } : {}), programs: [...programs].sort() });
+    const scholarships: StepUpScholarship[] = [];
+    if (Array.isArray(raw["scholarships"])) {
+      for (const x of raw["scholarships"] as Array<Record<string, unknown>>) {
+        if (!x || typeof x !== "object") continue;
+        const program = text(x["programName"]) ?? text(x["name"]) ?? text(x["programAlias"]);
+        if (!program) continue;
+        scholarships.push({
+          program,
+          ...(text(x["programYear"]) ? { year: text(x["programYear"])! } : {}),
+          ...(text(x["status"]) ? { status: text(x["status"])! } : {}),
+          ...(typeof x["awardAmount"] === "number" ? { awardCents: toCents(x["awardAmount"]) } : {}),
+          ...(typeof x["fundedAmount"] === "number" ? { fundedCents: toCents(x["fundedAmount"]) } : {}),
+        });
+      }
+    }
+    out.push({ sequenceNumber: seq, id, firstName: first, lastName: last, ...(scholarships.length ? { scholarships } : {}), ...(text(raw["middleName"]) ? { middleName: text(raw["middleName"])! } : {}), ...(typeof raw["isActive"] === "boolean" ? { isActive: raw["isActive"] } : {}), programs: [...programs].sort() });
   }
   return out;
 }
@@ -323,6 +348,23 @@ export function sanitizeStudents(v: unknown): StepUpStudent[] {
       ...(text(s["middleName"]) ? { middleName: text(s["middleName"])! } : {}),
       ...(typeof s["isActive"] === "boolean" ? { isActive: s["isActive"] } : {}),
       programs: Array.isArray(s["programs"]) ? (s["programs"] as unknown[]).filter((p): p is string => typeof p === "string") : [],
+      ...(Array.isArray(s["scholarships"]) ? { scholarships: sanitizeScholarships(s["scholarships"]) } : {}),
+    });
+  }
+  return out;
+}
+
+function sanitizeScholarships(v: unknown[]): StepUpScholarship[] {
+  const out: StepUpScholarship[] = [];
+  for (const x of v as Array<Record<string, unknown>>) {
+    if (!x || typeof x !== "object" || !text(x["program"])) continue;
+    const n = (k: string) => (typeof x[k] === "number" && Number.isFinite(x[k] as number) ? Math.round(x[k] as number) : undefined);
+    out.push({
+      program: text(x["program"])!,
+      ...(text(x["year"]) ? { year: text(x["year"])! } : {}),
+      ...(text(x["status"]) ? { status: text(x["status"])! } : {}),
+      ...(n("awardCents") !== undefined ? { awardCents: n("awardCents")! } : {}),
+      ...(n("fundedCents") !== undefined ? { fundedCents: n("fundedCents")! } : {}),
     });
   }
   return out;

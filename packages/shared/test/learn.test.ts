@@ -67,8 +67,21 @@ describe("students and balances", () => {
   it("keeps only the fields the app needs: no birth date, no school", () => {
     const s = parseStudents(raw);
     expect(s).toHaveLength(2);
-    expect(s[0]).toEqual({ sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", middleName: "Q", isActive: true, programs: ["FES-UA", "FTC"] });
+    expect(s[0]).toEqual({ sequenceNumber: 1001, id: "s-1", firstName: "Alex", lastName: "Sample", middleName: "Q", isActive: true, programs: ["FES-UA", "FTC"], scholarships: [{ program: "FES-UA" }] });
     expect(JSON.stringify(s)).not.toContain("2012");
+  });
+
+  it("reads each scholarship's program, year, status and award and funded amounts", () => {
+    const [st] = parseStudents([{ sequenceNumber: 1, id: "s", firstName: "A", lastName: "B", scholarships: [
+      { programName: "FES-UA", programYear: "2026-2027", status: "Funded", awardAmount: 7000.5, fundedAmount: 7000.5, studentId: "x" },
+      { programName: "FTC", programYear: "2025-2026", status: "Renewed", awardAmount: 5000 },
+      { nothing: true },
+    ] }]);
+    expect(st!.scholarships).toEqual([
+      { program: "FES-UA", year: "2026-2027", status: "Funded", awardCents: 700050, fundedCents: 700050 },
+      { program: "FTC", year: "2025-2026", status: "Renewed", awardCents: 500000 },
+    ]);
+    expect(sanitizeStudents([st])[0]!.scholarships).toEqual(st!.scholarships);
   });
 
   it("reads balances keyed by student, in cents", () => {

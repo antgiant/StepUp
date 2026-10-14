@@ -1515,7 +1515,7 @@ window.addEventListener("message", (ev) => {
       agentWin = { win: ev.source as Window, origin: ev.origin };
       (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
       sendAgentCache();
-      if (recordingOn) toAgent({ type: "stepup-record", on: true });
+      if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
       render();
       break;
     case "stepup-list":
@@ -1577,7 +1577,8 @@ function agentSection(): string {
     <p class="note">${connected ? "A StepUp page is connected: while it stays open, this app learns from what you do there." : "No StepUp page is connected. Click the bookmark on StepUp's Dashboard."} ${esc(known)}</p>
     ${connected ? `<p class="row">${recordingOn
       ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
-      : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>`}</p>` : ""}
+      : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>
+         <br><button data-agent="record-values">Record, keeping what I type into an item</button> <small>(use made-up amounts, dates and names: it keeps those fields' values so the arithmetic can be learned)</small>`}</p>` : ""}
     ${report ? `<p class="note">This is only the shape of the calls. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${report}</textarea>
       <p class="row"><button data-agent="copy">Copy</button></p>` : ""}`;
 }
@@ -1644,7 +1645,11 @@ function stepUpSaysPanel(): string {
       ? `<table class="note"><thead><tr><th>Program</th><th>Funding</th><th>Spent</th><th>Reserved</th><th>Available</th><th></th></tr></thead><tbody>${bal.map((b) => `<tr><td>${esc(b.program || "(program)")}</td><td>${formatCents(b.fundingCents)}</td><td>${formatCents(b.spendingCents)}</td><td>${formatCents(b.reservedCents)}</td><td>${formatCents(b.availableCents)}</td>
           <td>${childId && ours && ours.capCents !== b.fundingCents && b.fundingCents > 0 ? `<button data-use-award="${esc(childId)}|${b.fundingCents}">Use ${formatCents(b.fundingCents)} as the award</button>` : ""}</td></tr>`).join("")}</tbody></table>`
       : `<p class="note">No balance seen yet. Click <strong>Dashboard</strong> in StepUp to have it sent.</p>`;
-    const us = ours ? `<p class="note">In this year's ledger: award ${formatCents(ours.capCents)}, remaining ${formatCents(ours.remainingCents)}.</p>` : childId ? "" : `<p class="note">Not in this year's ledger. <button data-add-student="${st.sequenceNumber}">Add ${name}</button></p>`;
+    const yearAward = (st.scholarships ?? []).filter((x) => x.year === workspace?.year.label && x.awardCents !== undefined);
+    const awards = yearAward.length
+      ? `<p class="note">StepUp's ${esc(workspace!.year.label)} award: ${yearAward.map((x) => `${esc(x.program)} ${formatCents(x.awardCents ?? 0)}${x.fundedCents !== undefined && x.fundedCents !== x.awardCents ? ` (funded ${formatCents(x.fundedCents)})` : ""}${x.status ? ` · ${esc(x.status)}` : ""}${childId && ours && x.awardCents && ours.capCents !== x.awardCents ? ` <button data-use-award="${esc(childId)}|${x.awardCents}">Use ${formatCents(x.awardCents)} as the award</button>` : ""}`).join("; ")}</p>`
+      : "";
+    const us = awards + (ours ? `<p class="note">In this year's ledger: award ${formatCents(ours.capCents)}, remaining ${formatCents(ours.remainingCents)}.</p>` : childId ? "" : `<p class="note">Not in this year's ledger. <button data-add-student="${st.sequenceNumber}">Add ${name}</button></p>`);
     return `<li><strong>${name}</strong>${st.isActive === false ? " <small>(not active)</small>" : ""}${money}${us}</li>`;
   }).join("");
   const orphans = Object.keys(people.balances).filter((seq) => !people.students.some((st) => String(st.sequenceNumber) === seq));
@@ -3109,7 +3114,7 @@ root.addEventListener("click", async (ev) => {
     render();
   } else if (t.dataset["agent"] !== undefined) {
     const what = t.dataset["agent"];
-    if (what === "record-on") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true }); }
+    if (what === "record-on" || what === "record-values") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true, values: what === "record-values" }); }
     else if (what === "record-off") { toAgent({ type: "stepup-record", on: false }); toAgent({ type: "stepup-report" }); recordingOn = false; }
     else if (what === "report") toAgent({ type: "stepup-report" });
     else if (what === "copy" && recordingReport) {

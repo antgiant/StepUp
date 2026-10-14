@@ -275,7 +275,7 @@ export class StepUpAgent {
         this.cacheKnown = true;
         break;
       case "stepup-record":
-        if (m.on) this.recorder.start(new Date(this.host.now()).toISOString(), this.host.currentPage());
+        if (m.on) this.recorder.start(new Date(this.host.now()).toISOString(), this.host.currentPage(), m.values === true);
         else this.recorder.stop();
         break;
       case "stepup-report":
