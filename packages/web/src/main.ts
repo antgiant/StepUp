@@ -124,6 +124,7 @@ import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
+import { bookmarkletCode, isStepUpHello, stepUpListFrom } from "./stepUpBridge.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
@@ -1097,12 +1098,12 @@ function header(): string {
         ${ocrLanguages().available.length > 1 ? `<label>Reading scans in<select id="ocr-lang">${[...ocrLanguages().available.map((l) => [l, ocrLanguageName(l)] as const), ["all", "All installed (slower)"] as const].map(([v, n]) => `<option value="${esc(v)}"${(v === "all" ? ocrLanguages().current.length === ocrLanguages().available.length : ocrLanguages().current.join("+") === v) ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : ""}
         ${workspace && referenceUpdate() ? `<button id="update-reference">Update category list (${referenceUpdate()!.added} new, ${referenceUpdate()!.changed} changed)</button>` : ""}
         ${workspace ? (storage.kind === "browser" ? `<button id="update-mirror">Download spreadsheet</button>` : `<button id="update-mirror">Update spreadsheet now</button><button id="toggle-mirror">Automatic spreadsheet: ${mirrorOn() ? "on" : "off"}</button>`) : ""}
-        ${workspace && storage.kind !== "browser" ? `<button id="check-year" title="Reads the whole ledger and looks for anything that points at something that is not there">Check this year</button><button id="check-year-files" title="Also asks ${esc(storage.label)} whether every receipt file is still there">Check this year and its files</button><button id="check-year-contents" title="Downloads every file to confirm it is unchanged (slow)">Check this year and every file's contents</button><button id="backup-year">Back up this year (zip)</button><button id="backup-year-docs" title="Includes every receipt and statement file; can be large">Back up this year with documents (zip)</button><label class="btn" title="A saved copy of StepUp's reimbursements list (see the extension or the command line)">Bring in StepUp's list<input type="file" id="stepup-import" accept=".json,.txt" hidden></label>` : ""}
+        ${workspace && storage.kind !== "browser" ? `<button id="check-year" title="Reads the whole ledger and looks for anything that points at something that is not there">Check this year</button><button id="check-year-files" title="Also asks ${esc(storage.label)} whether every receipt file is still there">Check this year and its files</button><button id="check-year-contents" title="Downloads every file to confirm it is unchanged (slow)">Check this year and every file's contents</button><button id="backup-year">Back up this year (zip)</button><button id="backup-year-docs" title="Includes every receipt and statement file; can be large">Back up this year with documents (zip)</button><label class="btn" title="A saved copy of StepUp's reimbursements list (see the extension or the command line)">Bring in StepUp's list<input type="file" id="stepup-import" accept=".json,.txt" hidden></label><button id="show-bookmarklet">Get the StepUp bookmarklet</button>` : ""}
         ${Object.keys(ledger.state.categories).length ? `<button id="export-categories">Share category fixes</button><button id="issue-categories">Share them on GitHub</button>` : ""}
         ${workspace && storage.kind !== "browser" ? `<button id="disconnect" class="danger">Disconnect</button>` : ""}
         ${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}
       </div></details>`}</nav></header>
-    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${status ? `<p class="warn notice" role="status">${esc(status)} <button id="dismiss-status">Dismiss</button></p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
+    ${ledger.fromNewerVersion ? `<p class="warn">${ledger.fromNewerVersion} change(s) in this ledger were written by a newer version of the app and are not shown. Reload the page (or clear the site's cached files) to get the latest version.</p>` : ""}${clockLooksWrong() ? `<p class="warn">This device's clock is ${Math.abs(Math.round(serverClockSkewMs()! / 60000))} minute(s) ${serverClockSkewMs()! > 0 ? "behind" : "ahead of"} OneDrive's. Edits made on different devices may be ordered wrongly until it is corrected.</p>` : ""}${connectionBar()}${newYearOpen && workspace ? newYearForm() : ""}${sharing && workspace ? shareForm() : ""}${pendingStepUpBanner()}${bookmarkletPanel()}${status ? `<p class="warn notice" role="status">${esc(status)} <button id="dismiss-status">Dismiss</button></p>` : ""}${updateReady ? `<p class="note update-banner">A new version of Step Up Helper is ready. <button id="reload-app" class="primary">Reload</button></p>` : ""}`;
 }
 
 /** "Since you were last here": what other people and the command line did while this browser was away. */
@@ -1340,6 +1341,59 @@ function historyView(): string {
     <p class="row">${clearableSearch("history-search", "Search the history")}<select id="history-source" aria-label="Source" style="width:auto">${sel("", "All sources")}${sel("ledger", "Ledger")}${sel("stepup", "StepUp")}${sel("excel", "Excel")}</select></p>
     ${historyUi.error ? `<p class="warn">StepUp's and Excel's changes could not be read: ${esc(historyUi.error)}</p>` : ""}
     <div id="history-list">${historyList()}</div>`;
+}
+
+/**
+ * StepUp's list, however it arrived (a saved file, or the bookmarklet): kept per year in `_stepup`, and the open year's
+ * ledger records what StepUp says about the items it filed.
+ */
+async function bringInStepUpList(results: unknown[]): Promise<void> {
+  const ws = workspace;
+  if (!ws) return;
+  const done = await archiveStepUpList({ storage, driveId: ws.driveId, rootId: ws.pointer.rootId }, results);
+  // The command line does the same for every ledger year it can reach; other years show StepUp's side through `_stepup`.
+  if (!ws.legacy) {
+    const lines = (results as Array<Record<string, unknown> & { SchoolYear?: string; LineItems?: Array<Record<string, unknown>> }>)
+      .filter((r) => r.SchoolYear === ws.year.label)
+      .flatMap((r) => (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem));
+    if (lines.length && applyStepUpStatuses(ledger, lines) > 0) await save();
+  }
+  status = done.listed === 0 ? "StepUp's list had no reimbursements that could be read." : done.changed === 0 ? `StepUp's list is already up to date (${done.listed} reimbursement(s)).` : `Brought in ${done.changed} changed reimbursement(s) of ${done.listed}: ${done.years.filter((y) => y.changed).map((y) => `${y.label} (${y.changed})`).join(", ")}.`;
+  await refreshInBackground(ws);
+}
+
+/** A list sent by the bookmarklet, waiting for the person to say yes (nothing is written until they do). */
+let pendingStepUp: unknown[] | undefined;
+let bookmarkletOpen = false;
+
+window.addEventListener("message", (ev) => {
+  if (isStepUpHello(ev.origin, ev.data)) {
+    (ev.source as Window | null)?.postMessage({ type: "stepup-ready" }, ev.origin);
+    return;
+  }
+  const list = stepUpListFrom(ev.origin, ev.data);
+  if (!list) return;
+  pendingStepUp = list;
+  render();
+});
+
+function bookmarkletPanel(): string {
+  if (!bookmarkletOpen) return "";
+  const code = "javascript:" + encodeURIComponent(bookmarkletCode(location.origin));
+  return `<section class="panel"><h3 class="panel-title">StepUp bookmarklet<small>Brings StepUp's list in with one click; works in any desktop browser and in Safari on iPhone and iPad</small></h3>
+    <ol>
+      <li>Drag this link to your bookmarks bar: <a href="${esc(code)}" class="btn" draggable="true">Send StepUp's list</a>
+        <small>(or <button id="copy-bookmarklet">copy it</button> and paste it as the address of a new bookmark)</small></li>
+      <li>Sign in to StepUp and open its Dashboard.</li>
+      <li>Click the bookmark. This app opens, and asks before anything is saved.</li>
+    </ol>
+    <p class="note">It reads your StepUp sign-in only inside StepUp's own page, asks StepUp for the same list its dashboard shows, and sends just that list here. Your sign-in never leaves StepUp's page and is never stored. The code is the link itself; paste it into a text editor to read it.</p>
+    <p class="row"><button id="close-bookmarklet">Close</button></p></section>`;
+}
+
+function pendingStepUpBanner(): string {
+  if (!pendingStepUp) return "";
+  return `<p class="banner" role="status">StepUp sent ${pendingStepUp.length} reimbursement(s). Bring them in? <button id="stepup-apply" class="primary">Bring in</button> <button id="stepup-ignore">Ignore</button></p>`;
 }
 
 /** The last "Check this year" result, shown on the Summary page until the next one. */
@@ -2693,7 +2747,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail") {
+    } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore") {
       // fall through to the shared handlers below
     } else return;
     if (t.id === "legacy-refresh" || t.id === "legacy-download" || d["legacyPick"] || d["legacyClear"]) return;
@@ -2792,6 +2846,24 @@ root.addEventListener("click", async (ev) => {
     persist();
   } else if (t.id === "refresh-now") {
     if (workspace) await refreshInBackground(workspace);
+    render();
+  } else if (t.id === "stepup-apply") {
+    const list = pendingStepUp;
+    pendingStepUp = undefined;
+    if (list) await guarded(() => bringInStepUpList(list), "Bringing in StepUp's list…");
+  } else if (t.id === "stepup-ignore") {
+    pendingStepUp = undefined;
+    render();
+  } else if (t.id === "show-bookmarklet" || t.id === "close-bookmarklet") {
+    bookmarkletOpen = t.id === "show-bookmarklet";
+    render();
+  } else if (t.id === "copy-bookmarklet") {
+    try {
+      await navigator.clipboard.writeText("javascript:" + encodeURIComponent(bookmarkletCode(location.origin)));
+      status = "Copied. Paste it as the address of a new bookmark.";
+    } catch {
+      status = "Your browser would not let this page copy; drag the link to the bookmarks bar instead.";
+    }
     render();
   } else if (t.id === "check-year" || t.id === "check-year-files" || t.id === "check-year-contents") {
     await guarded(() => checkYear(t.id === "check-year" ? "no" : t.id === "check-year-files" ? "sizes" : "contents"), "Checking the year…");
@@ -3317,20 +3389,7 @@ root.addEventListener("change", async (ev) => {
     const picked = input.files[0];
     input.value = "";
     await guarded(async () => {
-      const ws = workspace;
-      if (!ws) return;
-      const results = resultsFromSavedList(await picked.text());
-      const done = await archiveStepUpList({ storage, driveId: ws.driveId, rootId: ws.pointer.rootId }, results);
-      // The open year's own ledger also records what StepUp says about the items it filed (the command line does the same
-      // for every ledger year it can reach); other years show StepUp's side through their `_stepup` folder.
-      if (!ws.legacy) {
-        const lines = (results as Array<Record<string, unknown> & { SchoolYear?: string; LineItems?: Array<Record<string, unknown>> }>)
-          .filter((r) => r.SchoolYear === ws.year.label)
-          .flatMap((r) => (r.LineItems ?? []).map((li) => ({ ...li, ReimbursementGuid: typeof r["Id"] === "string" ? r["Id"] : undefined, Message: messageOf(li) }) as unknown as ApiLineItem));
-        if (lines.length && applyStepUpStatuses(ledger, lines) > 0) await save();
-      }
-      status = done.listed === 0 ? "StepUp's list had no reimbursements that could be read." : done.changed === 0 ? `StepUp's list is already up to date (${done.listed} reimbursement(s)).` : `Brought in ${done.changed} changed reimbursement(s) of ${done.listed}: ${done.years.filter((y) => y.changed).map((y) => `${y.label} (${y.changed})`).join(", ")}.`;
-      await refreshInBackground(ws);
+      if (workspace) await bringInStepUpList(resultsFromSavedList(await picked.text()));
     }, "Bringing in StepUp's list…");
     return;
   }
