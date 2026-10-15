@@ -52,10 +52,18 @@ describe("the spike tests", () => {
     const r = await runSpike({ kind: "text", target: "quantity", index: 0, value: "7", method: "events" }, env(ops, itemDetails(), url3, () => (n++ > 0 ? 1 : 0)));
     expect(log).toEqual(["set [placeholder=\"Enter Quantity\"] 0 7"]);
     expect(r.ok).toBe(true);
-    expect(r.lines.join(" ")).toMatch(/kept it/);
+    expect(r.lines.join(" ")).toMatch(/shows it/);
     const quiet = await runSpike({ kind: "text", target: "quantity", index: 0, value: "8", method: "events" }, env(fake().ops, itemDetails(), url3));
     expect(quiet.ok).toBe(true);
     expect(quiet.lines.join(" ")).toMatch(/saves at step changes/);
+  });
+
+  it("reads a reformatted amount as the same number", async () => {
+    const { ops } = fake({ value: () => "$5.00" });
+    const r = await runSpike({ kind: "text", target: "cost", index: 0, value: "5", method: "events" }, env(ops, itemDetails(), url3));
+    expect(r.ok).toBe(true);
+    const wrong = await runSpike({ kind: "text", target: "cost", index: 0, value: "6", method: "events" }, env(ops, itemDetails(), url3));
+    expect(wrong.ok).toBe(false);
   });
 
   it("reports a field that does not keep what was set", async () => {

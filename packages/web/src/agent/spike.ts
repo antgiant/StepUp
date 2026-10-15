@@ -85,6 +85,16 @@ const FILE_INPUT = "#inputDrop__";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED = /\.(png|jpe?g|pdf)$/i;
 
+const NUMERIC: ReadonlySet<string> = new Set(["quantity", "cost", "additionalCosts", "itemAmount"]);
+/** Whether the field shows what was set. StepUp formats money ("5" becomes "$5.00"), so numbers are compared as numbers. */
+function sameValue(target: string, kind: "text" | "date", set: string, shown: string): boolean {
+  if (kind === "text" && NUMERIC.has(target)) {
+    const n = (v: string): number => Number.parseFloat(v.replace(/[^0-9.\-]/g, ""));
+    return Number.isFinite(n(set)) && Math.abs(n(set) - n(shown)) < 0.005;
+  }
+  return shown === set;
+}
+
 const ids = (env: Env): string[] =>
   mapOf(env).controls.map((c) => c.id ?? c.placeholder ?? c.label ?? c.kind).filter((v, i, a) => a.indexOf(v) === i);
 
@@ -126,8 +136,8 @@ async function enter(test: Extract<SpikeTest, { kind: "text" | "date" }>, env: E
     await env.sleep(500);
     after = env.ops.value(where.selector, test.index) ?? "";
   }
-  const kept = after === test.value;
-  lines.push(`After 3 s: "${after}". ${kept ? "The field kept it." : "The field does NOT show what was set."}`);
+  const kept = sameValue(test.target, test.kind, test.value, after);
+  lines.push(`After 3 s: "${after}". ${kept ? "The field shows it." : "The field does NOT show what was set."}`);
   const totalAfter = env.ops.itemTotal?.(test.index);
   if (totalBefore !== undefined || totalAfter !== undefined) {
     const moved = totalBefore !== totalAfter;
