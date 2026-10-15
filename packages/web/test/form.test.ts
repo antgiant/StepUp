@@ -140,6 +140,17 @@ describe("mapping a step's controls", () => {
     ]);
   });
 
+  it("reads the Summary's item lines as numbers only", () => {
+    const part = bare("SPAN", "2 x $12.98");
+    const whole: FormEl = { ...bare("DIV", "2 x $12.98 + $1.82 Tax/Shipping"), contains: (o) => o === whole || o === part };
+    const plain: FormEl = { ...bare("DIV", "1 x $5.00"), contains: (o) => o === plain };
+    const desc = bare("DIV", "Math Tools (including a long description)");
+    const root: FormRoot = { querySelectorAll: (sel) => (/div/.test(sel) ? [desc, whole, part, plain] : []) };
+    const map = mapForm(root, `https://apply.example/SubmitReimbursement/${G}/5`);
+    expect(map.items).toEqual([{ quantity: 2, cost: 12.98, tax: 1.82 }, { quantity: 1, cost: 5, tax: 0 }]);
+    expect(JSON.stringify(map)).not.toContain("Math Tools");
+  });
+
   it("never lets a person's name out of a heading", () => {
     const h = (t: string) => bare("H3", t);
     const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);

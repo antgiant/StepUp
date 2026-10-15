@@ -42,6 +42,8 @@ describe("recognising the recorded steps", () => {
     expect(recognise(empty).problems).toEqual([]);
     const attached = map("upload", [{ kind: "text", id: "fileName", hasValue: true, disabled: true }, { kind: "button" }, { kind: "button", id: "fileDeleteButton" }, btn("BACK"), btn("CONTINUE TO ITEM/SERVICE SELECTION CONTINUE")]);
     expect(recognise(attached).problems).toEqual([]);
+    const reopened = map("upload", [{ kind: "text", id: "fileName", hasValue: true }, btn("Quick View"), { kind: "button", id: "fileDeleteButton", label: "Close" }, btn("BACK"), btn("CONTINUE TO ITEM/SERVICE SELECTION CONTINUE")]);
+    expect(recognise(reopened).problems).toEqual([]);
   });
 
   it("item selection: scanning is busy, and each outcome is its own variant", () => {

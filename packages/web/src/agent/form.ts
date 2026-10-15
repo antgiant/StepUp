@@ -33,6 +33,8 @@ export interface FormEl {
   getAttribute(name: string): string | null;
   closest(selector: string): FormEl | null;
   querySelectorAll(selector: string): ArrayLike<FormEl>;
+  /** Whether `other` is this element or inside it (every DOM node has it; tests may leave it out). */
+  contains?(other: FormEl): boolean;
 }
 export interface FormRoot {
   querySelectorAll(selector: string): ArrayLike<FormEl>;
@@ -63,7 +65,7 @@ export interface MappedControl {
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 8;
+export const FORM_MAP_VERSION = 9;
 
 export interface FormMap {
   mapVersion: number;
@@ -72,6 +74,8 @@ export interface FormMap {
   path: string;
   controls: MappedControl[];
   headings: string[];
+  /** The Summary page's item lines, as numbers only: quantity, unit cost and tax/shipping (never descriptions or names). */
+  items?: Array<{ quantity: number; cost: number; tax: number }>;
   /** Words of notices on the page (e.g. the scan's states), only those matching the known list. */
   notices: string[];
 }
@@ -118,6 +122,25 @@ export interface MapOptions {
 
 const classWords = (el: FormEl): string[] =>
   (el.getAttribute("class") ?? "").split(/\s+/).filter((w) => w && w.length <= 30 && !/[0-9]/.test(w)).slice(0, 8);
+
+/** "2 x $12.98" or "2 x $12.98 + $1.82 Tax/Shipping": a Summary item's arithmetic, and nothing else on the line. */
+const ITEM_LINE = /^(\d+(?:\.\d+)?)\s*x\s*\$([\d,]+(?:\.\d{1,2})?)(?:\s*\+\s*\$([\d,]+(?:\.\d{1,2})?)\s*Tax\/Shipping)?$/i;
+const money = (s: string | undefined): number => (s ? Number.parseFloat(s.replace(/,/g, "")) : 0);
+
+function summaryItems(root: FormRoot): NonNullable<FormMap["items"]> {
+  const out: NonNullable<FormMap["items"]> = [];
+  let last: FormEl | undefined;
+  for (const el of Array.from(root.querySelectorAll("div, p, span, li, td, strong, b"))) {
+    const t = clean(el.textContent, 120);
+    const m = t ? ITEM_LINE.exec(t) : null;
+    if (!m) continue;
+    // A line's own parts also match (the quantity and cost without the tax): skip what sits inside one already taken.
+    if (last && last.contains?.(el)) continue;
+    last = el;
+    out.push({ quantity: money(m[1]), cost: money(m[2]), tax: money(m[3]) });
+  }
+  return out.slice(0, 50);
+}
 
 export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): FormMap {
   const step = detectStep(url);
@@ -187,5 +210,6 @@ export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): 
     .map((t) => t.replace(/reimbursement #\d+/i, "reimbursement #<number>"))
     .filter((t, i, all) => all.indexOf(t) === i)
     .slice(0, 6);
-  return { mapVersion: FORM_MAP_VERSION, ...(step ? { step } : {}), path, controls: [...seen.values()], headings, notices };
+  const items = step === "summary" || step === undefined ? summaryItems(root) : [];
+  return { mapVersion: FORM_MAP_VERSION, ...(step ? { step } : {}), path, controls: [...seen.values()], headings, notices, ...(items.length ? { items } : {}) };
 }

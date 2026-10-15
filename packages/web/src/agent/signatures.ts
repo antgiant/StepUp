@@ -72,6 +72,7 @@ function rulesFor(step: WizardStep, headings: string[]): { variant: string; busy
           { name: "BACK", match: text(/^back$/i), required: true },
           { name: "Continue", match: text(/^continue/i) },
           { name: "file row button", match: (c) => c.kind === "button" && !c.id && !c.text },
+          { name: "quick view", match: text(/^quick view$/i) },
         ],
       };
     case "itemSelection": {
