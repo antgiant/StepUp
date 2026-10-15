@@ -1,0 +1,420 @@
+import type { FormMap, WizardStep } from "./form.js";
+import { PROVIDER_NOT_LISTED, boxesToCheck, categoryLevels, chooseEntry, expectedTotal, isoDate, linesMatch, matchBlock, moneyText, numberOf, sameNumber, type FilingRow } from "./fill.js";
+import { recognise } from "./signatures.js";
+
+/**
+ * The filing engine: walks StepUp's reimbursement form for one group of rows, the way the command line's `runGroupSteps`
+ * did, but from the page itself. It is written against `FilingOps`, a short list of things it may do to the page, so the
+ * whole walk can be tested against a pretend site.
+ *
+ * What it will not do, by construction (there is no operation for it): press Submit. It presses Continue, Back,
+ * "Add an Item", and (to remove a surplus, unnamed block) Delete and its confirmation. Everywhere it is unsure it
+ * stops and says why; it never chooses between two possible answers.
+ */
+
+export interface FileData {
+  name: string;
+  mime: string;
+  bytes: ArrayBuffer;
+}
+
+export interface FilingJob {
+  child: string;
+  program: string;
+  receipt: FileData;
+  additional: FileData[];
+  rows: FilingRow[];
+}
+
+export type PressTarget = "continue" | "back" | "addItem" | "deleteItem" | "confirmDelete" | "cancelDelete";
+export type PickTarget = "student" | "category" | "categoryType" | "categoryDetail" | "provider" | "payee" | "individualProvider";
+
+/** Everything the engine may do to (or ask of) the page. There is deliberately no way to press Submit. */
+export interface FilingOps {
+  /** A map of the page as it is now (visible headings only). */
+  map(): FormMap;
+  now(): number;
+  /** A field of item block `block` (0 is the first), found by selector inside that block. */
+  has(block: number, selector: string): boolean;
+  read(block: number, selector: string): string | undefined;
+  /** Sets a field: the value, then input, change and blur, so StepUp commits it. */
+  write(block: number, selector: string, value: string): void;
+  hasPicker(block: number, target: PickTarget): boolean;
+  /** Opens a dropdown by its own toggle. */
+  open(block: number, target: PickTarget): boolean;
+  /** The words of the entries of the dropdown that is open. */
+  menu(): string[];
+  /** Clicks one entry of the open dropdown, by its exact words. */
+  choose(text: string): boolean;
+  /** What a dropdown's toggle shows now. */
+  shown(block: number, target: PickTarget): string | undefined;
+  /** Hands a file to the page's own file control. */
+  attach(file: FileData): void;
+  /** The words beside each detected item's checkbox, and ticking one (never unticking). */
+  boxLabels(): string[];
+  check(index: number): void;
+  /** The item blocks on the Item/Service Details page: whether each has a name from the scan in its heading. */
+  blocks(): { named: boolean[] };
+  /** What StepUp's scan read for a block: its cost and its name. */
+  scan(block: number): { cost?: string; name?: string };
+  /** The block's running total as the page shows it. */
+  itemTotal(block: number): string | undefined;
+  /** One of the few buttons; false when it is not there or is disabled. */
+  press(button: PressTarget, block?: number): boolean;
+  /** Stops a person's Submit from going through while a reason is given; undefined lets it through. */
+  guard(reason: string | undefined): void;
+}
+
+export interface FilingEnv {
+  ops: FilingOps;
+  sleep(ms: number): Promise<void>;
+  /** A line of progress for the person. */
+  report(line: string): void;
+  cancelled(): boolean;
+}
+
+export type StopKind = "needsYou" | "missingServiceDate" | "stepUpChanged" | "readError" | "cancelled" | "wrongTotal";
+
+export type FilingOutcome =
+  | { status: "ready"; matched: string[]; notes: string[]; total: number }
+  | { status: "stopped"; kind: StopKind; step?: WizardStep; reason: string; matched: string[]; notes: string[] };
+
+const SEL = {
+  purchaseDate: "#purchaseDate",
+  invoice: "#invoiceNumber",
+  category: "#category",
+  serviceDate: "#serviceDate",
+  quantity: '[placeholder="Enter Quantity"]',
+  cost: '[placeholder="Enter Cost per Item"]',
+  tax: '[placeholder="Enter Additional Costs"]',
+  vendorName: "#vendorName",
+  providerName: "#otherServiceProviderName",
+  benefit: "#educationalBenefit",
+  url: "#itemServiceUrl",
+  individualName: "#otherIndividualProvider",
+};
+const LEVELS: PickTarget[] = ["category", "categoryType", "categoryDetail"];
+const LEVEL_WORDS = ["Category", "Type", "Description"];
+const MINUTES = 60_000;
+
+class Stop extends Error {
+  constructor(readonly kind: StopKind, readonly reason: string, readonly step?: WizardStep) {
+    super(reason);
+  }
+}
+
+const escapeRe = (v: string): string => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingOutcome> {
+  const { ops } = env;
+  const matched: string[] = [];
+  const notes: string[] = [];
+  let scanFailed = false;
+  let refills = 0;
+  const deadline = ops.now() + 25 * MINUTES;
+  // Until the walk has checked everything, a Submit must not go through.
+  ops.guard("Step Up Helper is still checking this reimbursement.");
+
+  const waitFor = async (what: string, ready: () => boolean, ms: number): Promise<void> => {
+    const until = ops.now() + ms;
+    while (!ready()) {
+      if (env.cancelled()) throw new Stop("cancelled", "Stopped at your request.");
+      if (ops.now() > until) throw new Stop("stepUpChanged", `Waited too long for ${what}.`, ops.map().step);
+      await env.sleep(400);
+    }
+  };
+  /** Presses Continue and waits for StepUp to move to another step. */
+  const advance = async (from: WizardStep): Promise<void> => {
+    if (!(await pressWhenEnabled("continue"))) throw new Stop("stepUpChanged", "The Continue button is not available.", from);
+    await waitFor("the next step", () => ops.map().step !== from, 90_000);
+  };
+  const pressWhenEnabled = async (b: PressTarget, block?: number): Promise<boolean> => {
+    for (let i = 0; i < 25; i++) {
+      if (ops.press(b, block)) return true;
+      await env.sleep(400);
+    }
+    return false;
+  };
+
+  try {
+    for (;;) {
+      if (env.cancelled()) throw new Stop("cancelled", "Stopped at your request.");
+      if (ops.now() > deadline) throw new Stop("stepUpChanged", "This took too long; stopping.");
+      const map = ops.map();
+      const rec = recognise(map);
+      if (!rec.step) throw new Stop("stepUpChanged", "StepUp's reimbursement form is not showing. Open a new reimbursement and start again.");
+      if (rec.busy) {
+        await env.sleep(500);
+        continue;
+      }
+      if (rec.variant === "confirmDelete") throw new Stop("needsYou", "StepUp is asking whether to delete an item. Answer it, then start again.", rec.step);
+      if (rec.problems.length) throw new Stop("stepUpChanged", `StepUp's form is not as expected on this step: ${rec.problems.slice(0, 4).join("; ")}.`, rec.step);
+
+      switch (rec.step) {
+        case "studentSelection": {
+          env.report(`Choosing ${job.child}.`);
+          if (!ops.open(0, "student")) throw new Stop("stepUpChanged", "The student list is not on the page.", rec.step);
+          await env.sleep(400);
+          const re = new RegExp(`^${escapeRe(job.child)}\\b.*:\\s*${escapeRe(job.program)}\\s*$`, "i");
+          const hits = ops.menu().filter((e) => re.test(e));
+          if (hits.length !== 1) throw new Stop("needsYou", `${hits.length === 0 ? "No student" : "More than one student"} in StepUp's list matches ${job.child} (${job.program}).`, rec.step);
+          ops.choose(hits[0]!);
+          await env.sleep(600);
+          if (!(ops.shown(0, "student") ?? "").includes(hits[0]!)) throw new Stop("stepUpChanged", "The student did not take.", rec.step);
+          await advance("studentSelection");
+          break;
+        }
+        case "upload": {
+          const attached = map.controls.some((c) => c.id === "fileName");
+          if (!attached) {
+            env.report("Attaching the receipt.");
+            ops.attach(job.receipt);
+            await waitFor("the receipt to attach", () => ops.map().controls.some((c) => c.id === "fileName"), 3 * MINUTES);
+          }
+          await advance("upload");
+          break;
+        }
+        case "itemSelection": {
+          if (rec.variant === "readError") throw new Stop("readError", "StepUp could not read the receipt at all. Look at the file, then start again.", rec.step);
+          if (rec.variant === "notDetected") {
+            scanFailed = true;
+            notes.push("StepUp found no items on the receipt; the items were filled in from the rows, in order.");
+          } else if (rec.variant === "detected") {
+            const picks = boxesToCheck(ops.boxLabels(), job.rows);
+            if (!picks) throw new Stop("needsYou", "StepUp found items that cannot be matched to the rows. Tick the right ones yourself, then start again.", rec.step);
+            for (const i of picks) ops.check(i);
+            await env.sleep(500);
+          }
+          await advance("itemSelection");
+          break;
+        }
+        case "itemDetails": {
+          await fillDetails();
+          await advance("itemDetails");
+          break;
+        }
+        case "additionalDocuments": {
+          const shown = (): number => ops.map().controls.filter((c) => /^display_Document_/.test(c.id ?? "")).reduce((n, c) => n + (c.count ?? 1), 0);
+          for (let i = shown(); i < job.additional.length; i = shown()) {
+            const before = shown();
+            env.report(`Attaching an additional document (${before + 1} of ${job.additional.length}).`);
+            ops.attach(job.additional[before]!);
+            await waitFor("the document to attach", () => shown() > before && !ops.map().headings.some((h) => /^loading\.{3}$/i.test(h)), 3 * MINUTES);
+          }
+          await advance("additionalDocuments");
+          break;
+        }
+        case "summary": {
+          const verdict = await judgeSummary();
+          if (verdict === "ok") {
+            ops.guard(undefined);
+            return { status: "ready", matched, notes, total: expectedTotal(job.rows) };
+          }
+          if (refills < 2) {
+            refills++;
+            env.report(`${verdict} Going back to fill the details again (try ${refills} of 2).`);
+            await backTo("itemDetails");
+            break;
+          }
+          ops.guard(verdict);
+          throw new Stop("wrongTotal", `${verdict} Do not submit this one.`, rec.step);
+        }
+        case "confirmation":
+          return { status: "ready", matched, notes, total: expectedTotal(job.rows) };
+      }
+    }
+  } catch (err) {
+    if (err instanceof Stop) {
+      if (err.kind !== "cancelled") ops.guard(`Step Up Helper stopped: ${err.reason}`);
+      else ops.guard(undefined);
+      return { status: "stopped", kind: err.kind, ...(err.step ? { step: err.step } : {}), reason: err.reason, matched, notes };
+    }
+    ops.guard("Step Up Helper stopped on an unexpected error.");
+    return { status: "stopped", kind: "stepUpChanged", reason: `An unexpected error: ${err instanceof Error ? err.message : String(err)}`, matched, notes };
+  }
+
+  async function backTo(step: WizardStep): Promise<void> {
+    for (let i = 0; i < 8 && ops.map().step !== step; i++) {
+      const was = ops.map().step;
+      if (!ops.press("back")) throw new Stop("stepUpChanged", "Back is not available.", was);
+      await waitFor("the earlier step", () => ops.map().step !== was, 30_000);
+    }
+  }
+
+  /** Whether the Summary is what the rows say: every item line, and the total. A sentence when it is not. */
+  async function judgeSummary(): Promise<"ok" | string> {
+    let m = ops.map();
+    for (let i = 0; i < 30 && !(m.items && m.items.length); i++) {
+      await env.sleep(500);
+      m = ops.map();
+    }
+    const total = (() => {
+      const i = m.headings.findIndex((h) => /^total$/i.test(h));
+      return numberOf(i >= 0 ? m.headings[i + 1] : undefined);
+    })();
+    const expected = expectedTotal(job.rows);
+    if (total === undefined) return "StepUp's summary shows no total.";
+    if (total === 0 || Math.abs(total - expected) > 0.005) return `StepUp's total is $${total.toFixed(2)} but the rows say $${expected.toFixed(2)}.`;
+    if (!m.items || !linesMatch(m.items, job.rows)) return "StepUp's item lines are not the rows' quantities, costs and tax.";
+    return "ok";
+  }
+
+  async function fillDetails(): Promise<void> {
+    // 1. surplus blocks left by an earlier attempt: unnamed ones, only when a named one is kept.
+    for (let guard = 0; guard < 10; guard++) {
+      const { named } = ops.blocks();
+      if (named.length <= job.rows.length || !named.includes(true)) break;
+      const at = named.indexOf(false);
+      if (at === -1) break;
+      env.report(`Removing an unused item block (${at + 1}).`);
+      if (!ops.press("deleteItem", at) || !(await pressWhenEnabled("confirmDelete"))) throw new Stop("stepUpChanged", "Could not remove the unused item block.", "itemDetails");
+      await waitFor("the block to go", () => ops.blocks().named.length < named.length, 15_000);
+    }
+    // 2. missing blocks.
+    for (let guard = 0; guard < 20 && ops.blocks().named.length < job.rows.length; guard++) {
+      const had = ops.blocks().named.length;
+      env.report("Adding an item block.");
+      if (!(await pressWhenEnabled("addItem"))) throw new Stop("stepUpChanged", "Add an Item is not available.", "itemDetails");
+      await waitFor("the new item block", () => ops.blocks().named.length > had, 15_000);
+    }
+    const blocks = ops.blocks().named.length;
+    if (blocks < job.rows.length) throw new Stop("stepUpChanged", "StepUp has fewer item blocks than rows.", "itemDetails");
+
+    // 3. fill each block from a row.
+    const remaining = [...job.rows];
+    const flags: string[] = [];
+    let missingServiceDate: string | undefined;
+    matched.length = 0;
+    for (let b = 0; b < blocks; b++) {
+      const sc = ops.scan(b);
+      const none = !ops.blocks().named.some(Boolean);
+      const m = matchBlock(remaining, sc.cost, sc.name, scanFailed || none);
+      if (m.how === "none") {
+        flags.push(`Item block ${b + 1} has no row left; fill it or delete it yourself.`);
+        continue;
+      }
+      if (m.how === "ambiguous") throw new Stop("needsYou", `Item block ${b + 1} cannot be matched to one row (the scan read cost ${sc.cost || "nothing"} and name "${sc.name || ""}").`, "itemDetails");
+      remaining.splice(remaining.indexOf(m.row), 1);
+      matched.push(m.row.id);
+      env.report(`Filling item ${b + 1}: ${m.row.data["Item"] ?? m.row.id}.`);
+      const r = await fillBlock(b, m.row);
+      flags.push(...r.flags);
+      missingServiceDate ??= r.missingServiceDate;
+    }
+    if (missingServiceDate) throw new Stop("missingServiceDate", missingServiceDate, "itemDetails");
+    if (flags.length) throw new Stop("needsYou", `Some fields need you: ${flags.join(" ")}`, "itemDetails");
+  }
+
+  async function fillBlock(b: number, row: FilingRow): Promise<{ flags: string[]; missingServiceDate?: string }> {
+    const flags: string[] = [];
+    const n = b + 1;
+    const d = row.data;
+    const item = d["Item"] ?? row.id;
+
+    // Category, Type, Description: each level by its words.
+    const levels = categoryLevels(d["Category"] ?? "");
+    for (let k = 0; k < levels.length && k < LEVELS.length; k++) {
+      const target = LEVELS[k]!;
+      if (k > 0) await waitFor(`the ${LEVEL_WORDS[k]} list`, () => ops.hasPicker(b, target), 10_000).catch(() => undefined);
+      if (!ops.open(b, target)) {
+        flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} dropdown is not on the page.`);
+        break;
+      }
+      await env.sleep(350);
+      const choice = chooseEntry(ops.menu(), levels[k]!);
+      if (choice.how === "none" || choice.how === "ambiguous") {
+        flags.push(`Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}".`);
+        ops.open(b, target); // close it again
+        break;
+      }
+      ops.choose(choice.text);
+      await env.sleep(700);
+      if (!(ops.shown(b, target) ?? "").includes(choice.text)) {
+        flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} did not take "${choice.text}".`);
+        break;
+      }
+    }
+
+    const put = async (selector: string, want: string | undefined, label: string, kind: "text" | "money" | "date" = "text"): Promise<void> => {
+      if (want === undefined || want === "") return;
+      if (!ops.has(b, selector)) {
+        flags.push(`Item ${n} (${item}): ${label} is not on the page.`);
+        return;
+      }
+      const same = (v: string | undefined): boolean => (kind === "money" ? sameNumber(v, want) : (v ?? "").trim() === want.trim());
+      if (same(ops.read(b, selector))) return;
+      ops.write(b, selector, want);
+      await env.sleep(500);
+      const after = ops.read(b, selector);
+      if (!same(after)) flags.push(`Item ${n} (${item}): ${label} shows "${after ?? ""}", expected "${want}".`);
+    };
+
+    await put(SEL.benefit, d["Benefit Message"], "the benefit message");
+    await put(SEL.url, d["Item/Service URL"], "the item URL");
+
+    // Who was paid: the dropdown always; "not listed" reveals a text field.
+    const name = (d["Service Provider"] || d["Vendor"] || "").trim();
+    const payeeTarget: PickTarget = ops.hasPicker(b, "provider") ? "provider" : "payee";
+    await waitFor("the payee control", () => ops.hasPicker(b, "provider") || ops.hasPicker(b, "payee"), 10_000).catch(() => undefined);
+    if (name) {
+      const target: PickTarget = ops.hasPicker(b, "provider") ? "provider" : payeeTarget;
+      if (!ops.open(b, target)) {
+        flags.push(`Item ${n} (${item}): "Who did you pay?" is not on the page.`);
+      } else {
+        await env.sleep(350);
+        const choice = chooseEntry(ops.menu(), name, [PROVIDER_NOT_LISTED]);
+        if (choice.how === "exact" || choice.how === "normalized" || choice.how === "partial") {
+          ops.choose(choice.text);
+          await env.sleep(700);
+          if (!(ops.shown(b, target) ?? "").includes(choice.text)) flags.push(`Item ${n} (${item}): the payee did not take "${choice.text}".`);
+        } else {
+          ops.choose(PROVIDER_NOT_LISTED);
+          await env.sleep(700);
+          const field = ops.has(b, SEL.providerName) ? SEL.providerName : SEL.vendorName;
+          await put(field, name, "the payee's name");
+        }
+        // A listed business may list people under it: choose one only when its words match exactly.
+        if (ops.hasPicker(b, "individualProvider")) {
+          const person = (d["Service Provider"] ?? "").trim();
+          let done = false;
+          if (person && ops.open(b, "individualProvider")) {
+            await env.sleep(350);
+            const c = chooseEntry(ops.menu(), person);
+            if (c.how === "exact" || c.how === "normalized") {
+              ops.choose(c.text);
+              await env.sleep(600);
+              done = true;
+            } else {
+              ops.open(b, "individualProvider");
+            }
+          }
+          if (!done) flags.push(`Item ${n} (${item}): choose the individual provider yourself.`);
+        }
+      }
+    }
+
+    // Service date, only where the category asks for it.
+    let missingServiceDate: string | undefined;
+    const serviceWanted = isoDate(d["Service Date"]);
+    if (ops.has(b, SEL.serviceDate)) {
+      if (!serviceWanted) missingServiceDate = `Item ${n} (${item}) needs a Service Date for its category, and the row has none.`;
+      else await put(SEL.serviceDate, serviceWanted, "the service date", "date");
+    } else if (serviceWanted) {
+      flags.push(`Item ${n} (${item}): the row has a service date (${serviceWanted}) but no Service Date field appeared.`);
+    }
+
+    await put(SEL.invoice, (d["Invoice #"] ?? "").trim() || undefined, "the invoice number");
+    await put(SEL.cost, moneyText(d["Amount"]), "the cost per item", "money");
+    await put(SEL.quantity, (d["Quantity"] ?? "").trim() || "1", "the quantity", "money");
+    await put(SEL.tax, moneyText(d["Tax, Shipping, etc."]), "tax and shipping", "money");
+    await put(SEL.purchaseDate, isoDate(d["Date"]), "the purchase date", "date");
+
+    // The page's own total for the block is the last check that it took the numbers.
+    const total = ops.itemTotal(b)?.replace(/\s*total$/i, "");
+    if (total !== undefined) {
+      const want = expectedTotal([row]);
+      if (!sameNumber(total, String(want))) flags.push(`Item ${n} (${item}): the page totals ${total} but the row works out to $${want.toFixed(2)}.`);
+    }
+    return { flags, ...(missingServiceDate ? { missingServiceDate } : {}) };
+  }
+}
