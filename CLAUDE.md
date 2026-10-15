@@ -50,7 +50,8 @@ The bookmarklet agent fills StepUp's form (`packages/web/src/agent/engine.ts`, `
 is `docs/AGENT_PLAN.md`). It is **fail-closed and never presses Submit**: `FilingOps` has no operation for it, `press` refuses
 a button whose words begin "Submit", and a guard holds the button while a check is red. Do not add one. An Excel year is
 filed from the same "Ready to file" panel; its click handler and `READ_ONLY_KEEP` both name the filing controls, and a new
-control there needs both.
+control there needs both. `docs/PRODUCTION_CLEANUP.md` says which parts of this are debugging leftovers (the spike session,
+the recorder, the form-map diagnostics) and which are the product: read it before removing or "tidying" any of them.
 
 ## History
 

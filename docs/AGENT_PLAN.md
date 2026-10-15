@@ -18,7 +18,9 @@ exception, StepUp's data wins, History for every data change).
    `packages/web`, `packages/shared`, `packages/cli`. The repo lives in OneDrive: file reads occasionally time out; retry.
 4. The owner tests on the live site with a real (Excel-year) reimbursement. After a deploy: **hard-refresh the helper tab,
    then click the bookmark again on StepUp's page.** A page reload on StepUp ends the connection; the bookmark must be re-clicked.
-5. Start with §7 (what remains). The most valuable next thing is more live filings (multi-item, provider, service date),
+5. **Before any clean-up for production, read `docs/PRODUCTION_CLEANUP.md`:** it sorts what is the product from what
+   is debugging leftover (the spike session, the recorder, the form-map diagnostics).
+6. Start with §7 (what remains). The most valuable next thing is more live filings (multi-item, provider, service date),
    each stop teaching one more rule; §6 lists the bugs found that way and what fixed them.
 
 ## 1. Goal
@@ -149,7 +151,8 @@ what the previous script left on the page; and a pasted form map says which buil
 9. **Docs and wording:** README intro and privacy page do not yet say the bookmark fills StepUp's form and writes to the
    workbook; the bookmark's name changed to "Step Up Helper" (an existing bookmark keeps its old name until renamed).
 10. **C4 comments to per-item reasons**; **C5 pre-authorisations** (dormant).
-11. Housekeeping: hide spike tools further from everyday use; a regression fixture built from the recorded form shapes.
+11. Housekeeping: remove the spike session and fold the diagnostics (all listed, with where each lives, in
+    `docs/PRODUCTION_CLEANUP.md`); a regression fixture built from the recorded form shapes.
 
 ## 8. CLI parity map (status)
 
