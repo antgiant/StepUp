@@ -2544,8 +2544,30 @@ const onSpikeField = (ev: Event): void => {
 root.addEventListener("input", onSpikeField);
 root.addEventListener("change", onSpikeField);
 
+/**
+ * Fold-open lists ("Held back (1)", "Unattached files (55)") that a person opened or closed stay as they left them across
+ * redraws. Keyed by their words without the count; per-row "More" folds and the panels and the menu have their own memory.
+ */
+const foldState = new Map<string, boolean>();
+const foldKey = (el: HTMLDetailsElement): string | undefined => {
+  if (el.dataset["panel"] || el.classList.contains("menu") || el.classList.contains("more") || el.closest("li, .q, .preview")) return undefined;
+  const words = el.querySelector(":scope > summary")?.textContent?.replace(/\s*\(\d+\)\s*$/, "").trim();
+  return words || undefined;
+};
+const restoreFolds = (): void => {
+  for (const el of root.querySelectorAll<HTMLDetailsElement>("details")) {
+    const key = foldKey(el);
+    const was = key === undefined ? undefined : foldState.get(key);
+    if (was !== undefined && el.open !== was) el.open = was;
+  }
+};
+
 root.addEventListener("toggle", (ev) => {
   const el = ev.target;
+  if (el instanceof HTMLDetailsElement) {
+    const key = foldKey(el);
+    if (key !== undefined) foldState.set(key, el.open);
+  }
   if (el instanceof HTMLDetailsElement && el.classList.contains("menu")) menuOpen = el.open;
   const key = el instanceof HTMLDetailsElement ? el.dataset["panel"] : undefined;
   if (key) (el as HTMLDetailsElement).open ? collapsedPanels.delete(key) : collapsedPanels.add(key);
@@ -3185,6 +3207,7 @@ let scrollBeforePreview: number | undefined;
 
 /** Scroll adjustments that need the new page in place: back from a preview, or back to where a refresh left off. */
 function afterRender(scrollBack: number | undefined): void {
+  restoreFolds();
   if (scrollBack !== undefined) {
     window.scrollTo({ top: scrollBack });
   } else if (restoreScroll !== undefined && workspace) {
