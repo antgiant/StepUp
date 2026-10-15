@@ -12,8 +12,9 @@ exception, StepUp's data wins, History for every data change).
 ## 0. To resume in a new chat
 
 1. Read this file, then `docs/STEPUP_FINDINGS.md`, then `CLAUDE.md`.
-2. The branch is `ledger-redesign`. **Pushing it deploys the site** (GitHub Pages, about 2 minutes; sometimes a duplicate run
-   is cancelled and the other succeeds). Check with `gh run list --branch ledger-redesign --workflow "Deploy web app to GitHub Pages"`.
+2. The branch is `main`, which is protected: work on a branch and open a pull request (the "gitleaks" secret scan must pass).
+   **Merging to `main` deploys the site** (GitHub Pages, about 2 minutes; sometimes a duplicate run is cancelled and the other
+   succeeds). Check with `gh run list --branch main --workflow "Deploy web app to GitHub Pages"`.
 3. Tests: `npx vitest run` (root, whole repo) or `npx vitest run` inside `packages/web`; typecheck `npx tsc --noEmit -p .` in
    `packages/web`, `packages/shared`, `packages/cli`. The repo lives in OneDrive: file reads occasionally time out; retry.
 4. The owner tests on the live site with a real (Excel-year) reimbursement. After a deploy: **hard-refresh the helper tab,
