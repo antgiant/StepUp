@@ -165,7 +165,7 @@ what the previous script left on the page; and a pasted form map says which buil
 | Item selection: tick boxes when matched | done |
 | Item details: cascade, payee, service date, numbers | done |
 | Add / delete surplus item blocks | done |
-| Category mismatch: ask, rename, fix rows | partly: a looser match (case, punctuation, one partial hit) is reported as `categoryFixes` and the row's Category is corrected (workbook column / ledger `recordCategoryFix`); **not ported**: the manual pick (an unmatched level still stops and names it), the Table5 rename and fixing other rows beyond this group |
+| Category mismatch: ask, rename, fix rows | done: a looser match is reported as `categoryFixes`; an unmatched level pauses for the person to pick it in StepUp's open list (`pick`, "I picked it" / "Skip this row"); the row, the other waiting rows with the same words, and the workbook's Table5 are corrected (ledger: `recordCategoryFix`) |
 | Summary: re-check total, go back up to twice | done, plus per-item lines |
 | Resume a draft by URL | **not ported** (see §7.3) |
 | Skip / split / resync buttons | Stop only |

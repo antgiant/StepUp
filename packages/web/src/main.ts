@@ -148,7 +148,7 @@ import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
 import { filingGroups, recordCategoryFix, recordNeedsAttention, recordSubmitted } from "@step-up/shared/web";
-import { buildJob, writeWorkbookRows } from "./filing.js";
+import { buildJob, renameCategoryRow, writeWorkbookRows } from "./filing.js";
 import type { FilingOutcome } from "./agent/engine.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import type { SpikeResult, SpikeTest } from "./agent/spike.js";
@@ -1631,6 +1631,12 @@ window.addEventListener("message", (ev) => {
         render();
       }
       break;
+    case "stepup-file-need-pick":
+      if (filing) {
+        filing.pick = m.message;
+        render();
+      }
+      break;
     case "stepup-file-result":
       void onFilingResult(m.outcome);
       break;
@@ -1703,6 +1709,8 @@ interface FilingRun {
   /** The items in the order StepUp's blocks took them (the line numbers follow it). */
   matched?: string[];
   submitted?: string;
+  /** Set while the walk waits for the person to pick a category entry in StepUp's list. */
+  pick?: string;
 }
 let filing: FilingRun | undefined;
 
@@ -1765,6 +1773,7 @@ async function startFiling(purchaseId: string): Promise<void> {
 async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   if (!filing) return;
   filing.running = false;
+  delete filing.pick;
   filing.outcome = outcome;
   filing.matched = outcome.matched;
   persistFiling();
@@ -1793,13 +1802,21 @@ async function applyCategoryFixes(fixes: Array<{ rowId: string; from: string; to
   if (!workspace || !filing) return;
   const say = (line: string): void => void filing?.lines.push(line);
   try {
+    // A category StepUp words differently usually hits every row that used the same words: correct the other rows that are
+    // waiting to be filed too, so they do not stop on the same thing.
+    const waiting = filingGroups(ledger.state, ctx()).groups.flatMap((g) => g.rows);
+    const done = new Set<string>();
     for (const fix of fixes) {
+      const ids = [fix.rowId, ...waiting.filter((r) => r.itemId !== fix.rowId && (r.data["Category"] ?? "").trim() === fix.from).map((r) => r.itemId)].filter((id) => !done.has(id));
+      ids.forEach((id) => done.add(id));
       if (workspace.legacy?.workbook) {
-        await writeWorkbookRows(workspace.legacy.workbook, [fix.rowId], () => ({ Category: fix.to }));
+        await writeWorkbookRows(workspace.legacy.workbook, ids, () => ({ Category: fix.to }));
+        const how = await renameCategoryRow(workspace.legacy.workbook, fix.from, fix.to).catch(() => undefined);
+        if (how) say(`The workbook's category list now has "${fix.to}" (${how === "renamed" ? `was "${fix.from}"` : how === "added" ? "added" : "already there"}).`);
       } else if (!workspace.legacy) {
-        recordCategoryFix(ledger, [fix.rowId], fix.to);
+        recordCategoryFix(ledger, ids, fix.to);
       }
-      say(`Category corrected to StepUp's words: "${fix.from}" is now "${fix.to}".`);
+      say(`Category corrected to StepUp's words: "${fix.from}" is now "${fix.to}"${ids.length > 1 ? ` on ${ids.length} rows (the others also waiting to be filed)` : ""}.`);
     }
     if (!workspace.legacy) await save();
   } catch (err) {
@@ -1865,11 +1882,14 @@ function filingPanel(): string {
       : o?.status === "stopped"
         ? `<p class="warn"><strong>Stopped${o.step ? ` at ${esc(o.step)}` : ""}:</strong> ${esc(o.reason)}</p>${o.notes.map((n) => `<p class="note">${esc(n)}</p>`).join("")}<p class="note">Submit is held on StepUp's page until this is sorted out.</p>`
         : "";
-  const buttons = f.running
+  const buttons = f.pick
+    ? `<button class="primary" data-file-pick="picked">I picked it</button> <button data-file-pick="skip">Skip this row</button> <button data-file-stop>Stop</button>`
+    : f.running
     ? `<button data-file-stop>Stop</button>`
     : `<button data-file-release title="Lets StepUp's Submit button work again. Use it only if you have checked the summary yourself.">Let Submit through</button>`;
   return `<section class="panel"><h3 class="panel-title">Filing on StepUp<small>${esc(f.title)}</small></h3>
     <ul>${f.lines.slice(-8).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${f.pick && !f.submitted ? `<p class="warn"><strong>Waiting for you:</strong> ${esc(f.pick)}</p>` : ""}
     ${f.submitted ? `<p class="ok">Submitted as reimbursement #${esc(f.submitted)}.</p>` : result}
     <p class="row">${f.submitted ? "" : buttons}</p></section>`;
 }
@@ -3407,7 +3427,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined) {
+    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined || d["filePick"] !== undefined) {
       // Filing from an Excel year (the owner's exception): handled by the shared handlers below.
     } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.dataset["agent"] !== undefined || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
       // fall through to the shared handlers below
@@ -3540,6 +3560,10 @@ root.addEventListener("click", async (ev) => {
     const id = t.dataset["fileRecord"] ?? "";
     const input = root.querySelector<HTMLInputElement>(`input[id="file-record-${CSS.escape(id)}"]`);
     await recordByHand(id, input?.value ?? "");
+  } else if (t.dataset["filePick"] !== undefined) {
+    toAgent({ type: "stepup-file-pick", answer: t.dataset["filePick"] === "skip" ? "skip" : "picked" });
+    if (filing) delete filing.pick;
+    render();
   } else if (t.dataset["fileStop"] !== undefined) {
     toAgent({ type: "stepup-file-stop" });
   } else if (t.dataset["fileRelease"] !== undefined) {

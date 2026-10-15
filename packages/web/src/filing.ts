@@ -1,4 +1,4 @@
-import { getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef, type FilingGroup } from "@step-up/shared/web";
+import { appendTableRows, getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef, type FilingGroup } from "@step-up/shared/web";
 import type { FilingJob } from "./agent/engine.js";
 
 /**
@@ -77,4 +77,23 @@ export async function writeWorkbookRows(
     written++;
   }
   return { written, missing };
+}
+
+/**
+ * The workbook's list of categories (Table5): the row for `from` takes StepUp's words `to`, keeping its other columns. When
+ * `from` is not there, `to` is added if missing, as the command line did. Returns what happened.
+ */
+export async function renameCategoryRow(book: DriveItemRef, from: string, to: string): Promise<"renamed" | "added" | "present"> {
+  const a = from.trim();
+  const b = to.trim();
+  const headers = await getTableHeaderRow(book, "Table5");
+  const rows = await getTableRows(book, "Table5");
+  const at = rows.findIndex((r) => String(r[0] ?? "").trim() === a);
+  if (at !== -1) {
+    await updateTableRowByIndex(book, "Table5", at, rows[at]!, headers, { [headers[0]!]: b });
+    return "renamed";
+  }
+  if (rows.some((r) => String(r[0] ?? "").trim() === b)) return "present";
+  await appendTableRows(book, "Table5", [[b, ""]]);
+  return "added";
 }

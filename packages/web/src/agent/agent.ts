@@ -137,6 +137,8 @@ export class StepUpAgent {
   private filing = false;
   private watching = false;
   private filingStop = false;
+  /** Set while a walk waits for the person to pick a category entry themselves. */
+  private pickWaiter: ((answer: "picked" | "skip") => void) | undefined;
   private spikeBusy = false;
   private saveCount = 0;
   private disposed = false;
@@ -360,6 +362,10 @@ export class StepUpAgent {
         break;
       case "stepup-file-stop":
         this.filingStop = true;
+        this.answerPick("skip");
+        break;
+      case "stepup-file-pick":
+        this.answerPick(m.answer);
         break;
       case "stepup-release-submit":
         releaseGuard();
@@ -388,6 +394,12 @@ export class StepUpAgent {
   }
 
   /** One filing walk from a person's click. One at a time; refused when the page cannot be acted on. */
+  private answerPick(answer: "picked" | "skip"): void {
+    const wake = this.pickWaiter;
+    this.pickWaiter = undefined;
+    wake?.(answer);
+  }
+
   private async file(job: Parameters<typeof runFiling>[0]): Promise<void> {
     const stopped = (reason: string): void => this.sendLive({ type: "stepup-file-result", outcome: { status: "stopped", kind: "stepUpChanged", reason, matched: [], notes: [] } });
     if (!this.host.filingOps) return stopped("This page cannot be acted on.");
@@ -400,6 +412,11 @@ export class StepUpAgent {
         sleep: (ms) => this.host.sleep(ms),
         report: (line) => this.sendLive({ type: "stepup-file-progress", line }),
         cancelled: () => this.filingStop,
+        pick: (message) =>
+          new Promise((resolve) => {
+            this.pickWaiter = resolve;
+            this.sendLive({ type: "stepup-file-need-pick", message });
+          }),
       });
       this.sendLive({ type: "stepup-file-result", outcome });
     } finally {

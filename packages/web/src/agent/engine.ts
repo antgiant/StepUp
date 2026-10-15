@@ -73,6 +73,11 @@ export interface FilingEnv {
   /** A line of progress for the person. */
   report(line: string): void;
   cancelled(): boolean;
+  /**
+   * Asks the person to pick an entry themselves in StepUp's own dropdown (left open), and answers when they say they did
+   * or that the row should be skipped. Absent: a level that matches nothing simply stops the walk.
+   */
+  pick?(message: string): Promise<"picked" | "skip">;
 }
 
 export type StopKind = "needsYou" | "missingServiceDate" | "stepUpChanged" | "readError" | "cancelled" | "wrongTotal";
@@ -347,11 +352,33 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} dropdown is not on the page.`);
         break;
       }
-      const choice = chooseEntry(await readMenu(), levels[k]!);
+      const entries = await readMenu();
+      const choice = chooseEntry(entries, levels[k]!);
       if (choice.how === "none" || choice.how === "ambiguous") {
-        flags.push(`Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}".`);
-        ops.open(b, target); // close it again
-        break;
+        const unmatched = `Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}".`;
+        if (!env.pick) {
+          flags.push(unmatched);
+          ops.open(b, target); // close it again
+          break;
+        }
+        // The dropdown stays open; the person picks the right entry in StepUp itself and says so.
+        const before = (ops.shown(b, target) ?? "").trim();
+        let picked: string | undefined;
+        env.report(`${unmatched} Pick the right one in StepUp's open list, then say so here.`);
+        for (let ask = 0; ask < 5 && picked === undefined; ask++) {
+          const said = await env.pick(`${unmatched} StepUp's ${LEVEL_WORDS[k]} list is open on the page: click the right entry there, then press "I picked it".`);
+          if (said === "skip" || env.cancelled()) break;
+          const now = (ops.shown(b, target) ?? "").trim();
+          if (now && now !== before && !/^select\b/i.test(now)) picked = now;
+          else env.report(`The ${LEVEL_WORDS[k]} still shows "${now || "nothing"}". Pick an entry in StepUp's list, then say so again.`);
+        }
+        if (picked === undefined) {
+          flags.push(`${unmatched} Skipped, so fill it in StepUp yourself.`);
+          break;
+        }
+        chosen.push(picked);
+        loosely = true;
+        continue;
       }
       ops.choose(choice.text);
       await env.sleep(700);

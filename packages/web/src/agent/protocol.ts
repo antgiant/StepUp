@@ -6,9 +6,9 @@ import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@
 /**
  * Bumped when the agent's messages change in a way an older copy of the script (or an older open app tab) would not
  * understand. The app compares it with the version an agent reports and tells the person to click the bookmark again when
- * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back).
+ * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back). 6: adds the person's answer when a category cannot be matched (need-pick and pick).
  */
-export const AGENT_PROTOCOL = 5;
+export const AGENT_PROTOCOL = 6;
 
 /** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
 export type AgentToApp =
@@ -31,6 +31,8 @@ export type AgentToApp =
   | { type: "stepup-file-progress"; line: string }
   /** How a filing walk ended: at the Summary ready for a person to submit, or stopped with the reason. */
   | { type: "stepup-file-result"; outcome: FilingOutcome }
+  /** The walk is paused: a category entry matched nothing, so the person picks it in StepUp's open list and answers. */
+  | { type: "stepup-file-need-pick"; message: string }
   /** The person submitted: StepUp's confirmation page named the reimbursement. */
   | { type: "stepup-file-submitted"; number: string; guid?: string };
 
@@ -56,6 +58,8 @@ export type AppToAgent =
   /** Walk one group's reimbursement through StepUp's form, from the page that is open. From a person's click only. */
   | { type: "stepup-file"; job: FilingJob }
   | { type: "stepup-file-stop" }
+  /** The person's answer to a "need-pick": they picked the entry in StepUp's list, or the row is to be skipped. */
+  | { type: "stepup-file-pick"; answer: "picked" | "skip" }
   /** A person lets a held Submit through on purpose. */
   | { type: "stepup-release-submit" };
 

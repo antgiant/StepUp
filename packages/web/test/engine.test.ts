@@ -222,7 +222,7 @@ describe("filing one group, start to finish", () => {
   it("flags a category entry that does not exist instead of choosing another", async () => {
     const { ops, s, clock } = site();
     s.blocks[0]!.scan = { cost: "5.00" };
-    const out = await run(job([row("a", { ...book.data, Category: "Toys - Print - X" })]), ops, clock);
+    const out = await run(job([row("a", { ...book.data, Category: "Toys - Print - Zzz" })]), ops, clock);
     expect(out).toMatchObject({ status: "stopped", kind: "needsYou" });
     expect((out as { reason: string }).reason).toMatch(/no single Category entry reads "Toys"/);
     expect(s.guard).toBeDefined();
@@ -234,6 +234,34 @@ describe("filing one group, start to finish", () => {
     const out = await run(job([row("a", { ...book.data, Category: "books - Print - Textbooks" })]), ops, clock);
     expect(out, JSON.stringify(out)).toMatchObject({ status: "ready" });
     expect((out as { categoryFixes?: unknown }).categoryFixes).toEqual([{ rowId: "a", from: "books - Print - Textbooks", to: "Books - Print - Textbooks/Workbooks" }]);
+  });
+
+  it("waits for the person to pick an entry that matches nothing, then reports the fix", async () => {
+    const { ops, s, clock } = site();
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const asked: string[] = [];
+    const picks = ["Books", "Textbooks/Workbooks"];
+    const out = await runFiling(job([row("a", { ...book.data, Category: "Toys - Print - Zzz" })]), {
+      ops, sleep: async (ms) => void (clock.t += ms), report: () => undefined, cancelled: () => false,
+      pick: async (m) => {
+        asked.push(m);
+        s.blocks[0]!.levels.push(picks.shift()!); // the person clicks it in StepUp's list
+        return "picked";
+      },
+    });
+    expect(out, JSON.stringify(out)).toMatchObject({ status: "ready" });
+    expect(asked).toHaveLength(2);
+    expect((out as { categoryFixes?: unknown }).categoryFixes).toEqual([{ rowId: "a", from: "Toys - Print - Zzz", to: "Books - Print - Textbooks/Workbooks" }]);
+  });
+
+  it("skips the row, and says so, when the person chooses to skip a category", async () => {
+    const { ops, s, clock } = site();
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const out = await runFiling(job([row("a", { ...book.data, Category: "Toys - Print - Zzz" })]), {
+      ops, sleep: async (ms) => void (clock.t += ms), report: () => undefined, cancelled: () => false, pick: async () => "skip",
+    });
+    expect(out).toMatchObject({ status: "stopped", kind: "needsYou" });
+    expect((out as { reason: string }).reason).toMatch(/Skipped/);
   });
 
   it("does not guess when the scan's items cannot be matched to the rows", async () => {
