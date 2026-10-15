@@ -101,6 +101,13 @@ describe("mapping a step's controls", () => {
     expect(map.headings).toEqual(["Item 1"]);
   });
 
+  it("names an icon-only button from its title, alt or svg title", () => {
+    const withTitle = el({ tag: "button", attrs: { title: "Continue" } });
+    const withAlt: FormEl = { ...el({ tag: "button" }), querySelectorAll: (sel) => (sel === "img" ? [{ ...bare("IMG", null), getAttribute: (n: string) => (n === "alt" ? "Continue to Item/Service Details" : null) }] : []) };
+    const map = mapForm(page([withTitle, withAlt]), url);
+    expect(map.controls.map((c) => c.text)).toEqual(["Continue", "Continue to Item/Service Details"]);
+  });
+
   it("never lets a person's name out of a heading", () => {
     const h = (t: string) => bare("H3", t);
     const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);

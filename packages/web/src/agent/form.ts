@@ -61,7 +61,7 @@ export interface MappedControl {
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 3;
+export const FORM_MAP_VERSION = 4;
 
 export interface FormMap {
   mapVersion: number;
@@ -124,8 +124,10 @@ export function mapForm(root: FormRoot, url: string): FormMap {
     const label = labelOf(el);
     if (label) c.label = label;
     if (tag === "button" && !toggles) {
-      const text = clean(el.textContent);
-      if (text && plainButtonText(text)) c.text = text;
+      // A button's name can come from its words, or (when it is an icon) from its title, an image's alt or an SVG's title:
+      // what a person using a screen reader, and the command line's name-based lookup, would be told it is.
+      const named = clean(el.textContent) ?? clean(el.getAttribute("title")) ?? clean(el.querySelectorAll("img")[0]?.getAttribute("alt")) ?? clean(el.querySelectorAll("title")[0]?.textContent);
+      if (named && plainButtonText(named)) c.text = named;
     }
     const block = el.closest("[id^='collapseOne____item_']")?.getAttribute("id");
     if (block) c.block = block;
@@ -140,7 +142,7 @@ export function mapForm(root: FormRoot, url: string): FormMap {
     else seen.set(key, c);
   }
   const headings = Array.from(root.querySelectorAll("h1, h2, h3, h4"))
-    .map((h) => wordsOnly(clean(h.textContent)))
+    .map((h) => wordsOnly(clean(h.textContent, 100)))
     .filter((t): t is string => Boolean(t))
     .filter((t, i, all) => all.indexOf(t) === i)
     .slice(0, 40);
