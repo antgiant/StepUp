@@ -224,3 +224,9 @@ amount (`$0.00` placeholder, with up/down buttons). The CLI never touched them; 
 Details. **Owner preference:** make the edits on this step where possible (a nicer flow). Needs a spike: do these fields
 accept scripted entry, and does StepUp save them to the line item? Until proven, Item/Service Details stays the place
 that is verified and read back.
+
+**Observed on Additional Documents (2026-10-14):** `#inputDrop__` is the same id as on Upload, so a step is told apart by URL
+and heading. An attached file shows as a row under the dropzone: a **Delete** link and the file's name as a link (not buttons;
+mapped as links from form map v7). A **"Loading..." heading is visible while a file uploads** and must clear before the agent
+trusts the page or continues. The page states the limits: 5MB each, no passwords, PNG/JPG/JPEG/PDF, 50 files at most; the
+agent refuses a file outside them before trying.

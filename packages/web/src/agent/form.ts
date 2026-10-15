@@ -63,7 +63,7 @@ export interface MappedControl {
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 6;
+export const FORM_MAP_VERSION = 7;
 
 export interface FormMap {
   mapVersion: number;
@@ -76,7 +76,10 @@ export interface FormMap {
   notices: string[];
 }
 
-const CONTROLS = "input, select, textarea, button, [role='button'], [role='combobox'], [role='checkbox'], [role='switch']";
+/** Inputs and buttons, plus links and things styled as links (an attached file's row has a Delete and the file's name as links). */
+const CONTROLS = "input, select, textarea, button, [role='button'], [role='combobox'], [role='checkbox'], [role='switch'], a, [role='link'], [class*='delete'], [class*='remove']";
+/** A link's words are kept only when they are an action; otherwise it is a name (a file's), which is never kept. */
+const ACTION_WORDS = /^(delete|remove|view|download|preview|edit|retry|cancel)( file| document)?$/i;
 /** Button words are kept when short and plainly a label (a button can hold a desktop and a mobile wording, so it is not tiny): not a sentence, and nothing with digits or an @ (an id, an amount, an address). */
 const plainButtonText = (t: string): boolean => t.length <= 70 && !/[0-9@]/.test(t) && t.split(" ").length <= 9;
 const GUID_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,7 +128,8 @@ export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): 
     const inDropdown = Boolean(el.closest(".dropdown-menu"));
     if (inDropdown) continue; // the list's own entries are choices, not controls
     const toggles = tag === "button" && (/dropdown-toggle/.test(el.getAttribute("class") ?? "") || el.getAttribute("aria-haspopup") !== null || Boolean(el.closest(".dropdown")));
-    const kind = toggles ? "dropdown" : tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
+    const isLink = tag === "a" || el.getAttribute("role") === "link" || (tag !== "button" && tag !== "input" && tag !== "select" && tag !== "textarea" && el.getAttribute("role") !== "button");
+    const kind = toggles ? "dropdown" : isLink ? "link" : tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
     const c: MappedControl = { kind };
     const id = clean(el.getAttribute("id"), 80);
     // StepUp gives some buttons a new random id every session: it says nothing, so it is written as a placeholder.
@@ -136,7 +140,10 @@ export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): 
     if (placeholder) c.placeholder = placeholder;
     const label = labelOf(el);
     if (label) c.label = label;
-    if (tag === "button" && !toggles) {
+    if (isLink) {
+      const words = clean(el.textContent);
+      if (words && ACTION_WORDS.test(words)) c.text = words;
+    } else if (tag === "button" && !toggles) {
       // A button's name can come from its words, or (when it is an icon) from its title, an image's alt or an SVG's title:
       // what a person using a screen reader, and the command line's name-based lookup, would be told it is.
       const named = clean(el.textContent) ?? clean(el.getAttribute("title")) ?? clean(el.querySelectorAll("img")[0]?.getAttribute("alt")) ?? clean(el.querySelectorAll("title")[0]?.textContent);
