@@ -201,3 +201,51 @@ what the previous script left on the page; and a pasted form map says which buil
 Everything above is TypeScript with an injected host (`AgentHost`, `FilingOps`). An extension needs a different host
 (content script, `chrome.storage`, runtime messaging) and a manifest. It would add starting without a click, seeing calls
 made before the page finished loading, and surviving a reload. It adds no capability the agent lacks.
+
+## 12. Not yet verified live (do not treat as proven)
+
+Everything below is built and (where it can be) unit-tested against the pretend site, but has **not** been seen working on
+StepUp's real form or the owner's real storage. Each stop in a live run has so far been one more rule; expect the same here.
+
+| Area | What is unverified |
+|---|---|
+| Recording after Submit | The agent noticing the confirmation page by itself, and the app then writing the workbook row (the manual "Record it" path is the fallback). The Excel write of Status / Submitted / Reimbursement ID / Line Number has been exercised only through that path, if at all |
+| Several items in one receipt | Pairing blocks with rows by the scan's cost/name (`matchBlock`); the "detected" variant's checkboxes (`boxesToCheck`); blocks that StepUp adds or that need removing |
+| Payee branches | "Provider not Listed" with a typed name; a provider category's `#provider` list; a listed provider that reveals `#individualProvider` (left to the person unless the Service Provider matches exactly) |
+| Service date | A category that requires one, filled from the row; the missing-service-date stop and its "Unfiled (Missing Things)" write |
+| Additional documents | More than one; a statement that has a redacted copy |
+| Read error and "none found" | The read-error page's live wording (known only from the CLI); the "none found" variant filling blocks by order |
+| Ledger years | Filing from a ledger year at all (`recordSubmitted`, `recordNeedsAttention`, claims, drafts). Only an Excel year has been filed |
+| Google storage | Reading receipts via `storage.download` on a Google Drive workspace |
+| Mobile | The bookmark panel used to say it worked in Safari on iPhone and iPad; filing relies on `DataTransfer`, `getClientRects` and a pop-up, none checked on a phone. The claim was removed from the panel |
+| Enter key | The guard also intercepts Enter and Space on a Submit button and a form `submit`; only clicks were exercised |
+| Terms of use | The owner has not read StepUp's terms about automated assistance |
+
+Other limits worth knowing: the Summary's item lines are read only in the shape "N x $cost" or "N x $cost + $tax Tax/Shipping";
+a file is linked to a row by the `NN - ` name prefix (a file for a row that is already filed is linked too, harmlessly);
+line numbers follow the order StepUp's blocks took the rows; a walk times out at 25 minutes and waits up to 90 seconds for a
+step to change.
+
+## 13. Working with the owner and the environment
+
+**How the owner likes to work** (stated in the session, worth keeping):
+
+- Go step by step, "properly, not make a mess"; no rush to reorder for speed. Decide with them, then build.
+- **Never guess.** A mismatch is flagged and left; the rest still fills. Ambiguity stops the walk with the reason.
+- Prefers things to happen in the flow they are in (edits on the same step), and to be told plainly what to press and what
+  to report. They paste the Filing panel and screenshots; each stop line is the next fix.
+- Wants commits to be logical, small, with the reason in the message, and the branch pushed (a push deploys).
+- Does not want real data in the repo; reports with names are scrubbed (`wordsOnly`) and fixtures are invented.
+
+**Environment notes:**
+
+- The repo is in OneDrive: reads and test runs occasionally time out or stall. Retry; run long commands in the background.
+- One flaky shared test (`publishYearMirror` in `cli-support.test.ts`) can time out when the whole suite runs on a slow
+  disk and passes alone.
+- A push runs two workflows; the deploy is about 2 minutes and a duplicate deploy run is sometimes cancelled while the other
+  succeeds. Confirm the head commit's run, not just any run.
+- After a deploy: hard-refresh the helper tab **and** click the bookmark again on StepUp. A script already on the page is old.
+  Close extra StepUp tabs: two connected pages are handled, but a stale script on the other tab confuses what is tested.
+- When something "does nothing" in an Excel year, check the three gates first (§6).
+- The helper's panels, wording and CLI parity are in §5 and §8; the sort of production versus debugging code is
+  `docs/PRODUCTION_CLEANUP.md`.
