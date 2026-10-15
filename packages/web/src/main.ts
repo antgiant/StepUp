@@ -1730,6 +1730,16 @@ interface FilingRun {
   pick?: string;
 }
 let filing: FilingRun | undefined;
+/** The groups still waiting when "File all ready" was pressed: each starts after the one before is submitted. */
+let fileQueue: string[] = [];
+
+async function fileAllReady(): Promise<void> {
+  if (!workspace || filing?.running) return;
+  const ready = filingGroups(ledger.state, ctx()).groups.filter((g) => !g.existingDrafts.length).map((g) => g.purchaseId);
+  if (ready.length === 0) return;
+  fileQueue = ready.slice(1);
+  await startFiling(ready[0]!);
+}
 
 /** The run is kept across a reload of this tab, so a number that arrives later can still be put on the right rows. */
 const FILING_KEY = "stepup.filingRun";
@@ -1756,6 +1766,7 @@ const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 async function startFiling(purchaseId: string): Promise<void> {
   const refuse = (title: string, problem: string): void => {
+    fileQueue = [];
     filing = { purchaseId, title, itemIds: [], lines: [], running: false, problem };
     status = problem;
     render();
@@ -1897,7 +1908,11 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   persistFiling();
   if (outcome.categoryFixes?.length) await applyCategoryFixes(outcome.categoryFixes);
   // At the Summary the person still has to submit, so the guards stay; any stop gives them back.
-  if (outcome.status === "stopped") await releaseFilingGuards();
+  if (outcome.status === "stopped") {
+    await releaseFilingGuards();
+    if (fileQueue.length) filing.lines.push(`Stopped, so the ${fileQueue.length} waiting after this one will not start.`);
+    fileQueue = [];
+  }
   if (outcome.status === "stopped" && outcome.kind === "missingServiceDate") {
     await markFilingNeedsAttention("Missing Service Date: required for this category, needs filling in.");
   } else if (outcome.status === "stopped" && outcome.kind === "readError") {
@@ -1917,6 +1932,7 @@ async function holdFiling(kind: "split" | "documentation"): Promise<void> {
     if (said === null) return;
     note = said.trim() || "Documentation is wrong: needs fixing.";
   }
+  fileQueue = [];
   if (filing.running) toAgent({ type: "stepup-file-stop" });
   await releaseFilingGuards();
   await markFilingNeedsAttention(note);
@@ -1981,6 +1997,8 @@ async function onFilingSubmitted(number: string, guid: string | undefined): Prom
   }
   persistFiling();
   render();
+  const next = fileQueue.shift();
+  if (next && !status.startsWith(`Reimbursement #${number} was submitted, but`)) setTimeout(() => void startFiling(next), 1500);
 }
 
 /** The person says a group was submitted (the number is on StepUp's confirmation): record it as a submitted walk would. */
@@ -2197,10 +2215,11 @@ function planPanel(): string {
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
       ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
       ${g.existingDrafts.length ? `<p class="warn">StepUp already holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. To carry on with it, open it in StepUp (its Drafts list) before pressing the button: the walk continues from the step it is on. A new, empty request would make a second one, so delete the draft first in that case.</p>` : ""}
-      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p>
+      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "StepUp's page can be anywhere (the dashboard, or the last confirmation): the walk opens a new reimbursement itself." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p>
       <p class="row"><label>Already submitted in StepUp? Its reimbursement number <input id="file-record-${esc(g.purchaseId)}" inputmode="numeric" size="12"></label> <button data-file-record="${esc(g.purchaseId)}">Record it</button></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
   return `${filingPanel()}<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
+    ${plan.groups.filter((g) => !g.existingDrafts.length).length > 1 ? `<p class="row"><button data-file-all ${canFile ? "" : "disabled"}>File all ready, one after another</button> <small>${fileQueue.length ? `${fileQueue.length} more waiting after the one in progress. ` : ""}Each one stops at StepUp's Summary for you to submit; the next starts after you do. Anything that stops it ends the run.</small></p>` : ""}
     ${groups ? `<ul>${groups}</ul>` : `<p class="note">Nothing is ready yet.</p>`}
     ${blocked ? `<details><summary>Held back (${plan.blocked.length})</summary><ul>${blocked}</ul></details>` : ""}</section>`;
 }
@@ -3559,7 +3578,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined || d["filePick"] !== undefined || d["fileHold"] !== undefined) {
+    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined || d["filePick"] !== undefined || d["fileHold"] !== undefined || d["fileAll"] !== undefined) {
       // Filing from an Excel year (the owner's exception): handled by the shared handlers below.
     } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.dataset["agent"] !== undefined || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
       // fall through to the shared handlers below
@@ -3698,7 +3717,10 @@ root.addEventListener("click", async (ev) => {
     toAgent({ type: "stepup-file-pick", answer: t.dataset["filePick"] === "skip" ? "skip" : "picked" });
     if (filing) delete filing.pick;
     render();
+  } else if (t.dataset["fileAll"] !== undefined) {
+    await fileAllReady();
   } else if (t.dataset["fileStop"] !== undefined) {
+    fileQueue = [];
     toAgent({ type: "stepup-file-stop" });
   } else if (t.dataset["fileRelease"] !== undefined) {
     toAgent({ type: "stepup-release-submit" });

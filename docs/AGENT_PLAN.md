@@ -1,6 +1,6 @@
 # Plan: the bookmarklet agent replaces the command line
 
-**Status (2026-10-14, end of day): filing works end to end on the live form.** A real reimbursement was filed from an Excel
+**Status (2026-10-15): filing works end to end on the live form; the CLI's remaining features are now ported (§8) and await live runs.** Earlier status (2026-10-14, end of day): filing works end to end on the live form. A real reimbursement was filed from an Excel
 year through the bookmarklet and submitted by the owner. What remains is in §7. The facts about StepUp's site are in
 `docs/STEPUP_FINDINGS.md`. Older context: `docs/EXTENSION_PLAN.md` (superseded; kept for the extension option) and
 `docs/PLAN.md` (the original redesign). Read `CLAUDE.md` first: its rules still apply (Excel view read-only with one
@@ -135,14 +135,13 @@ what the previous script left on the page; and a pasted form map says which buil
 2. **More live filings**, each a new case: a multi-item receipt (block pairing, checkboxes on the detected variant), a
    category with a service date, "Provider not Listed" with a typed name, a listed provider that has individual people,
    several additional documents, a receipt StepUp cannot read.
-3. **Existing drafts.** The engine always starts a new request; the CLI resumed the draft it left. The plan shows a warning
-   when a draft exists; the person must delete or finish it first. A walk may already continue from a draft that is open on
-   its own step (it starts from whichever step is showing), untested. Decide: resume, or detect and refuse.
-4. **Start from the dashboard.** The person opens "New Reimbursement" first; the CLI clicked through the nav itself, and
-   "Request Another Reimbursement" after a confirmation. Then **file all ready groups in turn**.
-5. **CLI features not ported:** the category-rename fix (CLI renamed a category to match StepUp's list and corrected other rows),
-   "needs to be split" and "documentation problem" holds, the status sync writing StepUp's statuses into the workbook, the
-   session lock, and claims so two people cannot file the same group (ledger years).
+3. **Existing drafts.** Decided: the walk carries on from whatever step StepUp's page shows, so the person opens the draft
+   in StepUp first; the app asks before starting when the plan knows of a draft. Untested live (a resumed draft).
+4. **Start from the dashboard / all ready groups.** Built: the walk presses "Request Another Reimbursement" on a
+   confirmation page, or New Reimbursement (through the side menu when needed) from any other page that is not the form;
+   "File all ready, one after another" queues the groups, each starting after the person has submitted the one before. Not yet seen live.
+5. **CLI features ported** (see §8): category fix with a manual pick, holds, claims, session lock, draft number, statuses into the
+   workbook. All unexercised live; expect a rule each.
 6. **Item-selection edits** (the owner's preference): spike whether the name/amount fields there accept scripted entry and
    are saved.
 7. **Spike results still unexercised:** service date entry, additional-document attach on step 4, individual provider.
@@ -165,6 +164,7 @@ what the previous script left on the page; and a pasted form map says which buil
 | Item selection: tick boxes when matched | done |
 | Item details: cascade, payee, service date, numbers | done |
 | Add / delete surplus item blocks | done |
+| Dashboard / next request | done: `reachForm` in the engine; "File all ready" queue in the app. Not yet seen live |
 | Category mismatch: ask, rename, fix rows | done: a looser match is reported as `categoryFixes`; an unmatched level pauses for the person to pick it in StepUp's open list (`pick`, "I picked it" / "Skip this row"); the row, the other waiting rows with the same words, and the workbook's Table5 are corrected (ledger: `recordCategoryFix`) |
 | Summary: re-check total, go back up to twice | done, plus per-item lines |
 | Resume a draft by URL | by design not by URL (no navigation by URL): the person opens the draft in StepUp and the walk continues from its step; the app asks before starting when a draft exists (§7.3). The continue-from-a-draft path is still untested live |

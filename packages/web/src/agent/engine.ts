@@ -26,7 +26,7 @@ export interface FilingJob {
   rows: FilingRow[];
 }
 
-export type PressTarget = "continue" | "back" | "addItem" | "deleteItem" | "confirmDelete" | "cancelDelete";
+export type PressTarget = "continue" | "back" | "addItem" | "deleteItem" | "confirmDelete" | "cancelDelete" | "navReimbursements" | "newReimbursement" | "requestAnother";
 export type PickTarget = "student" | "category" | "categoryType" | "categoryDetail" | "provider" | "payee" | "individualProvider";
 
 /** Everything the engine may do to (or ask of) the page. There is deliberately no way to press Submit. */
@@ -154,6 +154,7 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
   };
 
   try {
+    await reachForm();
     for (;;) {
       if (env.cancelled()) throw new Stop("cancelled", "Stopped at your request.");
       if (ops.now() > deadline) throw new Stop("stepUpChanged", "This took too long; stopping.");
@@ -248,6 +249,28 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     }
     ops.guard("Step Up Helper stopped on an unexpected error.");
     return { status: "stopped", kind: "stepUpChanged", reason: `An unexpected error: ${err instanceof Error ? err.message : String(err)}`, matched, notes, ...fixes() };
+  }
+
+  /**
+   * Gets to a new request's student page from wherever the person left StepUp: "Request Another Reimbursement" on a
+   * confirmation page, or the Reimbursements page's New button (through the side menu when it is not showing). A page that
+   * is already a step of the form is left exactly as it is, so a draft that is open is carried on from where it stands.
+   */
+  async function reachForm(): Promise<void> {
+    const first = ops.map();
+    if (first.step === "confirmation") {
+      env.report("Starting another request.");
+      if (!(await pressWhenEnabled("requestAnother"))) throw new Stop("stepUpChanged", "\"Request Another Reimbursement\" is not on the page.", first.step);
+    } else if (recognise(first).step === undefined) {
+      env.report("Opening a new reimbursement.");
+      if (!ops.press("newReimbursement")) {
+        if (!ops.press("navReimbursements")) throw new Stop("stepUpChanged", "StepUp's form is not showing, and its Reimbursements menu entry was not found. Open a new reimbursement and start again.");
+        await waitFor("the Reimbursements page", () => ops.press("newReimbursement"), 20_000);
+      }
+    } else {
+      return;
+    }
+    await waitFor("the student page", () => ops.map().step === "studentSelection", 60_000);
   }
 
   /** The open dropdown's entries, once the list has stopped growing (StepUp loads a long list in pages). */

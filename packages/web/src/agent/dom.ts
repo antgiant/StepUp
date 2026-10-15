@@ -199,7 +199,12 @@ export function makeFilingOps(say: (text: string) => void): FilingOps {
     if (what === "confirmDelete") target = document.querySelector<HTMLElement>("#confirm-button") ?? undefined;
     else if (what === "cancelDelete") target = document.querySelector<HTMLElement>("#deny-button") ?? undefined;
     else if (what === "deleteItem") target = Array.from((block(i) ?? document).querySelectorAll<HTMLButtonElement>("button")).find((b) => /^delete$/i.test(words(b)) && !b.disabled && visible(b));
-    else {
+    else if (what === "navReimbursements") target = Array.from(document.querySelectorAll<HTMLElement>("#sidenav a")).find((a) => /^reimbursements?$/i.test(words(a)) && visible(a));
+    else if (what === "newReimbursement") target = document.querySelector<HTMLElement>("#New__Reimbursement__Button") ?? undefined;
+    else if (what === "requestAnother") {
+      const scope = document.querySelector("#Content__Wrapper .confirmation-container") ?? document;
+      target = Array.from(scope.querySelectorAll<HTMLElement>("button")).find((b) => /^request another reimbursement/i.test(words(b)) && visible(b));
+    } else {
       const re = what === "continue" ? /^continue/i : what === "back" ? /^back$/i : /^add an item$/i;
       target = buttons().find((b) => re.test(words(b)) && !b.disabled);
     }

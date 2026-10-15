@@ -49,7 +49,7 @@ function site(over: Partial<Site> = {}, nBlocks = 1): { ops: FilingOps; s: Site;
   const lineTotal = (b: Block, glitch = false): number => Number.parseFloat(b.values[SELS.quantity] ?? "1") * Number.parseFloat(b.values[SELS.cost] ?? "0") + (glitch ? 0 : Number.parseFloat(b.values[SELS.tax] ?? "0"));
 
   const map = (): FormMap => {
-    const base: FormMap = { mapVersion: 10, step: s.step, path: "/x", controls: [...chrome], headings: ["Scholarship Portal"], notices: [] };
+    const base: FormMap = { mapVersion: 10, step: (["dashboard", "reimbursements"].includes(s.step as string) ? undefined : s.step) as WizardStep, path: "/x", controls: [...chrome], headings: ["Scholarship Portal"], notices: [] };
     switch (s.step) {
       case "studentSelection":
         base.controls.push({ kind: "dropdown", id: "Student__Select", options: 3 });
@@ -171,6 +171,16 @@ function site(over: Partial<Site> = {}, nBlocks = 1): { ops: FilingOps; s: Site;
       }
       if (b === "back") {
         s.step = "itemDetails";
+        return true;
+      }
+      if (b === "newReimbursement" || b === "requestAnother") {
+        if ((b === "newReimbursement") !== (s.step === ("reimbursements" as never))) return false;
+        s.step = "studentSelection";
+        return true;
+      }
+      if (b === "navReimbursements") {
+        if (s.step !== ("dashboard" as never)) return false;
+        s.step = "reimbursements" as never;
         return true;
       }
       if (b === "addItem") {
@@ -302,6 +312,22 @@ describe("filing one group, start to finish", () => {
     expect(out).toMatchObject({ status: "ready" });
     // not listed: the name is typed into the field that appears, and nothing is guessed from a near entry
     expect(s.blocks[0]!.payee).toBe("Nonesuch Mart");
+  });
+
+  it("starts a new request itself from the confirmation page of the last one", async () => {
+    const { ops, s, clock } = site({ step: "confirmation" });
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const out = await run(job([book]), ops, clock);
+    expect(out, JSON.stringify(out)).toMatchObject({ status: "ready" });
+    expect(s.pressed).toContain("requestAnother");
+  });
+
+  it("opens a new reimbursement from the dashboard through the Reimbursements page", async () => {
+    const { ops, s, clock } = site({ step: "dashboard" as never });
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const out = await run(job([book]), ops, clock);
+    expect(out, JSON.stringify(out)).toMatchObject({ status: "ready" });
+    expect(s.pressed.slice(0, 2)).toEqual(["newReimbursement", "navReimbursements"]);
   });
 
   it("stops at once when asked", async () => {
