@@ -44,6 +44,17 @@ describe("planSubmissions", () => {
     expect(plan.skipped).toBe(1);
   });
 
+  it("keeps a row in the plan when an Excel year echoes its unfiled status, and skips any other sheet status", () => {
+    const st = state();
+    st.items["i1"] = item("i1", "c1", 1, { statusOverride: "Unfiled (Ready to Submit)" });
+    st.items["i2"] = item("i2", "c1", 2, { statusOverride: "Unfiled (Missing Things)", readyToSubmit: false });
+    st.items["i3"] = item("i3", "c2", 3, { statusOverride: "Approved" });
+    const plan = planSubmissions(st, ctx);
+    expect(plan.groups.flatMap((g) => g.items.map((i) => i.id))).toEqual(["i1"]);
+    expect(plan.blocked.map((b) => b.item.id).sort()).toEqual(["i2", "i4"]);
+    expect(plan.skipped).toBe(2);
+  });
+
   it("skips items past the deadline as forfeited", () => {
     const plan = planSubmissions(state(), { ...ctx, today: "2027-07-01" });
     expect(plan.groups).toEqual([]);

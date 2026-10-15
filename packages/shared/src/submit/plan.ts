@@ -27,6 +27,9 @@ export interface SubmissionPlan {
   skipped: number;
 }
 
+/** The sheet's own words for a row that has not been filed. */
+const UNFILED_ECHO = /^\s*unfiled\b/i;
+
 const byLine = (a: LineItem, b: LineItem) => (a.lineNumber ?? Infinity) - (b.lineNumber ?? Infinity) || a.id.localeCompare(b.id);
 
 /**
@@ -41,7 +44,9 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
 
   for (const item of Object.values(state.items).sort(byLine)) {
     if (item.archived) continue;
-    if (isFiled(item) || item.statusOverride) {
+    // An Excel year viewed read-only carries the sheet's own status on every row as an override. A row whose sheet says it
+    // is still unfiled ("Unfiled (Ready to Submit)", "Unfiled (Missing Things)") is not filed, so it stays in the plan.
+    if (isFiled(item) || (item.statusOverride && !UNFILED_ECHO.test(item.statusOverride))) {
       skipped++;
       continue;
     }
