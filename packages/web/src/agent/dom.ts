@@ -218,6 +218,10 @@ export function makeFilingOps(say: (text: string) => void): FilingOps {
       return { ...(cost ? { cost } : {}), ...(name ? { name } : {}) };
     },
     itemTotal: (i) => totalOf(document.querySelectorAll(BLOCK)[i]),
+    confirmationNumber: () => {
+      const m = /reimbursement request for Reimbursement #(\d+)/i.exec(document.body?.innerText ?? "");
+      return m && m[1] !== "0" ? m[1] : undefined;
+    },
     press,
     guard: (reason) => {
       installGuard();

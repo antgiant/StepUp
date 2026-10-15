@@ -147,6 +147,9 @@ import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openW
 import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
+import { filingGroups, recordNeedsAttention, recordSubmitted } from "@step-up/shared/web";
+import { buildJob, writeWorkbookRows } from "./filing.js";
+import type { FilingOutcome } from "./agent/engine.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import type { SpikeResult, SpikeTest } from "./agent/spike.js";
 import type { FormMap } from "./agent/form.js";
@@ -1622,6 +1625,18 @@ window.addEventListener("message", (ev) => {
         }).catch(() => undefined);
       }
       break;
+    case "stepup-file-progress":
+      if (filing) {
+        filing.lines.push(m.line);
+        render();
+      }
+      break;
+    case "stepup-file-result":
+      void onFilingResult(m.outcome);
+      break;
+    case "stepup-file-submitted":
+      void onFilingSubmitted(m.number, m.guid);
+      break;
     case "stepup-spike-result":
       spikeResults = [m.result, ...spikeResults].slice(0, 30);
       render();
@@ -1674,6 +1689,116 @@ function shortReport(r: RecordingReport): unknown {
   return { ...r, calls, omittedCalls: omitted };
 }
 let recordingShort = true;
+
+// ---- filing: one group walked through StepUp's form by the page's script, and what is written back afterwards
+interface FilingRun {
+  purchaseId: string;
+  title: string;
+  itemIds: string[];
+  lines: string[];
+  outcome?: FilingOutcome;
+  /** Set when the files could not be made ready: nothing was sent. */
+  problem?: string;
+  running: boolean;
+  /** The items in the order StepUp's blocks took them (the line numbers follow it). */
+  matched?: string[];
+  submitted?: string;
+}
+let filing: FilingRun | undefined;
+
+const todayIso = (): string => new Date().toISOString().slice(0, 10);
+
+async function startFiling(purchaseId: string): Promise<void> {
+  if (!workspace) return;
+  if (!agentWin || agentWin.win.closed) {
+    status = "Click the Step Up Helper bookmark on StepUp's page first.";
+    render();
+    return;
+  }
+  const g = filingGroups(ledger.state, ctx()).groups.find((x) => x.purchaseId === purchaseId);
+  if (!g) {
+    status = "That submission is no longer ready.";
+    render();
+    return;
+  }
+  const driveId = workspace.driveId;
+  filing = { purchaseId, title: `${g.child}: ${g.receipt.filename ?? g.receipt.id}`, itemIds: g.rows.map((r) => r.itemId), lines: ["Reading the files…"], running: true };
+  render();
+  try {
+    const made = await buildJob(g, (id) => storage.download(driveId, id, "Reading a document…"));
+    if ("problem" in made) {
+      filing = { ...filing, running: false, problem: made.problem };
+    } else {
+      filing.lines = ["Sent to StepUp's page. It will go through the form step by step."];
+      toAgent({ type: "stepup-file", job: made.job });
+    }
+  } catch (err) {
+    filing = { ...filing, running: false, problem: `Could not read the files: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  render();
+}
+
+/** What a walk's end means for the records: only a missing service date is written (as the command line did). */
+async function onFilingResult(outcome: FilingOutcome): Promise<void> {
+  if (!filing) return;
+  filing.running = false;
+  filing.outcome = outcome;
+  filing.matched = outcome.matched;
+  if (outcome.status === "stopped" && outcome.kind === "missingServiceDate" && workspace) {
+    const note = `${todayIso()}: Missing Service Date: required for this category, needs filling in.`;
+    try {
+      if (workspace.legacy?.workbook) await writeWorkbookRows(workspace.legacy.workbook, filing.itemIds, () => ({ Status: "Unfiled (Missing Things)" }), note);
+      else if (!workspace.legacy) {
+        recordNeedsAttention(ledger, filing.itemIds, note, todayIso());
+        await save();
+      }
+      filing.lines.push("The rows are marked as needing attention.");
+    } catch (err) {
+      filing.lines.push(`Could not mark the rows: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  render();
+}
+
+/** The person submitted and StepUp named the reimbursement: record it as the command line always did. */
+async function onFilingSubmitted(number: string, guid: string | undefined): Promise<void> {
+  if (!filing || !workspace) return;
+  const ids = filing.matched?.length ? filing.matched : filing.itemIds;
+  filing.submitted = number;
+  try {
+    if (workspace.legacy?.workbook) {
+      const r = await writeWorkbookRows(workspace.legacy.workbook, ids, (n) => ({ Status: "Submitted", Submitted: todayIso(), "Reimbursement ID": number, "Line Number": String(n + 1) }));
+      status = `Reimbursement #${number}: recorded in the workbook (${r.written} row${r.written === 1 ? "" : "s"}${r.missing.length ? `, ${r.missing.length} not found` : ""}). Refresh to see it.`;
+    } else if (!workspace.legacy) {
+      recordSubmitted(ledger, ids, { reimbursementId: number, submittedAt: todayIso(), ...(guid ? { guid } : {}) });
+      await save();
+      status = `Reimbursement #${number}: recorded.`;
+    }
+  } catch (err) {
+    status = `Reimbursement #${number} was submitted, but recording it failed: ${err instanceof Error ? err.message : String(err)}. Update the rows by hand.`;
+  }
+  render();
+}
+
+function filingPanel(): string {
+  if (!filing) return "";
+  const f = filing;
+  const o = f.outcome;
+  const result = f.problem
+    ? `<p class="warn">${esc(f.problem)} Nothing was sent to StepUp.</p>`
+    : o?.status === "ready"
+      ? `<p class="ok"><strong>Ready for you to submit.</strong> StepUp's summary shows ${formatCents(Math.round(o.total * 100))} for ${o.matched.length} item${o.matched.length === 1 ? "" : "s"}, matching the rows. Review it in StepUp, then press Submit for approval yourself.</p>${o.notes.map((n) => `<p class="note">${esc(n)}</p>`).join("")}`
+      : o?.status === "stopped"
+        ? `<p class="warn"><strong>Stopped${o.step ? ` at ${esc(o.step)}` : ""}:</strong> ${esc(o.reason)}</p>${o.notes.map((n) => `<p class="note">${esc(n)}</p>`).join("")}<p class="note">Submit is held on StepUp's page until this is sorted out.</p>`
+        : "";
+  const buttons = f.running
+    ? `<button data-file-stop>Stop</button>`
+    : `<button data-file-release title="Lets StepUp's Submit button work again. Use it only if you have checked the summary yourself.">Let Submit through</button>`;
+  return `<section class="panel"><h3 class="panel-title">Filing on StepUp<small>${esc(f.title)}</small></h3>
+    <ul>${f.lines.slice(-8).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${f.submitted ? `<p class="ok">Submitted as reimbursement #${esc(f.submitted)}.</p>` : result}
+    <p class="row">${f.submitted ? "" : buttons}</p></section>`;
+}
 
 // ---- the spike session: deliberate test actions on StepUp's page, with a read-back (never Continue, Back or Submit)
 let spikeOn = false;
@@ -1837,15 +1962,17 @@ function draftsPanel(): string {
 
 /** What the filing tool would send to StepUp, and what is holding the rest back. Only a look; filing happens in StepUp's own tab. */
 function planPanel(): string {
-  if (readOnly() || !workspace) return "";
+  if (!workspace) return "";
   const plan = planSubmissions(ledger.state, ctx());
+  const canFile = Boolean(agentWin && !agentWin.win.closed) && !filing?.running;
   if (!plan.groups.length && !plan.blocked.length) return "";
   const groups = plan.groups.map((g) => `<li><strong>${esc(g.childName)}</strong> · ${esc(g.receipt.filename ?? g.receipt.id)}
       <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
-      ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}</li>`).join("");
+      ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
+      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary"${canFile ? "" : " disabled"}>File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : "Click the Step Up Helper bookmark on StepUp's page first."}</small></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
-  return `<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
+  return `${filingPanel()}<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
     ${groups ? `<ul>${groups}</ul>` : `<p class="note">Nothing is ready yet.</p>`}
     ${blocked ? `<details><summary>Held back (${plan.blocked.length})</summary><ul>${blocked}</ul></details>` : ""}</section>`;
 }
@@ -3305,6 +3432,14 @@ root.addEventListener("click", async (ev) => {
       await save();
       status = `Set ${ledger.state.children[childId]!.name ?? "the student"}'s award to ${formatCents(Number(cents))}, as StepUp reports.`;
     }
+    render();
+  } else if (t.dataset["fileGroup"] !== undefined) {
+    await startFiling(t.dataset["fileGroup"] ?? "");
+  } else if (t.dataset["fileStop"] !== undefined) {
+    toAgent({ type: "stepup-file-stop" });
+  } else if (t.dataset["fileRelease"] !== undefined) {
+    toAgent({ type: "stepup-release-submit" });
+    status = "StepUp's Submit button is let through. Check the summary before pressing it.";
     render();
   } else if (t.dataset["agent"] !== undefined) {
     const what = t.dataset["agent"];

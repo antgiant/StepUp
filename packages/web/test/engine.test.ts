@@ -180,6 +180,7 @@ function site(over: Partial<Site> = {}, nBlocks = 1): { ops: FilingOps; s: Site;
       return true;
     },
     guard: (reason) => void (s.guard = reason),
+    confirmationNumber: () => undefined,
   };
   return { ops, s, clock };
 }

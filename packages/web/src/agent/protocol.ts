@@ -30,7 +30,9 @@ export type AgentToApp =
   /** One line of what the filing walk is doing. */
   | { type: "stepup-file-progress"; line: string }
   /** How a filing walk ended: at the Summary ready for a person to submit, or stopped with the reason. */
-  | { type: "stepup-file-result"; outcome: FilingOutcome };
+  | { type: "stepup-file-result"; outcome: FilingOutcome }
+  /** The person submitted: StepUp's confirmation page named the reimbursement. */
+  | { type: "stepup-file-submitted"; number: string; guid?: string };
 
 export type AppToAgent =
   | { type: "stepup-ready" }

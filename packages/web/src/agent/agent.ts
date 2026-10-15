@@ -397,8 +397,32 @@ export class StepUpAgent {
         cancelled: () => this.filingStop,
       });
       this.sendLive({ type: "stepup-file-result", outcome });
+      if (outcome.status === "ready") void this.watchForSubmission();
     } finally {
       this.filing = false;
+    }
+  }
+
+  /** After a walk ends at the Summary: when the person submits, StepUp's confirmation names the reimbursement. */
+  private async watchForSubmission(): Promise<void> {
+    const ops = this.host.filingOps;
+    if (!ops) return;
+    const until = this.host.now() + 40 * 60_000;
+    while (!this.disposed && this.host.now() < until) {
+      await this.host.sleep(1000);
+      const step = ops.map().step;
+      if (step === "summary" || step === undefined || step === "itemDetails") continue;
+      if (step !== "confirmation") continue;
+      for (let i = 0; i < 20; i++) {
+        const number = ops.confirmationNumber();
+        if (number) {
+          const guid = /\/SubmitReimbursement\/Confirmation\/([0-9a-f-]{36})/i.exec(this.host.currentUrl?.() ?? "")?.[1];
+          this.sendLive({ type: "stepup-file-submitted", number, ...(guid ? { guid } : {}) });
+          return;
+        }
+        await this.host.sleep(500);
+      }
+      return;
     }
   }
 

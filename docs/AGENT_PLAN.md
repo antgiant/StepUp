@@ -252,3 +252,14 @@ What this establishes for the filing engine:
 - **Not yet exercised by a spike** (low risk, same mechanisms as above): service date, an additional document on step 4, individual provider, and editing the item name/amount on item selection (owner's preference).
 
 Next: the filing engine (B2-B5) built from these primitives, with the signature check before each step and the read-back after.
+
+## 13. Filing engine (built 2026-10-14; not yet run on a real filing)
+
+- `packages/web/src/agent/fill.ts`: the decisions (entry matching, money and dates, totals, block pairing, which boxes to tick).
+- `packages/web/src/agent/engine.ts`: the walk (student, upload, item selection, item details, additional documents, Summary)
+  against `FilingOps`. Tested end to end against a pretend site. No operation can press Submit.
+- `packages/web/src/agent/dom.ts`: `FilingOps` on StepUp's real DOM, and the Submit guard.
+- `packages/web/src/filing.ts` and the "File this on StepUp" button: the app hands a group's receipt and documents to the page,
+  shows progress, and records the outcome (Excel year: the columns the CLI wrote; ledger year: the ledger).
+- A walk starts from the student page of a new reimbursement the person opened; it does not navigate there itself yet.
+- Not yet: claims for ledger years (two people filing), resuming a draft, a category-fix hook (the CLI renamed categories).

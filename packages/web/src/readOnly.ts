@@ -13,6 +13,9 @@ export const READ_ONLY_KEEP = [
   // The StepUp bookmarklet: how to get it, and answering what it sent. Bringing the list in writes only `<year>/_stepup/`,
   // never the workbook (the same thing the command line has always done for an Excel year).
   "#show-bookmarklet", "#copy-bookmarklet", "#close-bookmarklet", "#stepup-apply", "#stepup-ignore", "#stepup-result-close", "[data-stepup-year]", "[data-agent]", "textarea[readonly]",
+  // Filing from an Excel year (the owner's exception, 2026-10-14): starting a walk through StepUp's form, stopping it, and
+  // releasing a held Submit. What it writes to the workbook is only what the command line wrote (see filing.ts).
+  "[data-file-group]", "[data-file-stop]", "[data-file-release]",
   "#legacy-refresh", "[data-legacy-pick]", "[data-legacy-clear]", "#legacy-download", "#close-preview", "[data-pivot]", "[id^='legacy-']", ".preview a", "header *",
 ].join(",");
 

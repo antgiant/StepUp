@@ -63,6 +63,8 @@ export interface FilingOps {
   press(button: PressTarget, block?: number): boolean;
   /** Stops a person's Submit from going through while a reason is given; undefined lets it through. */
   guard(reason: string | undefined): void;
+  /** On the confirmation page after a submission: StepUp's reimbursement number, once it is a real one. */
+  confirmationNumber(): string | undefined;
 }
 
 export interface FilingEnv {

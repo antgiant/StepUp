@@ -7,6 +7,9 @@ A school year still kept in Excel (`workspace.legacy`) is drawn by the **same sc
 styling match. It is read-only: no buttons that act, no editable fields. **One exception, decided by the owner (2026-10-14):** the
 workbook writes the CLI already makes (Status, Submitted, Reimbursement ID, Line Number, Notes, Category fixes, the status
 sync; see `packages/cli/src/filing/excelStore.ts`) stay allowed. Anything beyond them is discussed with the owner first.
+The app's own filing (`packages/web/src/filing.ts`, `writeWorkbookRows`) writes exactly those columns, found by the row's `ID`:
+Status, Submitted, Reimbursement ID, Line Number and Notes. Its controls (`[data-file-group]`, `[data-file-stop]`,
+`[data-file-release]`) are on `READ_ONLY_KEEP` for that reason alone.
 
 - Change the ledger screens and the Excel view follows. Do not build separate Excel-only screens.
 - `enforceReadOnly` (`packages/web/src/readOnly.ts`) runs over the Excel view and removes every control that is not on the

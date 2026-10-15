@@ -56,6 +56,10 @@ export function agentMessageFrom(origin: string, data: unknown): AgentToApp | un
       if (!r || typeof r.test !== "string" || typeof r.ok !== "boolean" || !Array.isArray(r.lines)) return undefined;
       return { type: "stepup-spike-result", result: { test: r.test.slice(0, 120), ok: r.ok, lines: r.lines.filter((l): l is string => typeof l === "string").slice(0, 20).map((l) => l.slice(0, 300)) } };
     }
+    case "stepup-file-submitted":
+      return typeof m["number"] === "string" && /^\d{1,12}$/.test(m["number"])
+        ? { type: "stepup-file-submitted", number: m["number"], ...(typeof m["guid"] === "string" && /^[0-9a-f-]{36}$/i.test(m["guid"]) ? { guid: m["guid"] } : {}) }
+        : undefined;
     case "stepup-file-progress":
       return typeof m["line"] === "string" ? { type: "stepup-file-progress", line: m["line"].slice(0, 300) } : undefined;
     case "stepup-file-result": {
