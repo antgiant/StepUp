@@ -70,6 +70,15 @@ const pageOps: PageOps = {
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.blur(); // StepUp commits a typed value on blur (found by the command line)
   },
+  itemTotal: (i) => {
+    const block = document.querySelectorAll(".accordion-item.accordion-card-container")[i];
+    if (!block) return undefined;
+    for (const e of Array.from(block.querySelectorAll<HTMLElement>("*"))) {
+      const t = (e.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (/^\$[\d,]+(\.\d{1,2})? total$/i.test(t) && !Array.from(e.children).some((c) => /total/i.test(c.textContent ?? "") && c.children.length === 0 && /total$/i.test((c.textContent ?? "").trim()) && false)) return t;
+    }
+    return undefined;
+  },
   setFiles: (sel, i, file) => {
     const el = nth(sel, i) as HTMLInputElement | undefined;
     if (!el) return;

@@ -29,6 +29,7 @@ function fake(over: Partial<PageOps> = {}) {
   const state = { value: "1", menu: ["Alpha", "Beta"], picked: "Choose" };
   const ops: PageOps = {
     count: () => 3,
+    itemTotal: () => "$0.00 total",
     value: () => state.value,
     setValue: (sel, i, v) => { log.push(`set ${sel} ${i} ${v}`); state.value = v; },
     setFiles: (sel, i, f) => { log.push(`file ${sel} ${i} ${f.name}`); },
@@ -52,6 +53,9 @@ describe("the spike tests", () => {
     expect(log).toEqual(["set [placeholder=\"Enter Quantity\"] 0 7"]);
     expect(r.ok).toBe(true);
     expect(r.lines.join(" ")).toMatch(/kept it/);
+    const quiet = await runSpike({ kind: "text", target: "quantity", index: 0, value: "8", method: "events" }, env(fake().ops, itemDetails(), url3));
+    expect(quiet.ok).toBe(true);
+    expect(quiet.lines.join(" ")).toMatch(/saves at step changes/);
   });
 
   it("reports a field that does not keep what was set", async () => {

@@ -33,6 +33,8 @@ export interface PageOps {
   value(selector: string, index: number): string | undefined;
   setValue(selector: string, index: number, value: string, method: EntryMethod): void;
   setFiles(selector: string, index: number, file: { name: string; mime: string; bytes: ArrayBuffer }): void;
+  /** The item's running total as the page shows it ("$12.00 total"): StepUp recomputes it from what it has accepted. */
+  itemTotal?(index: number): string | undefined;
   /** Opens the dropdown for a target (its own toggle button only). False when it is not on the page. */
   openPicker(target: PickTarget, index: number): boolean;
   /** The toggle's visible words now (what is chosen): compared, never reported. */
@@ -115,6 +117,7 @@ async function enter(test: Extract<SpikeTest, { kind: "text" | "date" }>, env: E
   if (why) return { test: name, ok: false, lines: [why] };
   if (env.ops.count(where.selector) <= test.index) return { test: name, ok: false, lines: [`The page has ${env.ops.count(where.selector)} of these; asked for number ${test.index + 1}.`] };
   const before = env.ops.value(where.selector, test.index) ?? "";
+  const totalBefore = env.ops.itemTotal?.(test.index);
   const saves = env.saves();
   env.ops.setValue(where.selector, test.index, test.value, test.method);
   const lines = [`Before: "${before}". Set to "${test.value}" by ${test.method === "typed" ? "typing it in a character at a time" : "setting it and sending input, change and blur"}.`];
@@ -125,9 +128,14 @@ async function enter(test: Extract<SpikeTest, { kind: "text" | "date" }>, env: E
   }
   const kept = after === test.value;
   lines.push(`After 3 s: "${after}". ${kept ? "The field kept it." : "The field does NOT show what was set."}`);
-  const saved = env.saves() > saves;
-  lines.push(saved ? "StepUp saved the form after this (its own save request was seen)." : "StepUp made no save request after this.");
-  return { test: name, ok: kept && saved, lines };
+  const totalAfter = env.ops.itemTotal?.(test.index);
+  if (totalBefore !== undefined || totalAfter !== undefined) {
+    const moved = totalBefore !== totalAfter;
+    lines.push(`The item's total on the page: ${totalBefore ?? "not shown"} before, ${totalAfter ?? "not shown"} after.${moved ? " StepUp recomputed it, so it has taken the value." : " It did not change (it will not if the field is not part of the sum)."}`);
+  }
+  // StepUp saves at step changes, so a missing save here is normal; it is reported, not judged.
+  lines.push(env.saves() > saves ? "StepUp also made a save request after this." : "StepUp made no save request (it saves at step changes).");
+  return { test: name, ok: kept, lines };
 }
 
 async function pick(test: Extract<SpikeTest, { kind: "pick" }>, env: Env): Promise<SpikeResult> {
