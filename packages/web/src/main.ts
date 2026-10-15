@@ -1776,6 +1776,7 @@ async function startFiling(purchaseId: string): Promise<void> {
     const made = await buildJob(g, (id) => storage.download(driveId, id, "Reading a document…"));
     if ("problem" in made) {
       filing = { ...filing, running: false, problem: made.problem };
+      await markFilingNeedsAttention(made.problem, g.rows.map((r) => r.itemId));
     } else {
       filing.lines = ["Sent to StepUp's page. It will go through the form step by step."];
       toAgent({ type: "stepup-file", job: made.job });
@@ -1786,7 +1787,27 @@ async function startFiling(purchaseId: string): Promise<void> {
   render();
 }
 
-/** What a walk's end means for the records: only a missing service date is written (as the command line did). */
+/**
+ * Marks the rows as needing attention, as the command line did: Status "Unfiled (Missing Things)" with a dated note
+ * (workbook), or the ledger's needs-attention record. The walk's panel says what was done.
+ */
+async function markFilingNeedsAttention(note: string, itemIds: string[] = filing?.itemIds ?? []): Promise<void> {
+  if (!workspace || itemIds.length === 0) return;
+  const say = (line: string): void => void filing?.lines.push(line);
+  const dated = `${todayIso()}: ${note}`;
+  try {
+    if (workspace.legacy?.workbook) await writeWorkbookRows(workspace.legacy.workbook, itemIds, () => ({ Status: "Unfiled (Missing Things)" }), dated);
+    else if (!workspace.legacy) {
+      recordNeedsAttention(ledger, itemIds, dated, todayIso());
+      await save();
+    }
+    say("The rows are marked as needing attention.");
+  } catch (err) {
+    say(`Could not mark the rows: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** What a walk's end means for the records: a missing service date or a receipt StepUp cannot read marks the rows. */
 async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   if (!filing) return;
   filing.running = false;
@@ -1795,19 +1816,28 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   filing.matched = outcome.matched;
   persistFiling();
   if (outcome.categoryFixes?.length) await applyCategoryFixes(outcome.categoryFixes);
-  if (outcome.status === "stopped" && outcome.kind === "missingServiceDate" && workspace) {
-    const note = `${todayIso()}: Missing Service Date: required for this category, needs filling in.`;
-    try {
-      if (workspace.legacy?.workbook) await writeWorkbookRows(workspace.legacy.workbook, filing.itemIds, () => ({ Status: "Unfiled (Missing Things)" }), note);
-      else if (!workspace.legacy) {
-        recordNeedsAttention(ledger, filing.itemIds, note, todayIso());
-        await save();
-      }
-      filing.lines.push("The rows are marked as needing attention.");
-    } catch (err) {
-      filing.lines.push(`Could not mark the rows: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  if (outcome.status === "stopped" && outcome.kind === "missingServiceDate") {
+    await markFilingNeedsAttention("Missing Service Date: required for this category, needs filling in.");
+  } else if (outcome.status === "stopped" && outcome.kind === "readError") {
+    await markFilingNeedsAttention("StepUp could not read the receipt: needs a real fix in the file or the row.");
   }
+  render();
+}
+
+/** The person's own hold on a group: it must be split into separate rows, or its documentation is wrong. */
+async function holdFiling(kind: "split" | "documentation"): Promise<void> {
+  if (!filing || filing.submitted) return;
+  let note: string;
+  if (kind === "split") {
+    note = "Needs to be split: the receipt has several items, so this row must be itemized into separate rows.";
+  } else {
+    const said = prompt("What is wrong with the documentation? (This goes in the rows' Notes.)", "Documentation is wrong: needs fixing.");
+    if (said === null) return;
+    note = said.trim() || "Documentation is wrong: needs fixing.";
+  }
+  if (filing.running) toAgent({ type: "stepup-file-stop" });
+  await markFilingNeedsAttention(note);
+  status = "Marked as needing attention. Fix it, set the status back to Unfiled (Ready to Submit), and file it again.";
   render();
 }
 
@@ -1904,11 +1934,12 @@ function filingPanel(): string {
     : f.running
     ? `<button data-file-stop>Stop</button>`
     : `<button data-file-release title="Lets StepUp's Submit button work again. Use it only if you have checked the summary yourself.">Let Submit through</button>`;
+  const holds = f.submitted || f.problem ? "" : `<p class="row"><button data-file-hold="split" title="Marks these rows as needing attention: the receipt has several items and the row must be split">Needs to be split</button> <button data-file-hold="documentation" title="Marks these rows as needing attention, with a note of what is wrong">Documentation problem</button></p>`;
   return `<section class="panel"><h3 class="panel-title">Filing on StepUp<small>${esc(f.title)}</small></h3>
     <ul>${f.lines.slice(-8).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
     ${f.pick && !f.submitted ? `<p class="warn"><strong>Waiting for you:</strong> ${esc(f.pick)}</p>` : ""}
     ${f.submitted ? `<p class="ok">Submitted as reimbursement #${esc(f.submitted)}.</p>` : result}
-    <p class="row">${f.submitted ? "" : buttons}</p></section>`;
+    <p class="row">${f.submitted ? "" : buttons}</p>${holds}</section>`;
 }
 
 // ---- the spike session: deliberate test actions on StepUp's page, with a read-back (never Continue, Back or Submit)
@@ -3444,7 +3475,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined || d["filePick"] !== undefined) {
+    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined || d["filePick"] !== undefined || d["fileHold"] !== undefined) {
       // Filing from an Excel year (the owner's exception): handled by the shared handlers below.
     } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.dataset["agent"] !== undefined || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
       // fall through to the shared handlers below
@@ -3577,6 +3608,8 @@ root.addEventListener("click", async (ev) => {
     const id = t.dataset["fileRecord"] ?? "";
     const input = root.querySelector<HTMLInputElement>(`input[id="file-record-${CSS.escape(id)}"]`);
     await recordByHand(id, input?.value ?? "");
+  } else if (t.dataset["fileHold"] !== undefined) {
+    await holdFiling(t.dataset["fileHold"] === "documentation" ? "documentation" : "split");
   } else if (t.dataset["filePick"] !== undefined) {
     toAgent({ type: "stepup-file-pick", answer: t.dataset["filePick"] === "skip" ? "skip" : "picked" });
     if (filing) delete filing.pick;

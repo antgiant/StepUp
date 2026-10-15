@@ -168,7 +168,7 @@ what the previous script left on the page; and a pasted form map says which buil
 | Category mismatch: ask, rename, fix rows | done: a looser match is reported as `categoryFixes`; an unmatched level pauses for the person to pick it in StepUp's open list (`pick`, "I picked it" / "Skip this row"); the row, the other waiting rows with the same words, and the workbook's Table5 are corrected (ledger: `recordCategoryFix`) |
 | Summary: re-check total, go back up to twice | done, plus per-item lines |
 | Resume a draft by URL | by design not by URL (no navigation by URL): the person opens the draft in StepUp and the walk continues from its step; the app asks before starting when a draft exists (§7.3). The continue-from-a-draft path is still untested live |
-| Skip / split / resync buttons | Stop only |
+| Skip / split / resync buttons | Stop is the skip; "Needs to be split" and "Documentation problem" mark the rows as needing attention with a dated note (as the CLI did), and a receipt StepUp cannot read or a file that cannot be sent marks them too. Resync is not needed: a walk always re-reads the page |
 | `FilingStore`: claim, draft number, submitted, needs attention | submitted and needs attention done; claim and draft number not |
 | Session lock | not ported |
 | Statuses into the workbook | done: "Bring in StepUp's list" on an Excel year also writes Status, Reimbursed Amount and StepUp's message to the workbook (`planWorkbookStatusSync`, `syncWorkbookStatuses`), with before/after readings kept in History. Not yet exercised live |
