@@ -1113,7 +1113,7 @@ function header(): string {
   const unsaved = ledger.unflushedCount;
   return `<header><h1><a href="#" data-go="queue"><img src="./icon.svg" alt="" class="logo">Step Up Helper</a></h1>
     <nav>${navigator.onLine ? "" : `<span class="badge warn">Offline: changes are kept on this device</span>`}${unsaved ? `<span class="badge warn">${unsaved} unsaved</span>` : ""}${queuedUploads ? `<span class="badge warn">${queuedUploads} file(s) waiting to upload</span>` : ""}
-    ${workspace?.legacy ? `<details class="menu"><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="show-bookmarklet">Get the StepUp bookmarklet</button><button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button><button id="disconnect" class="danger">Disconnect</button>${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}</div></details>` : `<details class="menu"><summary class="btn">Advanced</summary>
+    ${workspace?.legacy ? `<details class="menu"${menuOpen ? " open" : ""}><summary class="btn">Advanced</summary><div class="menu-panel"><button id="legacy-download">Download as a spreadsheet</button><button id="show-bookmarklet">Get the StepUp bookmarklet</button><button id="toggle-detail">Detailed refresh messages: ${detailedRefresh ? "on" : "off"}</button><button id="disconnect" class="danger">Disconnect</button>${account ? `<button id="sign-out">${storage.kind === "browser" ? "Use Microsoft instead" : "Sign out"}</button>` : ""}</div></details>` : `<details class="menu"${menuOpen ? " open" : ""}><summary class="btn">Advanced</summary>
       <div class="menu-panel">
         <label class="btn">Import events<input type="file" id="import" accept=".jsonl,.json,.txt" hidden></label>
         <button id="export">Export events</button>
@@ -1424,7 +1424,25 @@ function stepUpResultPanel(): string {
 
 /** A list sent by the bookmarklet, waiting for the person to say yes (nothing is written until they do). */
 let pendingStepUp: unknown[] | undefined;
-let bookmarkletOpen = false;
+/** Whether the Advanced menu is open, so a redraw (a refresh of OneDrive's data, a status change) does not close it under the person. */
+let menuOpen = false;
+/** The StepUp bookmarklet panel stays open across a reload of this tab (it is this tab's, so a session value). */
+const BOOKMARKLET_KEY = "stepup.bookmarkletOpen";
+let bookmarkletOpen = ((): boolean => {
+  try {
+    return sessionStorage.getItem(BOOKMARKLET_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+const setBookmarkletOpen = (open: boolean): void => {
+  bookmarkletOpen = open;
+  try {
+    sessionStorage.setItem(BOOKMARKLET_KEY, open ? "1" : "0");
+  } catch {
+    /* kept for this visit only */
+  }
+};
 
 // ---- the agent running on StepUp's page (see src/agent): lists, what it learned, and what it recorded
 
@@ -2303,6 +2321,7 @@ function panel(key: string, title: string, body: string, cls = ""): string {
 }
 root.addEventListener("toggle", (ev) => {
   const el = ev.target;
+  if (el instanceof HTMLDetailsElement && el.classList.contains("menu")) menuOpen = el.open;
   const key = el instanceof HTMLDetailsElement ? el.dataset["panel"] : undefined;
   if (key) (el as HTMLDetailsElement).open ? collapsedPanels.delete(key) : collapsedPanels.add(key);
 }, true);
@@ -3221,7 +3240,7 @@ root.addEventListener("click", async (ev) => {
     pendingStepUp = undefined;
     render();
   } else if (t.id === "show-bookmarklet" || t.id === "close-bookmarklet") {
-    bookmarkletOpen = t.id === "show-bookmarklet";
+    setBookmarkletOpen(t.id === "show-bookmarklet");
     render();
   } else if (t.id === "copy-bookmarklet") {
     try {
