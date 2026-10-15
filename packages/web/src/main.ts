@@ -1709,22 +1709,23 @@ let filing: FilingRun | undefined;
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 async function startFiling(purchaseId: string): Promise<void> {
-  if (!workspace) return;
+  const refuse = (title: string, problem: string): void => {
+    filing = { purchaseId, title, itemIds: [], lines: [], running: false, problem };
+    status = problem;
+    render();
+  };
+  if (!workspace) return refuse("Filing", "No year is open.");
+  if (filing?.running) return refuse(filing.title, "A walk is already running. Wait for it, or press Stop.");
   if (!agentWin || agentWin.win.closed) {
-    status = "Click the Step Up Helper bookmark on StepUp's page first.";
-    render();
-    return;
+    return refuse("Filing", "No StepUp page is connected. Open StepUp's Dashboard (or its New Reimbursement page), click the Step Up Helper bookmark there, and press this again.");
   }
-  const g = filingGroups(ledger.state, ctx()).groups.find((x) => x.purchaseId === purchaseId);
-  if (!g) {
-    status = "That submission is no longer ready.";
-    render();
-    return;
-  }
-  const driveId = workspace.driveId;
-  filing = { purchaseId, title: `${g.child}: ${g.receipt.filename ?? g.receipt.id}`, itemIds: g.rows.map((r) => r.itemId), lines: ["Reading the files…"], running: true };
-  render();
   try {
+    const g = filingGroups(ledger.state, ctx()).groups.find((x) => x.purchaseId === purchaseId);
+    if (!g) return refuse("Filing", "That submission is no longer ready: it may have changed since this page was drawn. Refresh and try again.");
+    const driveId = workspace.driveId;
+    const title = `${g.child}: ${g.receipt.filename ?? g.receipt.id}`;
+    filing = { purchaseId, title, itemIds: g.rows.map((r) => r.itemId), lines: ["Reading the files…"], running: true };
+    render();
     const made = await buildJob(g, (id) => storage.download(driveId, id, "Reading a document…"));
     if ("problem" in made) {
       filing = { ...filing, running: false, problem: made.problem };
@@ -1733,7 +1734,7 @@ async function startFiling(purchaseId: string): Promise<void> {
       toAgent({ type: "stepup-file", job: made.job });
     }
   } catch (err) {
-    filing = { ...filing, running: false, problem: `Could not read the files: ${err instanceof Error ? err.message : String(err)}` };
+    filing = { purchaseId, title: filing?.title ?? "Filing", itemIds: filing?.itemIds ?? [], lines: filing?.lines ?? [], running: false, problem: `Something went wrong before anything was sent: ${err instanceof Error ? err.message : String(err)}` };
   }
   render();
 }
@@ -1970,7 +1971,7 @@ function planPanel(): string {
       <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
       ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
-      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary"${canFile ? "" : " disabled"}>File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : "Click the Step Up Helper bookmark on StepUp's page first."}</small></p></li>`).join("");
+      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
   return `${filingPanel()}<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
     ${groups ? `<ul>${groups}</ul>` : `<p class="note">Nothing is ready yet.</p>`}
