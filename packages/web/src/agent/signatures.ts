@@ -15,6 +15,8 @@ export interface Recognition {
   busy: boolean;
   /** Everything that is not as expected; empty means the step is recognised exactly. */
   problems: string[];
+  /** Things a person has to decide: the step is recognised, but the agent will not choose these. */
+  attention: string[];
 }
 
 interface Rule {
@@ -119,6 +121,8 @@ function rulesFor(step: WizardStep, headings: string[]): { variant: string; busy
           { name: "service date", match: byId("date", "serviceDate") },
           { name: "who did you pay (listed)", match: byId("dropdown", "provider") },
           { name: "who did you pay (vendor)", match: byLabel("dropdown", /^Who did you pay\?/i) },
+          // Appears after a listed provider is chosen: which person is a choice the agent does not make.
+          { name: "individual provider", match: byId("dropdown", "individualProvider") },
           { name: "vendor name", match: byId("text", "vendorName") },
           { name: "provider name", match: byId("text", "otherServiceProviderName") },
           { name: "benefit message", match: byId("textarea", "educationalBenefit") },
@@ -164,10 +168,10 @@ const describe = (c: MappedControl): string => [c.kind, c.id, c.label ?? c.place
 /** Compares a map of the page with what its wizard step should hold. */
 export function recognise(map: FormMap): Recognition {
   const step = map.step;
-  if (!step) return { variant: "none", busy: false, problems: ["This is not a page of the reimbursement form."] };
+  if (!step) return { variant: "none", busy: false, problems: ["This is not a page of the reimbursement form."], attention: [] };
   const { variant, busy, rules } = rulesFor(step, map.headings);
-  if (variant === "unknown") return { step, variant, busy, problems: ["This step's page is not one StepUp's form was seen to show here."] };
-  if (busy) return { step, variant, busy: true, problems: [] };
+  if (variant === "unknown") return { step, variant, busy, problems: ["This step's page is not one StepUp's form was seen to show here."], attention: [] };
+  if (busy) return { step, variant, busy: true, problems: [], attention: [] };
 
   const problems: string[] = [];
   const hit = new Set<Rule>();
@@ -182,7 +186,9 @@ export function recognise(map: FormMap): Recognition {
   if (step === "itemDetails") problems.push(...payeeProblems(map));
   if (step === "additionalDocuments") problems.push(...documentProblems(map));
   if (step === "upload") problems.push(...uploadProblems(map));
-  return { step, variant, busy: false, problems };
+  const attention: string[] = [];
+  if (step === "itemDetails" && count(map, byId("dropdown", "individualProvider")) > 0) attention.push("Choose the individual provider yourself: StepUp lists people under this business.");
+  return { step, variant, busy: false, problems, attention };
 }
 
 const count = (map: FormMap, match: (c: MappedControl) => boolean): number => map.controls.filter(match).reduce((n, c) => n + (c.count ?? 1), 0);

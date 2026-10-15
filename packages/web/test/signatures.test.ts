@@ -84,6 +84,13 @@ describe("recognising the recorded steps", () => {
     expect(recognise(m)).toMatchObject({ variant: "confirmDelete", problems: [] });
   });
 
+  it("a listed provider that has individual providers needs a person's choice", () => {
+    const m = map("itemDetails", [...detailsCommon, { kind: "dropdown", id: "provider", block, options: 45 }, { kind: "dropdown", id: "individualProvider", label: "Provider Name*", block, options: 3 }]);
+    const r = recognise(m);
+    expect(r.problems).toEqual([]);
+    expect(r.attention).toHaveLength(1);
+  });
+
   it("additional documents, with documents attached", () => {
     const m = map("additionalDocuments", [
       btn("BROWSE"),

@@ -1663,7 +1663,8 @@ function formMapRecognition(map: FormMap): string {
   const where = esc(r.step ?? "not a wizard step");
   if (!r.step) return `<strong>${where}.</strong>`;
   if (r.busy) return `<strong>${where} (${esc(r.variant)}):</strong> the page says it is still working; map again when it is done.`;
-  if (r.problems.length === 0) return `<strong>${where} (${esc(r.variant)}):</strong> recognised, nothing unexpected.`;
+  const needs = r.attention.length ? `<br>${r.attention.map((a) => `Needs you: ${esc(a)}`).join("<br>")}` : "";
+  if (r.problems.length === 0) return `<strong>${where} (${esc(r.variant)}):</strong> recognised, nothing unexpected.${needs}`;
   return `<strong>${where} (${esc(r.variant)}):</strong> not recognised exactly:<br>${r.problems.map((p) => `· ${esc(p)}`).join("<br>")}`;
 }
 
