@@ -60,7 +60,11 @@ export interface MappedControl {
   count?: number;
 }
 
+/** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
+export const FORM_MAP_VERSION = 3;
+
 export interface FormMap {
+  mapVersion: number;
   step?: WizardStep;
   /** The page's path with ids replaced, e.g. `/SubmitReimbursement/<id>/3`. */
   path: string;
@@ -146,5 +150,5 @@ export function mapForm(root: FormRoot, url: string): FormMap {
     .map((t) => t.replace(/reimbursement #\d+/i, "reimbursement #<number>"))
     .filter((t, i, all) => all.indexOf(t) === i)
     .slice(0, 6);
-  return { ...(step ? { step } : {}), path, controls: [...seen.values()], headings, notices };
+  return { mapVersion: FORM_MAP_VERSION, ...(step ? { step } : {}), path, controls: [...seen.values()], headings, notices };
 }
