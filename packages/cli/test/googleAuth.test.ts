@@ -53,7 +53,7 @@ describe("Google sign-in for the command line", () => {
     const u = new URL(authUrl);
     expect(u.origin + u.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
     expect(u.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(u.searchParams.get("scope")).toContain("auth/drive.appdata");
+    expect(u.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata");
     expect(u.searchParams.get("access_type")).toBe("offline");
 
     const exchange = google.calls[0]!.body;

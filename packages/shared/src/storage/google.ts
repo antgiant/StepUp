@@ -430,7 +430,17 @@ export class GoogleDriveProvider implements StorageProvider {
     const text = link.trim();
     const id = /\/folders\/([\w-]+)/.exec(text)?.[1] ?? /[?&]id=([\w-]+)/.exec(text)?.[1] ?? /\/d\/([\w-]+)/.exec(text)?.[1] ?? (/^[\w-]{20,}$/.test(text) ? text : undefined);
     if (!id) throw new Error("That does not look like a Google Drive folder link.");
-    const f = resolved(await this.json<DriveFile>(this.fileUrl(id), {}, "Opening the shared link…"));
+    let raw: DriveFile;
+    try {
+      raw = await this.json<DriveFile>(this.fileUrl(id), {}, "Opening the shared link…");
+    } catch (err) {
+      // With the `drive.file` scope Drive answers "not found" for any folder this app did not create.
+      if (err instanceof StorageError && (err.kind === "not-found" || err.kind === "forbidden")) {
+        throw new Error("This app can only open Google Drive folders it created itself, so it cannot open that link.");
+      }
+      throw err;
+    }
+    const f = resolved(raw);
     if (f.mimeType !== FOLDER) throw new Error("That link is to a file. Share a folder link instead.");
     return { driveId: GOOGLE_DRIVE, itemId: f.id, name: f.name };
   }

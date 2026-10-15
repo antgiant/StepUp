@@ -104,9 +104,9 @@ only in the browser / a local folder. Google Drive needs a Google Cloud project 
 
 1. In [Google Cloud Console](https://console.cloud.google.com/) create a project and enable the **Google Drive API**.
 2. **OAuth consent screen**: app name, support email, the privacy policy (`https://stepup.wooleys.us/privacy.html`) and terms
-   (`/terms.html`) links, and the authorized domain `wooleys.us`. Add the scopes `.../auth/drive` and `.../auth/drive.appdata`.
-   Until Google verifies the app (the `drive` scope is "restricted"), keep it in Testing and add each person as a test user, or
-   publish unverified (people see an "unverified app" screen; Google caps that at 100 users).
+   (`/terms.html`) links, and the authorized domain `wooleys.us`. Add the scopes `.../auth/drive.file` and `.../auth/drive.appdata`.
+   Both are non-sensitive, so the app can be published without Google's verification review. (The full `drive` scope is
+   "restricted" and is not used.)
 3. **Website**: create an OAuth client of type *Web application* with `https://stepup.wooleys.us` (and `http://localhost:5173`
    for development) as authorized JavaScript origins. Put its client ID in `GOOGLE_CLIENT_ID` in
    `packages/web/src/googleAuth.ts` (it is public, like the Microsoft one). Until it is set, "Sign in with Google" is not shown.
@@ -114,7 +114,9 @@ only in the browser / a local folder. Google Drive needs a Google Cloud project 
    `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_FILES_FOLDER_URL` in `.env` (see `.env.example`). The first run opens
    a browser to sign in; the refresh token is kept in `.cache/google-token.json`.
 
-Limits on Google Drive: years still kept in an Excel workbook cannot be viewed (that uses OneDrive's Excel service), and the
+Limits on Google Drive: with the non-sensitive `drive.file` scope the app can only see files and folders it created itself, so
+it cannot browse your existing Drive folders or open a folder someone else shared (use a new folder made from the app; anything
+you drop into it by hand is not visible to the app). Years still kept in an Excel workbook cannot be viewed (that uses OneDrive's Excel service), and the
 single-session lock is best effort because Drive has no conditional writes.
 
 ## Running it

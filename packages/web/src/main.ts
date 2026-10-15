@@ -1094,14 +1094,7 @@ function newYearForm(): string {
 
 function shareForm(): string {
   if (storage.kind === "google") {
-    return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Google account email" required>
-    <button>Invite to edit</button></form>
-    <p class="note">Google Drive emails them an invitation. Once they have it, they should:</p>
-    <ol class="note">
-      <li>Open the invitation and choose to open the folder in Google Drive (sign in with the account you invited).</li>
-      <li>Open ${esc(location.origin)}, choose <strong>Sign in with Google</strong> with the same account, and pick the folder under <strong>Shared with you</strong>. Or paste the folder's sharing link instead.</li>
-    </ol>
-    <p class="note">If no email arrives, share the folder with them in Google Drive yourself; the steps above are the same.</p>`;
+    return `<p class="note">Google Drive only lets this app open folders it created itself, so a Google workspace cannot be shared from here. To share a workspace with someone, keep it in OneDrive.</p>`;
   }
   return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Microsoft account email" required>
     <button>Invite to edit</button></form>
@@ -3344,7 +3337,7 @@ function onboardingView(): string {
         <p><button data-pick-mine="1">&#128193; Choose a folder in ${mine}</button></p></section>
       <section class="card"><h3>Join a shared workspace</h3>
         <p class="note">${google
-          ? "If someone invited you to their folder, you will find it below under <strong>Shared with you</strong>. You can also paste the folder's sharing link here."
+          ? "Google Drive only lets this app open folders it created itself, so a folder someone else shares cannot be opened here. Ask them to use OneDrive if you need to share a workspace."
           : `If someone invited you to their folder, open the invitation, then in OneDrive choose <strong>Add shortcut to My files</strong> on it. After that, pick it from My OneDrive, or paste the folder's sharing link here.`}</p>
         <form id="pick-link" class="row"><input name="link" placeholder="${esc(storage.label)} sharing link" required><button>Join with this link</button></form>
         ${picker.shared.length ? `<h4>Shared with you</h4><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("")}</ul>` : ""}</section>

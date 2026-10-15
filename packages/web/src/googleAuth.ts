@@ -7,8 +7,11 @@ import type { GoogleDriveAuth, StorageAccount } from "@step-up/shared/web";
 export const GOOGLE_CLIENT_ID: string = "786911806780-t4fbouoc0gqmqqou4qa5gk8gsovbgi91.apps.googleusercontent.com";
 export const googleConfigured = GOOGLE_CLIENT_ID !== "";
 
-/** `drive` reads and writes the folder the person picks (and the folders shared with them); `drive.appdata` holds this app's own hidden settings. */
-const SCOPE = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.appdata";
+/**
+ * Both scopes are non-sensitive (no Google verification review). `drive.file` reaches only the files and folders this app created;
+ * `drive.appdata` holds this app's own hidden settings. The full `drive` scope is "restricted" and is deliberately not used.
+ */
+const SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata";
 /** Access tokens last about an hour and Google issues no refresh token to a browser, so the current one is kept for this tab only. */
 const TOKEN_KEY = "stepup.google.token";
 /** Who signed in last, so the next visit can ask Google for a token without showing an account picker. */

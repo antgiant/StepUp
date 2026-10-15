@@ -6,7 +6,8 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import type { GoogleDriveAuth, StorageAccount } from "@step-up/shared";
 
-const SCOPE = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.appdata";
+/** Non-sensitive scopes only: `drive.file` reaches the files and folders this app created, `drive.appdata` its hidden settings. */
+const SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ABOUT_URL = "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)";
