@@ -188,7 +188,7 @@ export class StepUpAgent {
     this.ready = false;
     this.win = this.host.open(`${this.host.appHome}#stepup-import`, "stepup-helper");
     if (!this.win) return say("The pop-up was blocked. Allow pop-ups for StepUp, then click again.");
-    say("Asking StepUp for your reimbursements (a few seconds)…", true);
+    say("Connecting, and reading your reimbursements from StepUp (a few seconds)…", true);
     const connected = this.handshake();
 
     let results: unknown[] | undefined;
@@ -211,14 +211,14 @@ export class StepUpAgent {
       return say(`Something went wrong: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    say(`Got ${results.length} reimbursements. Waiting for Step Up Helper…`, true);
+    say(`Got ${results.length} reimbursements. Connecting to the Step Up Helper tab…`, true);
     if (!(await connected)) return say("Step Up Helper did not answer. Open it, sign in, and click again.");
     this.stopBeat?.();
     this.stopBeat = this.host.every?.(HEARTBEAT_MS, () => this.beat());
     this.beat();
     this.lastListSignature = signatureOf(results);
     this.post({ type: "stepup-list", results });
-    say(`Sent ${results.length} reimbursements to Step Up Helper. Switch to its tab to see what changed.`);
+    say(`Connected. Sent ${results.length} reimbursements to Step Up Helper: switch to its tab to see what changed.`);
     if (this.activeReads) {
       await this.readStudents(token.guardian);
       await this.refreshLearned();
