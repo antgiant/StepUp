@@ -167,7 +167,7 @@ what the previous script left on the page; and a pasted form map says which buil
 | Add / delete surplus item blocks | done |
 | Category mismatch: ask, rename, fix rows | done: a looser match is reported as `categoryFixes`; an unmatched level pauses for the person to pick it in StepUp's open list (`pick`, "I picked it" / "Skip this row"); the row, the other waiting rows with the same words, and the workbook's Table5 are corrected (ledger: `recordCategoryFix`) |
 | Summary: re-check total, go back up to twice | done, plus per-item lines |
-| Resume a draft by URL | **not ported** (see §7.3) |
+| Resume a draft by URL | by design not by URL (no navigation by URL): the person opens the draft in StepUp and the walk continues from its step; the app asks before starting when a draft exists (§7.3). The continue-from-a-draft path is still untested live |
 | Skip / split / resync buttons | Stop only |
 | `FilingStore`: claim, draft number, submitted, needs attention | submitted and needs attention done; claim and draft number not |
 | Session lock | not ported |

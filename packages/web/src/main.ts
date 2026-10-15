@@ -1763,6 +1763,11 @@ async function startFiling(purchaseId: string): Promise<void> {
   try {
     const g = filingGroups(ledger.state, ctx()).groups.find((x) => x.purchaseId === purchaseId);
     if (!g) return refuse("Filing", "That submission is no longer ready: it may have changed since this page was drawn. Refresh and try again.");
+    // A draft StepUp already holds: the walk carries on from whatever step StepUp's page is showing, so a draft that is open
+    // is continued, but a new, empty request would make a second one. Only the person can tell which, so ask.
+    if (g.existingDrafts.length && !confirm(`StepUp already holds a draft for this (#${g.existingDrafts.join(", #")}).\n\nIf StepUp's page is showing that draft (open it from StepUp's Drafts list), the walk carries on from the step it is on.\nIf the page is a new, empty request, you will end up with two.\n\nGo on?`)) {
+      return refuse("Filing", "Not started: StepUp already holds a draft for this. Open it in StepUp and press this again, or delete it first.");
+    }
     const driveId = workspace.driveId;
     const title = `${g.child}: ${g.receipt.filename ?? g.receipt.id}`;
     filing = { purchaseId, title, itemIds: g.rows.map((r) => r.itemId), lines: ["Reading the files…"], running: true };
@@ -2076,7 +2081,7 @@ function planPanel(): string {
       <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
       ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
-      ${g.existingDrafts.length ? `<p class="warn">StepUp already holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. Filing again starts a new request: finish or delete that draft in StepUp first, or you will have two.</p>` : ""}
+      ${g.existingDrafts.length ? `<p class="warn">StepUp already holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. To carry on with it, open it in StepUp (its Drafts list) before pressing the button: the walk continues from the step it is on. A new, empty request would make a second one, so delete the draft first in that case.</p>` : ""}
       <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p>
       <p class="row"><label>Already submitted in StepUp? Its reimbursement number <input id="file-record-${esc(g.purchaseId)}" inputmode="numeric" size="12"></label> <button data-file-record="${esc(g.purchaseId)}">Record it</button></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
