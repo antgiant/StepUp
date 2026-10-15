@@ -75,7 +75,7 @@ const pageOps: PageOps = {
     if (!block) return undefined;
     for (const e of Array.from(block.querySelectorAll<HTMLElement>("*"))) {
       const t = (e.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (/^\$[\d,]+(\.\d{1,2})? total$/i.test(t) && !Array.from(e.children).some((c) => /total/i.test(c.textContent ?? "") && c.children.length === 0 && /total$/i.test((c.textContent ?? "").trim()) && false)) return t;
+      if (/^\$[\d,]+(\.\d{1,2})? total$/i.test(t)) return t;
     }
     return undefined;
   },
