@@ -9,7 +9,7 @@ deploys.
 - [x] Replace the `drive` scope with `drive.file` (consent screen, web app and CLI)
 - [x] Confirm the project number used for `GOOGLE_APP_ID` is right
 - [x] Add `http://localhost:5173` as a Microsoft redirect URI
-- [ ] Confirm the Picker API key's website and API restrictions are saved (add `http://localhost:5173/*` to test locally)
+- [x] Picker API key's website and API restrictions are saved, including `http://localhost:5173/*` for local testing
 - [ ] Sign in with Google on the live site; the consent screen should show only the new, non-sensitive scopes
 - [ ] Open an existing workspace the app created earlier; it should still load
 - [ ] Use the picker on a folder that already has files, **including files added by hand**. If they look empty, a different
