@@ -2,7 +2,7 @@ name: Deploy web app to GitHub Pages
 
 on:
   push:
-    branches: [ledger-redesign, main]
+    branches: [main]
     paths: ["packages/web/**", "packages/shared/**", "package.json", "package-lock.json", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
