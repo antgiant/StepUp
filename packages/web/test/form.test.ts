@@ -128,6 +128,18 @@ describe("mapping a step's controls", () => {
     expect(map.controls).toEqual([{ kind: "link", text: "Delete" }, { kind: "link" }]);
   });
 
+  it("counts attached documents: ids with a random part fold together", () => {
+    const doc = (g: string) => [
+      el({ tag: "a", text: "Delete", attrs: { id: `delete_Document_${g}` } }),
+      el({ tag: "a", text: "a name.pdf", attrs: { id: `display_Document_${g}` } }),
+    ];
+    const map = mapForm(page([...doc("c78bd2b7-a7b1-48bc-b3a8-59ad25acae9f"), ...doc("7ba535b5-1a54-4ff5-8a13-f3eb3a5b20e2")]), url);
+    expect(map.controls).toEqual([
+      { kind: "link", id: "delete_Document_<id>", text: "Delete", count: 2 },
+      { kind: "link", id: "display_Document_<id>", count: 2 },
+    ]);
+  });
+
   it("never lets a person's name out of a heading", () => {
     const h = (t: string) => bare("H3", t);
     const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);

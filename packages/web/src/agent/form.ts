@@ -63,7 +63,7 @@ export interface MappedControl {
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 7;
+export const FORM_MAP_VERSION = 8;
 
 export interface FormMap {
   mapVersion: number;
@@ -133,7 +133,8 @@ export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): 
     const c: MappedControl = { kind };
     const id = clean(el.getAttribute("id"), 80);
     // StepUp gives some buttons a new random id every session: it says nothing, so it is written as a placeholder.
-    if (id) c.id = GUID_ID.test(id) ? "<random-id>" : id;
+    // A random id, or one with a random id inside it (`delete_Document_<guid>`), keeps its words and loses the random part.
+    if (id) c.id = GUID_ID.test(id) ? "<random-id>" : id.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>");
     const name = clean(el.getAttribute("name"), 80);
     if (name) c.name = name;
     const placeholder = clean(el.getAttribute("placeholder"));
