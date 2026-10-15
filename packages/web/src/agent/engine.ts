@@ -77,9 +77,16 @@ export interface FilingEnv {
 
 export type StopKind = "needsYou" | "missingServiceDate" | "stepUpChanged" | "readError" | "cancelled" | "wrongTotal";
 
+/** A row whose Category had to be matched to a different entry of StepUp's list: the row should be corrected to `to`. */
+export interface CategoryFix {
+  rowId: string;
+  from: string;
+  to: string;
+}
+
 export type FilingOutcome =
-  | { status: "ready"; matched: string[]; notes: string[]; total: number }
-  | { status: "stopped"; kind: StopKind; step?: WizardStep; reason: string; matched: string[]; notes: string[] };
+  | { status: "ready"; matched: string[]; notes: string[]; total: number; categoryFixes?: CategoryFix[] }
+  | { status: "stopped"; kind: StopKind; step?: WizardStep; reason: string; matched: string[]; notes: string[]; categoryFixes?: CategoryFix[] };
 
 const SEL = {
   purchaseDate: "#purchaseDate",
@@ -111,11 +118,14 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
   const { ops } = env;
   const matched: string[] = [];
   const notes: string[] = [];
+  const categoryFixes: CategoryFix[] = [];
   let scanFailed = false;
   let refills = 0;
   const deadline = ops.now() + 25 * MINUTES;
   // Until the walk has checked everything, a Submit must not go through.
   ops.guard("Step Up Helper is still checking this reimbursement.");
+
+  const fixes = (): { categoryFixes?: CategoryFix[] } => (categoryFixes.length ? { categoryFixes: [...categoryFixes] } : {});
 
   const waitFor = async (what: string, ready: () => boolean, ms: number): Promise<void> => {
     const until = ops.now() + ms;
@@ -210,7 +220,7 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
           const verdict = await judgeSummary();
           if (verdict === "ok") {
             ops.guard(undefined);
-            return { status: "ready", matched, notes, total: expectedTotal(job.rows) };
+            return { status: "ready", matched, notes, total: expectedTotal(job.rows), ...fixes() };
           }
           if (refills < 2) {
             refills++;
@@ -222,17 +232,17 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
           throw new Stop("wrongTotal", `${verdict} Do not submit this one.`, rec.step);
         }
         case "confirmation":
-          return { status: "ready", matched, notes, total: expectedTotal(job.rows) };
+          return { status: "ready", matched, notes, total: expectedTotal(job.rows), ...fixes() };
       }
     }
   } catch (err) {
     if (err instanceof Stop) {
       if (err.kind !== "cancelled") ops.guard(`Step Up Helper stopped: ${err.reason}`);
       else ops.guard(undefined);
-      return { status: "stopped", kind: err.kind, ...(err.step ? { step: err.step } : {}), reason: err.reason, matched, notes };
+      return { status: "stopped", kind: err.kind, ...(err.step ? { step: err.step } : {}), reason: err.reason, matched, notes, ...fixes() };
     }
     ops.guard("Step Up Helper stopped on an unexpected error.");
-    return { status: "stopped", kind: "stepUpChanged", reason: `An unexpected error: ${err instanceof Error ? err.message : String(err)}`, matched, notes };
+    return { status: "stopped", kind: "stepUpChanged", reason: `An unexpected error: ${err instanceof Error ? err.message : String(err)}`, matched, notes, ...fixes() };
   }
 
   /** The open dropdown's entries, once the list has stopped growing (StepUp loads a long list in pages). */
@@ -328,6 +338,8 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     // Category, Type, Description: each level by its words. StepUp requires one, so a row without it stops the walk.
     const levels = categoryLevels(d["Category"] ?? "");
     if (levels.length === 0) flags.push(`Item ${n} (${item}): the row has no Category, which StepUp requires. Add it in the workbook.`);
+    const chosen: string[] = [];
+    let loosely = false;
     for (let k = 0; k < levels.length && k < LEVELS.length; k++) {
       const target = LEVELS[k]!;
       if (k > 0) await waitFor(`the ${LEVEL_WORDS[k]} list`, () => ops.hasPicker(b, target), 10_000).catch(() => undefined);
@@ -346,6 +358,17 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
       if (!(ops.shown(b, target) ?? "").includes(choice.text)) {
         flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} did not take "${choice.text}".`);
         break;
+      }
+      chosen.push(choice.text);
+      if (choice.how !== "exact") loosely = true;
+    }
+    // StepUp's list words it differently from the row: say so, so the row (and its siblings) can be corrected like the CLI did.
+    if (loosely && levels.length > 0 && chosen.length === Math.min(levels.length, LEVELS.length)) {
+      const to = chosen.join(" - ");
+      const from = (d["Category"] ?? "").trim();
+      if (to !== from) {
+        categoryFixes.push({ rowId: row.id, from, to });
+        env.report(`Item ${n}: the category "${from}" is listed as "${to}" on StepUp; the row will be corrected.`);
       }
     }
 

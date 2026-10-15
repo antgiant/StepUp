@@ -147,7 +147,7 @@ import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openW
 import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
-import { filingGroups, recordNeedsAttention, recordSubmitted } from "@step-up/shared/web";
+import { filingGroups, recordCategoryFix, recordNeedsAttention, recordSubmitted } from "@step-up/shared/web";
 import { buildJob, writeWorkbookRows } from "./filing.js";
 import type { FilingOutcome } from "./agent/engine.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
@@ -1768,6 +1768,7 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   filing.outcome = outcome;
   filing.matched = outcome.matched;
   persistFiling();
+  if (outcome.categoryFixes?.length) await applyCategoryFixes(outcome.categoryFixes);
   if (outcome.status === "stopped" && outcome.kind === "missingServiceDate" && workspace) {
     const note = `${todayIso()}: Missing Service Date: required for this category, needs filling in.`;
     try {
@@ -1782,6 +1783,28 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
     }
   }
   render();
+}
+
+/**
+ * StepUp lists a category under other words than the row has: correct the row to StepUp's words, as the command line did
+ * (workbook: the Category column, which is one of the writes the owner allowed; ledger: a labelled item change).
+ */
+async function applyCategoryFixes(fixes: Array<{ rowId: string; from: string; to: string }>): Promise<void> {
+  if (!workspace || !filing) return;
+  const say = (line: string): void => void filing?.lines.push(line);
+  try {
+    for (const fix of fixes) {
+      if (workspace.legacy?.workbook) {
+        await writeWorkbookRows(workspace.legacy.workbook, [fix.rowId], () => ({ Category: fix.to }));
+      } else if (!workspace.legacy) {
+        recordCategoryFix(ledger, [fix.rowId], fix.to);
+      }
+      say(`Category corrected to StepUp's words: "${fix.from}" is now "${fix.to}".`);
+    }
+    if (!workspace.legacy) await save();
+  } catch (err) {
+    say(`Could not correct the category: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /** The person submitted and StepUp named the reimbursement: record it as the command line always did. */

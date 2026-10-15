@@ -206,6 +206,7 @@ describe("filing one group, start to finish", () => {
     expect(s.blocks[0]!.levels).toEqual(["Books", "Print", "Textbooks/Workbooks"]);
     expect(s.blocks[0]!.payee).toBe("Wal-mart");
     expect(s.docs).toBe(1);
+    expect(out).not.toHaveProperty("categoryFixes");
     // it never asked for anything but the buttons it is allowed
     expect(s.pressed.filter((p) => !p.startsWith("student:") && p !== "continue")).toEqual([]);
   });
@@ -225,6 +226,14 @@ describe("filing one group, start to finish", () => {
     expect(out).toMatchObject({ status: "stopped", kind: "needsYou" });
     expect((out as { reason: string }).reason).toMatch(/no single Category entry reads "Toys"/);
     expect(s.guard).toBeDefined();
+  });
+
+  it("reports a category it had to match by looser words, so the row can be corrected", async () => {
+    const { ops, s, clock } = site();
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const out = await run(job([row("a", { ...book.data, Category: "books - Print - Textbooks" })]), ops, clock);
+    expect(out, JSON.stringify(out)).toMatchObject({ status: "ready" });
+    expect((out as { categoryFixes?: unknown }).categoryFixes).toEqual([{ rowId: "a", from: "books - Print - Textbooks", to: "Books - Print - Textbooks/Workbooks" }]);
   });
 
   it("does not guess when the scan's items cannot be matched to the rows", async () => {

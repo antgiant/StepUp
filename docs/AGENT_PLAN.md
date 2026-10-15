@@ -165,7 +165,7 @@ what the previous script left on the page; and a pasted form map says which buil
 | Item selection: tick boxes when matched | done |
 | Item details: cascade, payee, service date, numbers | done |
 | Add / delete surplus item blocks | done |
-| Category mismatch: ask, rename, fix rows | **not ported**: stops and names the level |
+| Category mismatch: ask, rename, fix rows | partly: a looser match (case, punctuation, one partial hit) is reported as `categoryFixes` and the row's Category is corrected (workbook column / ledger `recordCategoryFix`); **not ported**: the manual pick (an unmatched level still stops and names it), the Table5 rename and fixing other rows beyond this group |
 | Summary: re-check total, go back up to twice | done, plus per-item lines |
 | Resume a draft by URL | **not ported** (see §7.3) |
 | Skip / split / resync buttons | Stop only |
