@@ -249,6 +249,15 @@ describe("filing one group, start to finish", () => {
     expect(s.guard).toMatch(/total/);
   });
 
+  it("stops when the row has no category, instead of going on without one", async () => {
+    const { ops, s, clock } = site();
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const out = await run(job([row("a", { ...book.data, Category: "" })]), ops, clock);
+    expect(out).toMatchObject({ status: "stopped", kind: "needsYou", step: "itemDetails" });
+    expect((out as { reason: string }).reason).toMatch(/has no Category/);
+    expect(s.step).toBe("itemDetails");
+  });
+
   it("says what the payee list held when the name is not in it, instead of only saying it failed", async () => {
     const { ops, s, clock } = site();
     s.blocks[0]!.scan = { cost: "5.00" };

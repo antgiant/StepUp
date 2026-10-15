@@ -30,7 +30,10 @@ export function filingRow(state: LedgerState, item: LineItem, ctx: RulesContext)
   const purchase = state.purchases[item.purchaseId ?? ""];
   const child = state.children[item.childId ?? ""];
   const submission = state.submissions[item.submissionId ?? ""];
-  const path = (item.categoryId ? ctx.category(item.categoryId)?.path : undefined) ?? item.categoryPath;
+  // The reference tree's path when it has one; an item from an Excel year may carry its own path from the sheet (its
+  // category id then resolves to an empty path), and that is the one to send.
+  const resolved = item.categoryId ? ctx.category(item.categoryId)?.path : undefined;
+  const path = resolved && resolved.length ? resolved : item.categoryPath;
   const data: Record<string, string> = {
     ID: item.id,
     Child: child?.name ?? "",

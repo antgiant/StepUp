@@ -325,8 +325,9 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     const d = row.data;
     const item = d["Item"] ?? row.id;
 
-    // Category, Type, Description: each level by its words.
+    // Category, Type, Description: each level by its words. StepUp requires one, so a row without it stops the walk.
     const levels = categoryLevels(d["Category"] ?? "");
+    if (levels.length === 0) flags.push(`Item ${n} (${item}): the row has no Category, which StepUp requires. Add it in the workbook.`);
     for (let k = 0; k < levels.length && k < LEVELS.length; k++) {
       const target = LEVELS[k]!;
       if (k > 0) await waitFor(`the ${LEVEL_WORDS[k]} list`, () => ops.hasPicker(b, target), 10_000).catch(() => undefined);
@@ -346,6 +347,12 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} did not take "${choice.text}".`);
         break;
       }
+    }
+
+    // The top level must now show a choice, not the prompt: StepUp refuses to go on otherwise.
+    if (levels.length > 0 && !flags.some((f) => f.includes(`Item ${n} (${item}): no single`) || f.includes("did not take") || f.includes("dropdown is not on the page"))) {
+      const picked = (ops.shown(b, "category") ?? "").trim();
+      if (!picked || /^select\b/i.test(picked)) flags.push(`Item ${n} (${item}): the Category still shows "${picked || "nothing"}" after choosing it.`);
     }
 
     const put = async (selector: string, want: string | undefined, label: string, kind: "text" | "money" | "date" = "text"): Promise<void> => {

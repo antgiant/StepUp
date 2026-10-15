@@ -9,6 +9,7 @@ import {
   applyStepUpStatuses,
   createPurchase,
   filingGroups,
+  filingRow,
   mapStepUpStatus,
   messageOf,
   stepUpStatusUrl,
@@ -52,6 +53,17 @@ describe("filing rows", () => {
       ID: i1, Child: "Kid", Program: "FES-UA", Item: "Workbook", Date: "2026-10-01", "Invoice #": "A-1", Category: "Curriculum - Books",
       Amount: "15.00", "Tax, Shipping, etc.": "1.05", "Reim. $": "16.05", Vendor: "Acme", "Payment Method": "Visa 4242", "Benefit Message": "learning", Status: "Unfiled (Ready to Submit)",
     });
+  });
+});
+
+describe("an Excel year's own category path", () => {
+  it("is sent when the reference tree knows the category id but has no path for it", () => {
+    const { l, i1 } = setup();
+    l.set("item", i1, { categoryId: "legacy-cat-toys", categoryPath: ["Toys", "Games"] });
+    const noPath: RulesContext = { today: "2026-10-20", category: (id) => ({ id, path: [], requiresServiceDate: false, eligibleScholarships: [], isActive: true }) };
+    expect(filingRow(l.state, l.state.items[i1]!, noPath).data["Category"]).toBe("Toys - Games");
+    // and the tree's own path still wins when it has one
+    expect(filingRow(l.state, l.state.items[i1]!, ctx).data["Category"]).toBe("Curriculum - Books");
   });
 });
 
