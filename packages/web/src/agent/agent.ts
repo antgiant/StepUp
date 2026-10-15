@@ -498,6 +498,18 @@ export class StepUpAgent {
     // StepUp's own save of the reimbursement is the best sign that a change was committed.
     if (o.method.toUpperCase() === "PUT" && /\/api\/reimbursements\/v2\//i.test(o.url) && o.status >= 200 && o.status < 300) this.saveCount++;
     if (o.status < 200 || o.status >= 300 || !o.responseText) return;
+    // The walk's own new draft: StepUp names its number in the reply, which is kept on the rows before anything is submitted.
+    if (this.filing && o.method.toUpperCase() === "POST" && /\/api\/reimbursements\/v2\/?(\?.*)?$/i.test(o.url)) {
+      try {
+        const made = JSON.parse(o.responseText) as Record<string, unknown>;
+        const number = String(made["sequenceNumber"] ?? made["SequenceNumber"] ?? "");
+        const guid = String(made["id"] ?? made["Id"] ?? "");
+        if (/^\d{4,12}$/.test(number)) this.sendLive({ type: "stepup-file-draft", number, ...(guid ? { guid } : {}) });
+      } catch {
+        /* not the reply it was expected to be */
+      }
+      return;
+    }
     const url = o.url;
     const P = STEPUP_PATTERNS;
     if (!Object.values(P).some((re) => re.test(url))) return;

@@ -6,7 +6,7 @@ import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@
 /**
  * Bumped when the agent's messages change in a way an older copy of the script (or an older open app tab) would not
  * understand. The app compares it with the version an agent reports and tells the person to click the bookmark again when
- * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back). 6: adds the person's answer when a category cannot be matched (need-pick and pick).
+ * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back). 6: adds the person's answer when a category cannot be matched (need-pick and pick), and the draft's number once StepUp names it.
  */
 export const AGENT_PROTOCOL = 6;
 
@@ -33,6 +33,8 @@ export type AgentToApp =
   | { type: "stepup-file-result"; outcome: FilingOutcome }
   /** The walk is paused: a category entry matched nothing, so the person picks it in StepUp's open list and answers. */
   | { type: "stepup-file-need-pick"; message: string }
+  /** StepUp named the draft this walk started (its reimbursement number), before anything is submitted. */
+  | { type: "stepup-file-draft"; number: string; guid?: string }
   /** The person submitted: StepUp's confirmation page named the reimbursement. */
   | { type: "stepup-file-submitted"; number: string; guid?: string };
 

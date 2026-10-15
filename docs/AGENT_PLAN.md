@@ -169,8 +169,8 @@ what the previous script left on the page; and a pasted form map says which buil
 | Summary: re-check total, go back up to twice | done, plus per-item lines |
 | Resume a draft by URL | by design not by URL (no navigation by URL): the person opens the draft in StepUp and the walk continues from its step; the app asks before starting when a draft exists (§7.3). The continue-from-a-draft path is still untested live |
 | Skip / split / resync buttons | Stop is the skip; "Needs to be split" and "Documentation problem" mark the rows as needing attention with a dated note (as the CLI did), and a receipt StepUp cannot read or a file that cannot be sent marks them too. Resync is not needed: a walk always re-reads the page |
-| `FilingStore`: claim, draft number, submitted, needs attention | submitted and needs attention done; claim and draft number not |
-| Session lock | not ported |
+| `FilingStore`: claim, draft number, submitted, needs attention | done: the app claims the items (ledger years) before a walk and renews/releases the claim; the draft's number is noticed from StepUp's reply to the create call and kept on the rows (`stepup-file-draft`). Not yet exercised live |
+| Session lock | done: the app takes the workspace's `SessionLock` for the walk (heartbeat each minute; released on a stop, a submission or a problem). Not yet exercised live |
 | Statuses into the workbook | done: "Bring in StepUp's list" on an Excel year also writes Status, Reimbursed Amount and StepUp's message to the workbook (`planWorkbookStatusSync`, `syncWorkbookStatuses`), with before/after readings kept in History. Not yet exercised live |
 
 ## 9. Testing and operating

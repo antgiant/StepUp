@@ -147,7 +147,7 @@ import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openW
 import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
-import { filingGroups, recordCategoryFix, recordNeedsAttention, recordSubmitted } from "@step-up/shared/web";
+import { claimItems, filingGroups, recordCategoryFix, recordDraftNumber, recordNeedsAttention, recordSubmitted, releaseItems, renewClaims, LockHeldError, SessionLock } from "@step-up/shared/web";
 import { buildJob, renameCategoryRow, syncWorkbookStatuses, writeWorkbookRows } from "./filing.js";
 import type { FilingOutcome } from "./agent/engine.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
@@ -1643,6 +1643,9 @@ window.addEventListener("message", (ev) => {
         render();
       }
       break;
+    case "stepup-file-draft":
+      void onFilingDraft(m.number, m.guid);
+      break;
     case "stepup-file-need-pick":
       if (filing) {
         filing.pick = m.message;
@@ -1721,6 +1724,8 @@ interface FilingRun {
   /** The items in the order StepUp's blocks took them (the line numbers follow it). */
   matched?: string[];
   submitted?: string;
+  /** The draft's reimbursement number, once StepUp named it. */
+  draft?: string;
   /** Set while the walk waits for the person to pick a category entry in StepUp's list. */
   pick?: string;
 }
@@ -1770,12 +1775,16 @@ async function startFiling(purchaseId: string): Promise<void> {
     }
     const driveId = workspace.driveId;
     const title = `${g.child}: ${g.receipt.filename ?? g.receipt.id}`;
+    await releaseFilingGuards();
+    const blocked = await takeFilingGuards(g.rows.map((r) => r.itemId));
+    if (blocked) return refuse(title, blocked);
     filing = { purchaseId, title, itemIds: g.rows.map((r) => r.itemId), lines: ["Reading the files…"], running: true };
     persistFiling();
     render();
     const made = await buildJob(g, (id) => storage.download(driveId, id, "Reading a document…"));
     if ("problem" in made) {
       filing = { ...filing, running: false, problem: made.problem };
+      await releaseFilingGuards();
       await markFilingNeedsAttention(made.problem, g.rows.map((r) => r.itemId));
     } else {
       filing.lines = ["Sent to StepUp's page. It will go through the form step by step."];
@@ -1785,6 +1794,77 @@ async function startFiling(purchaseId: string): Promise<void> {
     filing = { purchaseId, title: filing?.title ?? "Filing", itemIds: filing?.itemIds ?? [], lines: filing?.lines ?? [], running: false, problem: `Something went wrong before anything was sent: ${err instanceof Error ? err.message : String(err)}` };
   }
   render();
+}
+
+/** StepUp named the draft: keep its number on the rows now, so a crash or reload loses nothing (the command line did the same). */
+async function onFilingDraft(number: string, guid: string | undefined): Promise<void> {
+  if (!workspace || !filing || filing.submitted || filing.draft === number) return;
+  filing.draft = number;
+  const ids = filing.itemIds;
+  try {
+    if (workspace.legacy?.workbook) await writeWorkbookRows(workspace.legacy.workbook, ids, () => ({ "Reimbursement ID": number }));
+    else if (!workspace.legacy) {
+      recordDraftNumber(ledger, ids, number, guid);
+      await save();
+    }
+    filing.lines.push(`StepUp started draft #${number}; it is noted on the rows.`);
+  } catch (err) {
+    filing.lines.push(`Could not note draft #${number} on the rows: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  render();
+}
+
+/**
+ * The guards around a walk, as the command line had them: one person at a time on StepUp's account (a lock file in the
+ * workspace, kept alive while the run is open) and, in a ledger year, a claim on the items so two people cannot file the
+ * same group. Both are advisory and time out, so a closed tab frees them.
+ */
+let sessionLock: SessionLock | undefined;
+let guardBeat: ReturnType<typeof setInterval> | undefined;
+let claimedIds: string[] = [];
+const me = (): { actor: string; clientId: string } => ({ actor: account?.name ?? "someone", clientId: store.clientId });
+
+async function takeFilingGuards(itemIds: string[]): Promise<string | undefined> {
+  if (!workspace) return "No year is open.";
+  try {
+    sessionLock = await SessionLock.acquire(storage, workspace.driveId, workspace.pointer.rootId, { ...me(), machine: navigator.platform || "this browser" });
+  } catch (err) {
+    if (err instanceof LockHeldError) return `${err.holder.actor} is using StepUp from ${err.holder.machine} (last seen ${Math.max(0, Math.round(err.idleMs / 1000))} s ago). StepUp does not like two people at once: ask them to finish, or wait a few minutes for it to time out.`;
+    return `Could not take the StepUp session lock: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (!workspace.legacy) {
+    const got = await claimItems(ledger, itemIds, me());
+    if (!got.ok) {
+      await sessionLock.release().catch(() => undefined);
+      sessionLock = undefined;
+      return `${[...new Set(got.conflicts.map((c) => c.actor))].join(", ")} is already filing ${got.conflicts.length === 1 ? "one of these items" : `${got.conflicts.length} of these items`}.`;
+    }
+    claimedIds = itemIds;
+  }
+  let beats = 0;
+  guardBeat = setInterval(() => {
+    beats++;
+    sessionLock?.heartbeat().catch((err) => {
+      status = err instanceof Error ? err.message : String(err);
+      render();
+    });
+    // The claim is renewed every ten minutes (it lasts 45).
+    if (claimedIds.length && beats % 10 === 0) {
+      renewClaims(ledger, claimedIds, me());
+      void save();
+    }
+  }, 60_000);
+  return undefined;
+}
+
+async function releaseFilingGuards(): Promise<void> {
+  if (guardBeat) clearInterval(guardBeat);
+  guardBeat = undefined;
+  const lock = sessionLock;
+  sessionLock = undefined;
+  await lock?.release().catch(() => undefined);
+  if (claimedIds.length && workspace && !workspace.legacy) await releaseItems(ledger, claimedIds, me()).catch(() => undefined);
+  claimedIds = [];
 }
 
 /**
@@ -1816,6 +1896,8 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   filing.matched = outcome.matched;
   persistFiling();
   if (outcome.categoryFixes?.length) await applyCategoryFixes(outcome.categoryFixes);
+  // At the Summary the person still has to submit, so the guards stay; any stop gives them back.
+  if (outcome.status === "stopped") await releaseFilingGuards();
   if (outcome.status === "stopped" && outcome.kind === "missingServiceDate") {
     await markFilingNeedsAttention("Missing Service Date: required for this category, needs filling in.");
   } else if (outcome.status === "stopped" && outcome.kind === "readError") {
@@ -1836,6 +1918,7 @@ async function holdFiling(kind: "split" | "documentation"): Promise<void> {
     note = said.trim() || "Documentation is wrong: needs fixing.";
   }
   if (filing.running) toAgent({ type: "stepup-file-stop" });
+  await releaseFilingGuards();
   await markFilingNeedsAttention(note);
   status = "Marked as needing attention. Fix it, set the status back to Unfiled (Ready to Submit), and file it again.";
   render();
@@ -1883,6 +1966,7 @@ async function onFilingSubmitted(number: string, guid: string | undefined): Prom
   if (filing.submitted === number) return;
   const ids = filing.matched?.length ? filing.matched : filing.itemIds;
   filing.submitted = number;
+  void releaseFilingGuards();
   try {
     if (workspace.legacy?.workbook) {
       const r = await writeWorkbookRows(workspace.legacy.workbook, ids, (n) => ({ Status: "Submitted", Submitted: todayIso(), "Reimbursement ID": number, "Line Number": String(n + 1) }));
