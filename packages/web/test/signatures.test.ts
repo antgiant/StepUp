@@ -91,6 +91,13 @@ describe("recognising the recorded steps", () => {
     expect(r.attention).toHaveLength(1);
   });
 
+  it("an individual provider who is not listed shows a name field, still the person's to fill", () => {
+    const m = map("itemDetails", [...detailsCommon, { kind: "dropdown", id: "provider", block, options: 45 }, { kind: "dropdown", id: "individualProvider", block, options: 3 }, { kind: "text", id: "otherIndividualProvider", label: "Service Provider Name*", block, hasValue: false }]);
+    const r = recognise(m);
+    expect(r.problems).toEqual([]);
+    expect(r.attention).toHaveLength(1);
+  });
+
   it("additional documents, with documents attached", () => {
     const m = map("additionalDocuments", [
       btn("BROWSE"),

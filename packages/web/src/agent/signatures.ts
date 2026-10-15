@@ -123,6 +123,8 @@ function rulesFor(step: WizardStep, headings: string[]): { variant: string; busy
           { name: "who did you pay (vendor)", match: byLabel("dropdown", /^Who did you pay\?/i) },
           // Appears after a listed provider is chosen: which person is a choice the agent does not make.
           { name: "individual provider", match: byId("dropdown", "individualProvider") },
+          // The same pattern one level down: "not listed" for a person reveals a text field for the name.
+          { name: "individual provider name", match: byId("text", "otherIndividualProvider") },
           { name: "vendor name", match: byId("text", "vendorName") },
           { name: "provider name", match: byId("text", "otherServiceProviderName") },
           { name: "benefit message", match: byId("textarea", "educationalBenefit") },
