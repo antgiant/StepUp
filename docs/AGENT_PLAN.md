@@ -230,3 +230,25 @@ and heading. An attached file shows as a row under the dropzone: a **Delete** li
 mapped as links from form map v7). A **"Loading..." heading is visible while a file uploads** and must clear before the agent
 trusts the page or continues. The page states the limits: 5MB each, no passwords, PNG/JPG/JPEG/PDF, 50 files at most; the
 agent refuses a file outside them before trying.
+
+## 12. Spike results (2026-10-14, throwaway draft, owner present)
+
+Run from the helper's spike panel (`packages/web/src/agent/spike.ts`), one deliberate action at a time, each read back.
+
+| Input | Method | Result |
+|---|---|---|
+| Receipt (upload step) | give `#inputDrop__` a `File` built from bytes the app supplies (`DataTransfer`, then `input` and `change`) | **works**: the file row appeared |
+| Quantity, cost per item, tax/shipping | native value setter, then `input`, `change`, `blur` | **works**: the field shows the value (money is reformatted, e.g. `5` becomes `$5.00`: compare as numbers) and the item's on-page total recomputes (3 x $5.00 + $0.50 = $15.50) |
+| Purchase date | the same, with an ISO `YYYY-MM-DD` | **works**: shown as `01/31/2026` |
+| Category, Type, Description, payee | open the toggle, click the entry whose words match exactly, read the toggle's words back | **works**; the cascade reveals the next level |
+| Vendor name (after "Provider not Listed") | the same text method | **works** |
+
+What this establishes for the filing engine:
+
+- **StepUp saves at step changes**, not per edit; a missing save request after an edit is normal. The proof an entry took is the field's own value plus the item's recomputed total.
+- A script's input is accepted by the Radzen and Blazor controls with no key-by-key typing (the "typed" method was built as a fallback and was not needed).
+- **Payee model:** the payee dropdown always exists. Choosing "Provider not Listed" reveals a text field (`#vendorName` in vendor categories, `#otherServiceProviderName` in provider categories). A listed provider may reveal an individual-provider dropdown (`#individualProvider`) and, if not listed, `#otherIndividualProvider`. Choosing between people is left to a person.
+- **Entries are matched by exact words**; when no entry matches, nothing is clicked.
+- **Not yet exercised by a spike** (low risk, same mechanisms as above): service date, an additional document on step 4, individual provider, and editing the item name/amount on item selection (owner's preference).
+
+Next: the filing engine (B2-B5) built from these primitives, with the signature check before each step and the read-back after.
