@@ -148,7 +148,7 @@ import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
 import { filingGroups, recordCategoryFix, recordNeedsAttention, recordSubmitted } from "@step-up/shared/web";
-import { buildJob, renameCategoryRow, writeWorkbookRows } from "./filing.js";
+import { buildJob, renameCategoryRow, syncWorkbookStatuses, writeWorkbookRows } from "./filing.js";
 import type { FilingOutcome } from "./agent/engine.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import type { SpikeResult, SpikeTest } from "./agent/spike.js";
@@ -1394,10 +1394,22 @@ async function bringInStepUpList(results: unknown[]): Promise<void> {
       if (ledgerItems > 0) await save();
     }
   }
+  // An Excel year: the command line's status sync, so the workbook itself carries StepUp's statuses too.
+  let workbookRows = 0;
+  if (ws.legacy?.workbook && done.listed > 0) {
+    showBusy(`Updating ${ws.year.label}'s workbook…`);
+    const mine = (results as Array<{ SchoolYear?: string }>).filter((r) => r.SchoolYear === ws.year.label);
+    if (mine.length) {
+      const r = await syncWorkbookStatuses(storage, ws.driveId, ws.year.folderId, ws.legacy.workbook, mine);
+      workbookRows = r.updated;
+      if (r.skipped) status = `The workbook was not updated from StepUp's list: ${r.skipped}.`;
+      else if (r.unknown.length) status = `The workbook's Statuses list lacks ${r.unknown.map((x) => `"${x}"`).join(", ")}, so rows with ${r.unknown.length === 1 ? "that status" : "those statuses"} were left alone. Add ${r.unknown.length === 1 ? "it" : "them"} to the Statuses table.`;
+    }
+  }
   const total = (Date.now() - started) / 1000;
   stepUpResult = done.listed === 0
     ? { at: new Date().toISOString(), listed: 0, changed: 0, seconds: total, years: [], ledgerItems }
-    : { at: new Date().toISOString(), listed: done.listed, changed: done.changed, seconds: total, years: done.years, ledgerItems, compareSeconds: done.timings.compareMs / 1000, saveSeconds: done.timings.saveMs / 1000 };
+    : { at: new Date().toISOString(), listed: done.listed, changed: done.changed, seconds: total, years: done.years, ledgerItems: ledgerItems + workbookRows, compareSeconds: done.timings.compareMs / 1000, saveSeconds: done.timings.saveMs / 1000 };
   // Only the open year's own view needs reading again, and only when something in it changed.
   if (done.years.some((y) => y.label === ws.year.label && y.changed > 0)) await refreshInBackground(ws);
   else render();

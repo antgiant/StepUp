@@ -171,7 +171,7 @@ what the previous script left on the page; and a pasted form map says which buil
 | Skip / split / resync buttons | Stop only |
 | `FilingStore`: claim, draft number, submitted, needs attention | submitted and needs attention done; claim and draft number not |
 | Session lock | not ported |
-| Statuses into the workbook | not ported |
+| Statuses into the workbook | done: "Bring in StepUp's list" on an Excel year also writes Status, Reimbursed Amount and StepUp's message to the workbook (`planWorkbookStatusSync`, `syncWorkbookStatuses`), with before/after readings kept in History. Not yet exercised live |
 
 ## 9. Testing and operating
 

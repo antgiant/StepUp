@@ -1,4 +1,7 @@
-import { appendTableRows, getTableHeaderRow, getTableRows, updateTableRowByIndex, type DriveItemRef, type FilingGroup } from "@step-up/shared/web";
+import {
+  appendTableRows, diffExcel, getTableHeaderRow, getTableRows, planWorkbookStatusSync, readExcelSnapshot, snapshotExcel, updateTableRowByIndex, writeExcelSnapshot, writeHistoryFile,
+  type DriveItemRef, type FilingGroup, type HistoryChange, type StorageProvider,
+} from "@step-up/shared/web";
 import type { FilingJob } from "./agent/engine.js";
 
 /**
@@ -96,4 +99,50 @@ export async function renameCategoryRow(book: DriveItemRef, from: string, to: st
   if (rows.some((r) => String(r[0] ?? "").trim() === b)) return "present";
   await appendTableRows(book, "Table5", [[b, ""]]);
   return "added";
+}
+
+/**
+ * StepUp's list into an Excel year's workbook, as the command line's status sync did: Status, Reimbursed Amount and what
+ * StepUp said in Notes, found by Reimbursement ID and Line Number. The workbook is read before and after, so what a person
+ * changed in Excel and what this wrote are both kept in the year's History. A layout with no such columns is left alone.
+ */
+export async function syncWorkbookStatuses(
+  storage: StorageProvider,
+  driveId: string,
+  yearFolderId: string,
+  book: DriveItemRef,
+  results: unknown[],
+): Promise<{ updated: number; added: string[]; unknown: string[]; skipped?: string }> {
+  const read = async (): Promise<{ headers: string[]; rows: unknown[][] }> => ({ headers: await getTableHeaderRow(book, TABLE), rows: await getTableRows(book, TABLE) });
+  let before: { headers: string[]; rows: unknown[][] };
+  try {
+    before = await read();
+  } catch (err) {
+    return { updated: 0, added: [], unknown: [], skipped: `this workbook has no ${TABLE} to match rows in (${err instanceof Error ? err.message : String(err)})` };
+  }
+  const stored = await readExcelSnapshot(storage, driveId, yearFolderId).catch(() => undefined);
+  const mine: HistoryChange[] = [];
+  const pre = snapshotExcel(before.headers, before.rows, new Date().toISOString());
+  mine.push(...diffExcel(stored, pre, "edited in Excel"));
+  let latest = pre;
+  let outcome: { updated: number; added: string[]; unknown: string[]; skipped?: string };
+  try {
+    const valid = (await getTableRows(book, "Table3")).map((r) => String(r[0] ?? "")).filter(Boolean);
+    const plan = planWorkbookStatusSync(before.headers, before.rows, valid, results);
+    if (plan.addStatuses.length) await appendTableRows(book, "Table3", plan.addStatuses.map((x) => [x]));
+    for (const u of plan.updates) {
+      await updateTableRowByIndex(book, TABLE, u.rowIndex, before.rows[u.rowIndex]!, before.headers, u.changes);
+    }
+    outcome = { updated: plan.updates.length, added: plan.addStatuses, unknown: plan.unknownStatuses };
+    if (plan.updates.length) {
+      const after = await read();
+      latest = snapshotExcel(after.headers, after.rows, new Date(Date.now() + 1).toISOString());
+      mine.push(...diffExcel(pre, latest, "status sync"));
+    }
+  } catch (err) {
+    outcome = { updated: 0, added: [], unknown: [], skipped: err instanceof Error ? err.message : String(err) };
+  }
+  await writeHistoryFile(storage, driveId, yearFolderId, "excel", mine).catch(() => undefined);
+  if (!stored || mine.length) await writeExcelSnapshot(storage, driveId, yearFolderId, latest).catch(() => undefined);
+  return outcome;
 }
