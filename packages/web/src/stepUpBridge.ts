@@ -56,6 +56,16 @@ export function agentMessageFrom(origin: string, data: unknown): AgentToApp | un
       if (!r || typeof r.test !== "string" || typeof r.ok !== "boolean" || !Array.isArray(r.lines)) return undefined;
       return { type: "stepup-spike-result", result: { test: r.test.slice(0, 120), ok: r.ok, lines: r.lines.filter((l): l is string => typeof l === "string").slice(0, 20).map((l) => l.slice(0, 300)) } };
     }
+    case "stepup-file-progress":
+      return typeof m["line"] === "string" ? { type: "stepup-file-progress", line: m["line"].slice(0, 300) } : undefined;
+    case "stepup-file-result": {
+      const o = m["outcome"] as { status?: unknown; matched?: unknown; notes?: unknown; reason?: unknown; kind?: unknown; step?: unknown; total?: unknown } | undefined;
+      if (!o || (o.status !== "ready" && o.status !== "stopped") || !Array.isArray(o.matched) || !Array.isArray(o.notes)) return undefined;
+      const strings = (v: unknown[]): string[] => v.filter((x): x is string => typeof x === "string").slice(0, 50).map((x) => x.slice(0, 300));
+      return o.status === "ready"
+        ? { type: "stepup-file-result", outcome: { status: "ready", matched: strings(o.matched), notes: strings(o.notes), total: Number(o.total) || 0 } }
+        : { type: "stepup-file-result", outcome: { status: "stopped", kind: (typeof o.kind === "string" ? o.kind : "stepUpChanged") as never, ...(typeof o.step === "string" ? { step: o.step as never } : {}), reason: typeof o.reason === "string" ? o.reason.slice(0, 500) : "", matched: strings(o.matched), notes: strings(o.notes) } };
+    }
     case "stepup-formmap":
       return m["map"] && typeof m["map"] === "object" && Array.isArray((m["map"] as { controls?: unknown }).controls) ? { type: "stepup-formmap", map: m["map"] as never } : undefined;
     case "stepup-recording":

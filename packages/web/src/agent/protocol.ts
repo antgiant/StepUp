@@ -1,13 +1,14 @@
 import type { FormMap } from "./form.js";
+import type { FilingJob, FilingOutcome } from "./engine.js";
 import type { SpikeResult, SpikeTest } from "./spike.js";
 import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@step-up/shared/web";
 
 /**
  * Bumped when the agent's messages change in a way an older copy of the script (or an older open app tab) would not
  * understand. The app compares it with the version an agent reports and tells the person to click the bookmark again when
- * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests.
+ * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back).
  */
-export const AGENT_PROTOCOL = 4;
+export const AGENT_PROTOCOL = 5;
 
 /** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
 export type AgentToApp =
@@ -25,7 +26,11 @@ export type AgentToApp =
   /** The map of the controls on the page's current wizard step: names and types, never values. */
   | { type: "stepup-formmap"; map: FormMap }
   /** The outcome of one spike test (see spike.ts). */
-  | { type: "stepup-spike-result"; result: SpikeResult };
+  | { type: "stepup-spike-result"; result: SpikeResult }
+  /** One line of what the filing walk is doing. */
+  | { type: "stepup-file-progress"; line: string }
+  /** How a filing walk ended: at the Summary ready for a person to submit, or stopped with the reason. */
+  | { type: "stepup-file-result"; outcome: FilingOutcome };
 
 export type AppToAgent =
   | { type: "stepup-ready" }
@@ -45,7 +50,12 @@ export type AppToAgent =
   /** Spike tools on or off. Off unless a person turns them on, and never remembered across a reload. */
   | { type: "stepup-spike-enable"; on: boolean }
   /** One spike test, from a person's click. Ignored unless spike tools are on. */
-  | { type: "stepup-spike"; test: SpikeTest };
+  | { type: "stepup-spike"; test: SpikeTest }
+  /** Walk one group's reimbursement through StepUp's form, from the page that is open. From a person's click only. */
+  | { type: "stepup-file"; job: FilingJob }
+  | { type: "stepup-file-stop" }
+  /** A person lets a held Submit through on purpose. */
+  | { type: "stepup-release-submit" };
 
 /** The shapes (never values) of the calls StepUp's page made while recording: enough to build the next feature from. */
 export interface RecordingReport {

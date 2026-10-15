@@ -21,6 +21,8 @@ import type { Observed } from "./observe.js";
 import { AGENT_PROTOCOL, type AgentToApp, type AppToAgent, type RecordingReport } from "./protocol.js";
 import { mapForm, type FormRoot } from "./form.js";
 import { runSpike, type PageOps } from "./spike.js";
+import { runFiling, type FilingOps } from "./engine.js";
+import { releaseGuard } from "./dom.js";
 import { Recorder } from "./recorder.js";
 import { findAccessToken, tokenFresh, PERSON_SCOPE, PROVIDER_SCOPE, type StepUpToken } from "./token.js";
 
@@ -93,6 +95,8 @@ export interface AgentHost {
   readPage?(): FormRoot;
   /** The page's full address (the wizard step is in it). */
   currentUrl?(): string;
+  /** What the filing walk may do to the page. Optional: without it filing is refused. */
+  filingOps?: FilingOps;
   /** What the spike tests may do to the page. Optional: without it every spike test is refused. */
   pageOps?: PageOps;
   /** Whether an element is on screen (hidden words are not what the page is saying). */
@@ -130,6 +134,8 @@ export class StepUpAgent {
   private unlisten: (() => void) | undefined;
   private stopBeat: (() => void) | undefined;
   private spikeOn = false;
+  private filing = false;
+  private filingStop = false;
   private spikeBusy = false;
   private saveCount = 0;
   private disposed = false;
@@ -344,6 +350,15 @@ export class StepUpAgent {
         if (m.on) this.recorder.start(new Date(this.host.now()).toISOString(), this.host.currentPage(), m.values === true);
         else this.recorder.stop();
         break;
+      case "stepup-file":
+        void this.file(m.job);
+        break;
+      case "stepup-file-stop":
+        this.filingStop = true;
+        break;
+      case "stepup-release-submit":
+        releaseGuard();
+        break;
       case "stepup-spike-enable":
         this.spikeOn = m.on === true;
         break;
@@ -364,6 +379,26 @@ export class StepUpAgent {
       case "stepup-settings":
         this.activeReads = m.activeReads === true;
         break;
+    }
+  }
+
+  /** One filing walk from a person's click. One at a time; refused when the page cannot be acted on. */
+  private async file(job: Parameters<typeof runFiling>[0]): Promise<void> {
+    const stopped = (reason: string): void => this.sendLive({ type: "stepup-file-result", outcome: { status: "stopped", kind: "stepUpChanged", reason, matched: [], notes: [] } });
+    if (!this.host.filingOps) return stopped("This page cannot be acted on.");
+    if (this.filing) return stopped("A filing walk is already running.");
+    this.filing = true;
+    this.filingStop = false;
+    try {
+      const outcome = await runFiling(job, {
+        ops: this.host.filingOps,
+        sleep: (ms) => this.host.sleep(ms),
+        report: (line) => this.sendLive({ type: "stepup-file-progress", line }),
+        cancelled: () => this.filingStop,
+      });
+      this.sendLive({ type: "stepup-file-result", outcome });
+    } finally {
+      this.filing = false;
     }
   }
 

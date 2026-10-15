@@ -1,7 +1,7 @@
 import { StepUpAgent, type AgentHost, type AgentState } from "./agent.js";
 import { observeTraffic } from "./observe.js";
 import { normalizeUrl } from "./recorder.js";
-import type { PageOps, PickTarget } from "./spike.js";
+import { isVisible, makeFilingOps, pageOps, pseudoText } from "./dom.js";
 
 /**
  * The script the bookmark loads (`stepup-bookmarklet.js`). Clicking the bookmark again loads the latest copy: the old agent
@@ -16,94 +16,6 @@ declare global {
     __stepUpHelper?: Installed;
   }
 }
-
-/**
- * What the spike tests may do to StepUp's page, in the browser. Values are set through the element's own setter and the
- * events a keyboard or a paste would raise; a dropdown is opened by its own toggle and an entry in its open list is
- * clicked (as the command line always did). Nothing here presses Continue, Back, Submit or Delete: the spike logic
- * (spike.ts) never asks for those, and the selectors below could not find them.
- */
-const PICK_TOGGLE: Partial<Record<PickTarget, string>> = {
-  student: "#Student__Select",
-  category: "#category",
-  categoryType: "#categoryType",
-  categoryDetail: "#categoryDetail",
-  provider: "#provider",
-  individualProvider: "#individualProvider",
-};
-const nth = (sel: string, i: number): Element | undefined => document.querySelectorAll(sel)[i];
-function pickToggle(target: PickTarget, index: number): HTMLElement | undefined {
-  const fixed = PICK_TOGGLE[target];
-  if (fixed) return nth(fixed, index) as HTMLElement | undefined;
-  // "Who did you pay?" for a vendor has no id: it is the dropdown inside the field with that label.
-  const fields = Array.from(document.querySelectorAll(".reimbursement-item-field")).filter((f) => /^\s*Who did you pay/i.test(f.querySelector("label")?.textContent ?? ""));
-  return fields[index]?.querySelector<HTMLElement>(".dropdown > button") ?? undefined;
-}
-const openMenuLeaves = (): HTMLElement[] =>
-  Array.from(document.querySelectorAll<HTMLElement>(".dropdown-menu.show *")).filter((e) => e.children.length === 0 && (e.textContent ?? "").trim() !== "");
-
-const pageOps: PageOps = {
-  count: (sel) => document.querySelectorAll(sel).length,
-  value: (sel, i) => (nth(sel, i) as HTMLInputElement | undefined)?.value,
-  setValue: (sel, i, value, method) => {
-    const el = nth(sel, i) as HTMLInputElement | HTMLTextAreaElement | undefined;
-    if (!el) return;
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const set = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-    if (!set) return;
-    el.focus();
-    if (method === "typed") {
-      set.call(el, "");
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      let typed = "";
-      for (const ch of value) {
-        el.dispatchEvent(new KeyboardEvent("keydown", { key: ch, bubbles: true }));
-        typed += ch;
-        set.call(el, typed);
-        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: ch, inputType: "insertText" }));
-        el.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true }));
-      }
-    } else {
-      set.call(el, value);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.blur(); // StepUp commits a typed value on blur (found by the command line)
-  },
-  itemTotal: (i) => {
-    const block = document.querySelectorAll(".accordion-item.accordion-card-container")[i];
-    if (!block) return undefined;
-    for (const e of Array.from(block.querySelectorAll<HTMLElement>("*"))) {
-      const t = (e.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (/^\$[\d,]+(\.\d{1,2})? total$/i.test(t)) return t;
-    }
-    return undefined;
-  },
-  setFiles: (sel, i, file) => {
-    const el = nth(sel, i) as HTMLInputElement | undefined;
-    if (!el) return;
-    const dt = new DataTransfer();
-    dt.items.add(new File([file.bytes], file.name, { type: file.mime }));
-    el.files = dt.files;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  },
-  openPicker: (target, i) => {
-    const t = pickToggle(target, i);
-    if (!t) return false;
-    t.click();
-    return true;
-  },
-  pickerText: (target, i) => pickToggle(target, i)?.textContent?.trim(),
-  menuTexts: () => openMenuLeaves().map((e) => (e.textContent ?? "").trim()).filter((t, i, a) => a.indexOf(t) === i),
-  clickMenuItem: (text) => {
-    const hits = openMenuLeaves().filter((e) => (e.textContent ?? "").trim() === text);
-    const last = hits[hits.length - 1];
-    if (!last) return false;
-    last.click(); // a plain DOM click: the list can sit outside the window, where a pointer click cannot reach
-    return true;
-  },
-};
 
 (function install(): void {
   const src = (document.currentScript as HTMLScriptElement | null)?.src;
@@ -159,24 +71,11 @@ const pageOps: PageOps = {
     appHome,
     currentPage: () => normalizeUrl(location.href),
     readPage: () => document,
-    isVisible: (el) => {
-      const e = el as HTMLElement;
-      try {
-        return e.getClientRects().length > 0 && getComputedStyle(e).visibility !== "hidden";
-      } catch {
-        return true;
-      }
-    },
+    isVisible,
     pageOps,
+    filingOps: makeFilingOps(say),
     currentUrl: () => location.href,
-    pseudoText: (el, which) => {
-      try {
-        const c = getComputedStyle(el as Element, which).content;
-        return !c || c === "none" || c === "normal" ? undefined : c.replace(/^["']|["']$/g, "");
-      } catch {
-        return undefined;
-      }
-    },
+    pseudoText,
   };
   agent = new StepUpAgent(host, carried);
 
