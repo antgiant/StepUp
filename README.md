@@ -114,9 +114,14 @@ only in the browser / a local folder. Google Drive needs a Google Cloud project 
    `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_FILES_FOLDER_URL` in `.env` (see `.env.example`). The first run opens
    a browser to sign in; the refresh token is kept in `.cache/google-token.json`.
 
-Limits on Google Drive: with the non-sensitive `drive.file` scope the app can only see files and folders it created itself, so
-it cannot browse your existing Drive folders or open a folder someone else shared (use a new folder made from the app; anything
-you drop into it by hand is not visible to the app). Years still kept in an Excel workbook cannot be viewed (that uses OneDrive's Excel service), and the
+5. **Folder picker** (what lets the non-sensitive `drive.file` scope open a folder the app did not create): enable the **Google
+   Picker API**, create a browser **API key** restricted to the site's origins and to the Picker API, and put it and the
+   project number in `GOOGLE_API_KEY` and `GOOGLE_APP_ID` in `packages/web/src/googleAuth.ts` (both are public). Until they are
+   set the "Choose an existing folder with Google Drive" button is not shown.
+
+Limits on Google Drive: with the non-sensitive `drive.file` scope the app only sees files and folders it created or that were
+chosen in the picker; it cannot browse your Drive. Files you drop into a folder by hand are not visible to it unless picked too.
+Years still kept in an Excel workbook cannot be viewed (that uses OneDrive's Excel service), and the
 single-session lock is best effort because Drive has no conditional writes.
 
 ## Running it

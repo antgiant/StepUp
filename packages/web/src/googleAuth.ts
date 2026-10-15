@@ -6,6 +6,14 @@ import type { GoogleDriveAuth, StorageAccount } from "@step-up/shared/web";
  */
 export const GOOGLE_CLIENT_ID: string = "786911806780-t4fbouoc0gqmqqou4qa5gk8gsovbgi91.apps.googleusercontent.com";
 export const googleConfigured = GOOGLE_CLIENT_ID !== "";
+/**
+ * Public identifiers for Google's folder Picker (neither is a secret): a browser API key restricted to this site's origin and to the
+ * Picker API, and the Cloud project's number. With `drive.file` the Picker is how the app is given a folder it did not create.
+ * Leave empty until they exist: the "Choose with Google Drive" button is then not offered.
+ */
+export const GOOGLE_API_KEY: string = "";
+export const GOOGLE_APP_ID: string = "";
+export const pickerConfigured = googleConfigured && GOOGLE_API_KEY !== "" && GOOGLE_APP_ID !== "";
 
 /**
  * Both scopes are non-sensitive (no Google verification review). `drive.file` reaches only the files and folders this app created;
@@ -160,3 +168,75 @@ export const googleAuth: GoogleDriveAuth = {
   canAutoSignIn: () => false,
   async autoSignIn(): Promise<void> {},
 };
+
+interface PickerDoc {
+  id: string;
+  name: string;
+}
+interface PickerData {
+  action: string;
+  docs?: PickerDoc[];
+}
+interface PickerGlobal {
+  picker: {
+    Action: { PICKED: string; CANCEL: string };
+    ViewId: { FOLDERS: string };
+    DocsView: new (viewId: string) => { setIncludeFolders(b: boolean): unknown; setSelectFolderEnabled(b: boolean): unknown; setMimeTypes(m: string): unknown };
+    PickerBuilder: new () => {
+      addView(v: unknown): unknown;
+      setOAuthToken(t: string): unknown;
+      setDeveloperKey(k: string): unknown;
+      setAppId(a: string): unknown;
+      setTitle(t: string): unknown;
+      setCallback(cb: (d: PickerData) => void): unknown;
+      build(): { setVisible(b: boolean): void };
+    };
+  };
+}
+
+let pickerApi: Promise<PickerGlobal> | undefined;
+function loadPicker(): Promise<PickerGlobal> {
+  return (pickerApi ??= new Promise((resolve, reject) => {
+    const fail = (): void => {
+      pickerApi = undefined;
+      reject(new Error("Could not load Google's folder picker. Check your connection and try again."));
+    };
+    const ready = (): void => {
+      const gapi = (window as unknown as { gapi?: { load(name: string, cb: { callback: () => void; onerror: () => void }): void } }).gapi;
+      if (!gapi) return fail();
+      gapi.load("picker", { callback: () => resolve((window as unknown as { google: PickerGlobal }).google), onerror: fail });
+    };
+    if ((window as unknown as { gapi?: unknown }).gapi) return ready();
+    const script = Object.assign(document.createElement("script"), { src: "https://apis.google.com/js/api.js", async: true });
+    script.onload = ready;
+    script.onerror = fail;
+    document.head.append(script);
+  }));
+}
+
+/**
+ * Opens Google's folder Picker and resolves with the folder the person chose (undefined if they closed it). Choosing a folder here
+ * is what gives this app access to it under the `drive.file` scope. Must be called from a click.
+ */
+export async function pickGoogleFolder(): Promise<{ id: string; name: string } | undefined> {
+  if (!pickerConfigured) throw new Error("Google's folder picker is not set up for this site yet.");
+  const [google, token] = await Promise.all([loadPicker(), googleAuth.getToken()]);
+  const p = google.picker;
+  const view = new p.DocsView(p.ViewId.FOLDERS);
+  view.setIncludeFolders(true);
+  view.setSelectFolderEnabled(true);
+  view.setMimeTypes("application/vnd.google-apps.folder");
+  return new Promise((resolve) => {
+    const builder = new p.PickerBuilder();
+    builder.addView(view);
+    builder.setOAuthToken(token);
+    builder.setDeveloperKey(GOOGLE_API_KEY);
+    builder.setAppId(GOOGLE_APP_ID);
+    builder.setTitle("Choose the folder for your Step Up Helper files");
+    builder.setCallback((data) => {
+      if (data.action === p.Action.PICKED && data.docs?.[0]) resolve({ id: data.docs[0].id, name: data.docs[0].name });
+      else if (data.action === p.Action.CANCEL) resolve(undefined);
+    });
+    builder.build().setVisible(true);
+  });
+}

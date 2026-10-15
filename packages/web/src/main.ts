@@ -139,7 +139,7 @@ import {
 } from "@step-up/shared/web";
 import { storage } from "./storage.js";
 import { microsoftAuth } from "./auth.js";
-import { googleAuth, googleConfigured } from "./googleAuth.js";
+import { googleAuth, googleConfigured, pickerConfigured, pickGoogleFolder } from "./googleAuth.js";
 import { rememberStorage, switchStorage } from "./storage.js";
 import { LocalEventStore, exportJsonl, parseJsonl } from "./localStore.js";
 import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, readCache, readOutbox, removeQueuedUpload, writeCache, writeOutbox } from "./cache.js";
@@ -1094,7 +1094,14 @@ function newYearForm(): string {
 
 function shareForm(): string {
   if (storage.kind === "google") {
-    return `<p class="note">Google Drive only lets this app open folders it created itself, so a Google workspace cannot be shared from here. To share a workspace with someone, keep it in OneDrive.</p>`;
+    return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Google account email" required>
+    <button>Invite to edit</button></form>
+    <p class="note">Google Drive emails them an invitation. Once they have it, they should:</p>
+    <ol class="note">
+      <li>Open the invitation and choose to open the folder in Google Drive (sign in with the account you invited).</li>
+      <li>Open ${esc(location.origin)}, choose <strong>Sign in with Google</strong> with the same account, and choose that folder with <strong>Choose an existing folder with Google Drive</strong>.</li>
+    </ol>
+    <p class="note">If no email arrives, share the folder with them in Google Drive yourself; the steps above are the same.</p>`;
   }
   return `<form id="share-form" class="row"><input name="email" type="email" placeholder="Their Microsoft account email" required>
     <button>Invite to edit</button></form>
@@ -3334,10 +3341,11 @@ function onboardingView(): string {
     return `<h2>Welcome</h2><div class="choices">
       <section class="card"><h3>Set up a new workspace</h3>
         <p class="note">Pick (or create) a folder in your own ${esc(storage.label)} to hold your school-year folders.</p>
-        <p><button data-pick-mine="1">&#128193; Choose a folder in ${mine}</button></p></section>
+        <p><button data-pick-mine="1">&#128193; ${google ? `Create a folder in ${mine}` : `Choose a folder in ${mine}`}</button></p>
+        ${google && pickerConfigured ? `<p><button id="pick-google">&#128193; Choose an existing folder with Google Drive</button></p>` : ""}</section>
       <section class="card"><h3>Join a shared workspace</h3>
         <p class="note">${google
-          ? "Google Drive only lets this app open folders it created itself, so a folder someone else shares cannot be opened here. Ask them to use OneDrive if you need to share a workspace."
+          ? (pickerConfigured ? "If someone shared a folder with you, choose it with Google Drive's folder picker (the button on the left); that is what lets this app open it." : "This app can only open Google Drive folders it created itself, so a folder someone else shares cannot be opened here.")
           : `If someone invited you to their folder, open the invitation, then in OneDrive choose <strong>Add shortcut to My files</strong> on it. After that, pick it from My OneDrive, or paste the folder's sharing link here.`}</p>
         <form id="pick-link" class="row"><input name="link" placeholder="${esc(storage.label)} sharing link" required><button>Join with this link</button></form>
         ${picker.shared.length ? `<h4>Shared with you</h4><ul class="queue">${picker.shared.map((f, i) => `<li><button data-pick-shared="${i}">&#128193; ${esc(f.name)}</button></li>`).join("")}</ul>` : ""}</section>
@@ -3610,6 +3618,19 @@ root.addEventListener("click", async (ev) => {
   else if (d["pick"] !== undefined || d["pickMine"] || d["pickShared"] !== undefined) {
     const next = d["pickMine"] ? picker.mine : d["pickShared"] !== undefined ? picker.shared[Number(d["pickShared"])] : picker.list[Number(d["pick"])];
     if (next) await guarded(() => pickerOpen([...(d["pickMine"] || d["pickShared"] !== undefined ? [] : picker.path), next]), "Opening the folder…");
+  }
+  else if (t.id === "pick-google") {
+    // Google's window must open straight from the click, so it runs outside `guarded`.
+    try {
+      const chosen = await pickGoogleFolder();
+      if (chosen) {
+        const home = await storage.home();
+        await guarded(() => useFolder({ driveId: home.driveId, itemId: chosen.id, name: chosen.name }), "Opening your workspace…");
+      }
+    } catch (err) {
+      status = err instanceof Error ? err.message : String(err);
+      render();
+    }
   }
   else if (t.id === "pick-up") await guarded(() => (picker.path.length <= 1 ? pickerTop() : pickerOpen(picker.path.slice(0, -1))), "Opening the folder…");
   else if (t.id === "pick-use") await guarded(() => useFolder(picker.path[picker.path.length - 1]!), "Opening your workspace…");
@@ -4141,7 +4162,7 @@ root.addEventListener("submit", async (ev) => {
       const email = val(form, "email");
       const folder = await workspaceFolder(workspace!.pointer);
       await storage.invite!(folder, email, storage.kind === "google"
-        ? `Sharing our Step Up Helper folder. Open ${location.origin}/, sign in with Google and pick it under Shared with you.`
+        ? `Sharing our Step Up Helper folder. Open ${location.origin}/, sign in with Google and choose it with the folder picker.`
         : `Sharing our Step Up Helper folder. Open it in OneDrive and choose "Add shortcut to My files", then go to ${location.origin}/, sign in and pick it from My OneDrive.`);
       status = `Invited ${email}. If they do not get an email, share the folder with them in ${storage.label} instead.`;
       sharing = false;

@@ -436,7 +436,7 @@ export class GoogleDriveProvider implements StorageProvider {
     } catch (err) {
       // With the `drive.file` scope Drive answers "not found" for any folder this app did not create.
       if (err instanceof StorageError && (err.kind === "not-found" || err.kind === "forbidden")) {
-        throw new Error("This app can only open Google Drive folders it created itself, so it cannot open that link.");
+        throw new Error("This app can only open Google Drive folders it created or that were chosen with the folder picker, so it cannot open that link. Use the Google Drive folder picker instead.");
       }
       throw err;
     }
