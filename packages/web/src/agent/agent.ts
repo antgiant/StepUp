@@ -95,6 +95,8 @@ export interface AgentHost {
   currentUrl?(): string;
   /** What the spike tests may do to the page. Optional: without it every spike test is refused. */
   pageOps?: PageOps;
+  /** Whether an element is on screen (hidden words are not what the page is saying). */
+  isVisible?(el: unknown): boolean;
   /** The text a stylesheet adds before or after an element (it counts towards a button's name). */
   pseudoText?(el: unknown, which: "::before" | "::after"): string | undefined;
 }
@@ -349,7 +351,7 @@ export class StepUpAgent {
         void this.spike(m.test);
         break;
       case "stepup-formmap":
-        this.post({ type: "stepup-formmap", map: mapForm(this.host.readPage?.() ?? { querySelectorAll: () => [] }, this.host.currentUrl?.() ?? this.host.currentPage(), { pseudo: (el, which) => this.host.pseudoText?.(el, which) }) });
+        this.post({ type: "stepup-formmap", map: mapForm(this.host.readPage?.() ?? { querySelectorAll: () => [] }, this.host.currentUrl?.() ?? this.host.currentPage(), { pseudo: (el, which) => this.host.pseudoText?.(el, which), visible: (el) => this.host.isVisible?.(el) ?? true }) });
         break;
       case "stepup-report":
         this.post({ type: "stepup-recording", report: this.recorder.report() });
@@ -379,6 +381,7 @@ export class StepUpAgent {
         url: this.host.currentUrl?.() ?? this.host.currentPage(),
         sleep: (ms) => this.host.sleep(ms),
         saves: () => this.saveCount,
+        visible: (el) => this.host.isVisible?.(el) ?? true,
       });
       this.sendLive({ type: "stepup-spike-result", result });
     } catch (err) {

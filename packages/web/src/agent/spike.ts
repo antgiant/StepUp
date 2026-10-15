@@ -1,4 +1,4 @@
-import { mapForm, type FormRoot, type WizardStep } from "./form.js";
+import { mapForm, type FormEl, type FormMap, type FormRoot, type WizardStep } from "./form.js";
 import { recognise } from "./signatures.js";
 
 /**
@@ -50,7 +50,11 @@ interface Env {
   sleep(ms: number): Promise<void>;
   /** How many of StepUp's own saves (a PUT of the reimbursement) have been seen so far. */
   saves(): number;
+  /** Whether an element is on screen; hidden headings do not count as what the page says. */
+  visible?(el: FormEl): boolean;
 }
+
+const mapOf = (env: Env): FormMap => mapForm(env.root, env.url, env.visible ? { visible: env.visible } : {});
 
 const TEXT: Record<TextTarget, { selector: string; step: WizardStep }> = {
   quantity: { selector: '[placeholder="Enter Quantity"]', step: "itemDetails" },
@@ -79,12 +83,12 @@ const FILE_INPUT = "#inputDrop__";
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED = /\.(png|jpe?g|pdf)$/i;
 
-const ids = (root: FormRoot, url: string): string[] =>
-  mapForm(root, url).controls.map((c) => c.id ?? c.placeholder ?? c.label ?? c.kind).filter((v, i, a) => a.indexOf(v) === i);
+const ids = (env: Env): string[] =>
+  mapOf(env).controls.map((c) => c.id ?? c.placeholder ?? c.label ?? c.kind).filter((v, i, a) => a.indexOf(v) === i);
 
 /** Why the page is not ready for a test, or undefined when it is. */
 function notReady(env: Env, wantStep: WizardStep): string | undefined {
-  const r = recognise(mapForm(env.root, env.url));
+  const r = recognise(mapOf(env));
   if (r.step !== wantStep) return `This test is for the ${wantStep} step; the page is ${r.step ?? "not a step of the form"}.`;
   if (r.busy) return "The page says it is still working. Wait for it to finish.";
   if (r.variant === "confirmDelete") return "StepUp is asking whether to delete an item. Answer that first.";
@@ -130,7 +134,7 @@ async function pick(test: Extract<SpikeTest, { kind: "pick" }>, env: Env): Promi
   const name = `pick ${test.target} #${test.index + 1}`;
   const why = notReady(env, PICK[test.target].step);
   if (why) return { test: name, ok: false, lines: [why] };
-  const beforeIds = ids(env.root, env.url);
+  const beforeIds = ids(env);
   const saves = env.saves();
   if (!env.ops.openPicker(test.target, test.index)) return { test: name, ok: false, lines: ["That dropdown is not on the page."] };
   await env.sleep(400);
@@ -146,7 +150,7 @@ async function pick(test: Extract<SpikeTest, { kind: "pick" }>, env: Env): Promi
   const shown = env.ops.pickerText(test.target, test.index) ?? "";
   const took = clicked && shown.includes(test.option);
   lines.push(took ? "The dropdown now shows the choice." : "The dropdown does NOT show the choice.");
-  const afterIds = ids(env.root, env.url);
+  const afterIds = ids(env);
   const appeared = afterIds.filter((i) => !beforeIds.includes(i));
   const gone = beforeIds.filter((i) => !afterIds.includes(i));
   if (appeared.length) lines.push(`Appeared: ${appeared.join(", ")}.`);
@@ -184,7 +188,7 @@ async function attach(test: Extract<SpikeTest, { kind: "file" }>, env: Env): Pro
 
 /** How many attached files the page shows: the name row on upload, or the document links on additional documents. */
 function documentsShown(env: Env): number {
-  const m = mapForm(env.root, env.url);
+  const m = mapOf(env);
   const named = m.controls.filter((c) => c.id === "fileName" || /^display_Document_/.test(c.id ?? "")).reduce((n, c) => n + (c.count ?? 1), 0);
   return named;
 }

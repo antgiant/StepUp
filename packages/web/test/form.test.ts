@@ -151,6 +151,14 @@ describe("mapping a step's controls", () => {
     expect(JSON.stringify(map)).not.toContain("Math Tools");
   });
 
+  it("counts only headings that are on screen", () => {
+    const shownH = bare("H3", "Upload a receipt or invoice");
+    const hiddenH = bare("H3", "Loading...");
+    const root: FormRoot = { querySelectorAll: (sel) => (/h1/.test(sel) ? [shownH, hiddenH] : []) };
+    const map = mapForm(root, `https://apply.example/SubmitReimbursement/${G}/1`, { visible: (e) => e !== hiddenH });
+    expect(map.headings).toEqual(["Upload a receipt or invoice"]);
+  });
+
   it("never lets a person's name out of a heading", () => {
     const h = (t: string) => bare("H3", t);
     const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);

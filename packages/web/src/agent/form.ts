@@ -65,7 +65,7 @@ export interface MappedControl {
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 9;
+export const FORM_MAP_VERSION = 10;
 
 export interface FormMap {
   mapVersion: number;
@@ -118,6 +118,9 @@ function labelOf(el: FormEl): string | undefined {
  */
 export interface MapOptions {
   pseudo?(el: FormEl, which: "::before" | "::after"): string | undefined;
+  /** Whether an element is on screen. The page keeps some words in it all the time and shows them only when needed
+   * (the upload's "Loading..."), so headings and notices count only when visible. Without it every element counts. */
+  visible?(el: FormEl): boolean;
 }
 
 const classWords = (el: FormEl): string[] =>
@@ -199,12 +202,15 @@ export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): 
     if (had) had.count = (had.count ?? 1) + 1;
     else seen.set(key, c);
   }
+  const shown = (e: FormEl): boolean => options.visible?.(e) ?? true;
   const headings = Array.from(root.querySelectorAll("h1, h2, h3, h4"))
+    .filter(shown)
     .map((h) => wordsOnly(clean(h.textContent, 100)))
     .filter((t): t is string => Boolean(t))
     .filter((t, i, all) => all.indexOf(t) === i)
     .slice(0, 40);
   const notices = Array.from(root.querySelectorAll("p, div, span"))
+    .filter(shown)
     .map((e) => clean(e.textContent, 200))
     .filter((t): t is string => Boolean(t) && NOTICE_WORDS.test(t!) && t!.length < 200)
     .map((t) => t.replace(/reimbursement #\d+/i, "reimbursement #<number>"))

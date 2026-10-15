@@ -150,6 +150,14 @@ const pageOps: PageOps = {
     appHome,
     currentPage: () => normalizeUrl(location.href),
     readPage: () => document,
+    isVisible: (el) => {
+      const e = el as HTMLElement;
+      try {
+        return e.getClientRects().length > 0 && getComputedStyle(e).visibility !== "hidden";
+      } catch {
+        return true;
+      }
+    },
     pageOps,
     currentUrl: () => location.href,
     pseudoText: (el, which) => {
