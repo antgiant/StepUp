@@ -74,9 +74,18 @@ describe("mapping a step's controls", () => {
     expect(map.controls.find((c) => c.id === "category")).toMatchObject({ kind: "dropdown", options: 12 });
   });
 
-  it("keeps only the wizard's own button words", () => {
-    const map = mapForm(page([el({ tag: "button", text: "Continue" }), el({ tag: "button", text: "Jordan Q. Example" })]), url);
-    expect(map.controls.map((c) => c.text)).toEqual(["Continue", undefined]);
+  it("keeps a button's plain words, and writes a random per-session id as a placeholder", () => {
+    const map = mapForm(page([
+      el({ tag: "button", text: "Continue" }),
+      el({ tag: "button", attrs: { id: "3ea9a406-34af-47e5-81a5-16468de1dc5c" }, text: "Step 2 of 5 reached the end of a long sentence here" }),
+      el({ tag: "button", attrs: { id: "6c82e196-3bb2-4331-b5e4-8b69b3d1425f" }, disabled: true }),
+      el({ tag: "button", attrs: { id: "379945fb-d1cf-410d-a179-eac6de3bd5f1" }, disabled: true }),
+    ]), url);
+    expect(map.controls[0]).toMatchObject({ kind: "button", text: "Continue" });
+    expect(map.controls[1]!.text).toBeUndefined();
+    expect(map.controls[1]!.id).toBe("<random-id>");
+    // the two empty disabled ones are the same control seen twice
+    expect(map.controls.filter((c) => c.disabled)).toEqual([{ kind: "button", id: "<random-id>", disabled: true, count: 2 }]);
   });
 
   it("folds repeats across item blocks into a count and skips a dropdown's own entries", () => {

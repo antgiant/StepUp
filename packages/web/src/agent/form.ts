@@ -46,7 +46,7 @@ export interface MappedControl {
   placeholder?: string;
   /** The field's visible label (static words). Never a chosen or typed value. */
   label?: string;
-  /** Button words, kept only for the few buttons whose words are the wizard's own (Continue, Back, Add an Item, …). */
+  /** A button's words, kept when short and plain (Continue, Back, Add an Item). A dropdown's words are never kept: they can be a chosen name. */
   text?: string;
   /** The item block (`item_N`) the control sits in, when it is inside one. */
   block?: string;
@@ -71,7 +71,9 @@ export interface FormMap {
 }
 
 const CONTROLS = "input, select, textarea, button, [role='button'], [role='combobox'], [role='checkbox'], [role='switch']";
-const BUTTON_WORDS = /^(continue|back|next|previous|submit.*|add an item|add item|delete|delete item|retry|cancel|save.*|upload.*|browse.*|select all|request another reimbursement)$/i;
+/** Button words are kept when short and plainly a label: not a sentence, and nothing with digits or an @ (an id, an amount, an address). */
+const plainButtonText = (t: string): boolean => t.length <= 40 && !/[0-9@]/.test(t) && t.split(" ").length <= 6;
+const GUID_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOTICE_WORDS = /(one moment while we read your document|not able to detect items or services|something went wrong on our end|reimbursement request for reimbursement #)/i;
 const clean = (s: string | null | undefined, max = 60): string | undefined => {
   const t = (s ?? "").replace(/\s+/g, " ").trim();
@@ -100,7 +102,8 @@ export function mapForm(root: FormRoot, url: string): FormMap {
     const kind = toggles ? "dropdown" : tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
     const c: MappedControl = { kind };
     const id = clean(el.getAttribute("id"), 80);
-    if (id) c.id = id;
+    // StepUp gives some buttons a new random id every session: it says nothing, so it is written as a placeholder.
+    if (id) c.id = GUID_ID.test(id) ? "<random-id>" : id;
     const name = clean(el.getAttribute("name"), 80);
     if (name) c.name = name;
     const placeholder = clean(el.getAttribute("placeholder"));
@@ -109,7 +112,7 @@ export function mapForm(root: FormRoot, url: string): FormMap {
     if (label) c.label = label;
     if (tag === "button" && !toggles) {
       const text = clean(el.textContent);
-      if (text && BUTTON_WORDS.test(text)) c.text = text;
+      if (text && plainButtonText(text)) c.text = text;
     }
     const block = el.closest("[id^='collapseOne____item_']")?.getAttribute("id");
     if (block) c.block = block;
