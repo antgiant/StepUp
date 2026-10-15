@@ -528,6 +528,9 @@ export class StepUpAgent {
       if (sig === this.lastListSignature) return;
       this.lastListSignature = sig;
       this.post({ type: "stepup-list", results });
+    } else if (P.preauthSearch.test(url)) {
+      const results = (body as { Results?: unknown }).Results;
+      if (Array.isArray(results) && results.length > 0) this.post({ type: "stepup-preauth", results });
     } else if (P.categoriesSearch.test(url)) {
       if (checkStepUpShape("categories-search", body).length) return;
       if (mergeCategorySearch(this.categories, body) > 0) this.post({ type: "stepup-learned", kind: "categories", cache: this.categories });

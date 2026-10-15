@@ -148,7 +148,7 @@ import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
 import { claimItems, filingGroups, recordCategoryFix, recordDraftNumber, recordNeedsAttention, recordSubmitted, releaseItems, renewClaims, LockHeldError, SessionLock } from "@step-up/shared/web";
-import { buildJob, renameCategoryRow, syncWorkbookStatuses, writeWorkbookRows } from "./filing.js";
+import { buildJob, renameCategoryRow, syncWorkbookPreauth, syncWorkbookStatuses, writeWorkbookRows } from "./filing.js";
 import type { FilingOutcome } from "./agent/engine.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import type { SpikeResult, SpikeTest } from "./agent/spike.js";
@@ -1495,6 +1495,7 @@ setInterval(() => {
 }, 5000);
 /** True once the person has said yes to a list this session: later lists from the same page are then applied without asking. */
 let agentTrusted = false;
+let lastPreauthAt = 0;
 let recordingOn = false;
 /** Whether the agent may ask StepUp for the category list, providers and students itself. Off unless the person turns it on. */
 const ACTIVE_KEY = "stepup.activeReads";
@@ -1637,6 +1638,21 @@ window.addEventListener("message", (ev) => {
         }).catch(() => undefined);
       }
       break;
+    case "stepup-preauth": {
+      // Excel years only (the command line's pre-auth sync did the same), at most every two hours, and only once the person
+      // has let this bookmark bring StepUp's data in.
+      const book = workspace?.legacy?.workbook;
+      if (book && agentTrusted && Date.now() - lastPreauthAt > 2 * 3_600_000) {
+        lastPreauthAt = Date.now();
+        void syncWorkbookPreauth(book, m.results).then((r) => {
+          if (r.updated) {
+            status = `${r.updated} row(s) took their Pre-Auth status from StepUp's list. Refresh to see it.`;
+            render();
+          }
+        }).catch(() => undefined);
+      }
+      break;
+    }
     case "stepup-file-progress":
       if (filing) {
         filing.lines.push(m.line);

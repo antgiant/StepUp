@@ -101,3 +101,37 @@ export function planWorkbookStatusSync(headers: readonly string[], rows: readonl
   });
   return plan;
 }
+
+/** StepUp's Pre-Authorization list response entry (only what the sync reads). */
+export interface PreauthResult {
+  SequenceNumber?: number | string;
+  ExternalStatus?: string;
+  IsReimbursement?: boolean;
+}
+
+/** Only "Complete" (always seen with IsReimbursement true) is confirmed; anything else is left alone rather than guessed. */
+export function mapPreauthStatus(externalStatus: string | undefined): string | undefined {
+  return externalStatus === "Complete" ? "Approved" : undefined;
+}
+
+/** The workbook rows whose "Pre-Auth #" StepUp's list names, and the "Pre-Auth" status each should now show. */
+export function planWorkbookPreauthSync(headers: readonly string[], rows: readonly unknown[][], results: unknown[]): { updates: Array<{ rowIndex: number; changes: Record<string, string> }>; unrecognised: string[] } {
+  const num = headers.indexOf("Pre-Auth #");
+  const status = headers.indexOf("Pre-Auth");
+  if (num === -1 || status === -1) throw new Error('Table1 is missing the "Pre-Auth #" or "Pre-Auth" column.');
+  const byNumber = new Map<string, PreauthResult>();
+  for (const r of results as PreauthResult[]) if (r?.SequenceNumber) byNumber.set(String(r.SequenceNumber), r);
+  const out: { updates: Array<{ rowIndex: number; changes: Record<string, string> }>; unrecognised: string[] } = { updates: [], unrecognised: [] };
+  rows.forEach((values, rowIndex) => {
+    const n = String(values[num] ?? "").trim();
+    const hit = n ? byNumber.get(n) : undefined;
+    if (!hit) return;
+    const mapped = mapPreauthStatus(hit.ExternalStatus);
+    if (!mapped) {
+      if (hit.ExternalStatus && !out.unrecognised.includes(hit.ExternalStatus)) out.unrecognised.push(hit.ExternalStatus);
+      return;
+    }
+    if (String(values[status] ?? "").trim() !== mapped) out.updates.push({ rowIndex, changes: { "Pre-Auth": mapped } });
+  });
+  return out;
+}

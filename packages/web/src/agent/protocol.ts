@@ -23,6 +23,8 @@ export type AgentToApp =
   | { type: "stepup-learned"; kind: "students"; students: StepUpStudent[] }
   | { type: "stepup-learned"; kind: "balances"; balances: Record<string, StepUpBalance[]> }
   | { type: "stepup-recording"; report: RecordingReport }
+  /** StepUp's own Pre-Authorization list, when its page loaded it (only a non-empty one is sent). */
+  | { type: "stepup-preauth"; results: unknown[] }
   /** The map of the controls on the page's current wizard step: names and types, never values. */
   | { type: "stepup-formmap"; map: FormMap }
   /** The outcome of one spike test (see spike.ts). */

@@ -170,8 +170,21 @@ what the previous script left on the page; and a pasted form map says which buil
 | Resume a draft by URL | by design not by URL (no navigation by URL): the person opens the draft in StepUp and the walk continues from its step; the app asks before starting when a draft exists (§7.3). The continue-from-a-draft path is still untested live |
 | Skip / split / resync buttons | Stop is the skip; "Needs to be split" and "Documentation problem" mark the rows as needing attention with a dated note (as the CLI did), and a receipt StepUp cannot read or a file that cannot be sent marks them too. Resync is not needed: a walk always re-reads the page |
 | `FilingStore`: claim, draft number, submitted, needs attention | done: the app claims the items (ledger years) before a walk and renews/releases the claim; the draft's number is noticed from StepUp's reply to the create call and kept on the rows (`stepup-file-draft`). Not yet exercised live |
+| Pre-authorization sync (Excel years) | done: the agent forwards a non-empty Pre-Authorization list, the app writes "Pre-Auth" by "Pre-Auth #" (two-hourly, once the bookmark is trusted). Dormant until a row has a Pre-Auth # |
 | Session lock | done: the app takes the workspace's `SessionLock` for the walk (heartbeat each minute; released on a stop, a submission or a problem). Not yet exercised live |
 | Statuses into the workbook | done: "Bring in StepUp's list" on an Excel year also writes Status, Reimbursed Amount and StepUp's message to the workbook (`planWorkbookStatusSync`, `syncWorkbookStatuses`), with before/after readings kept in History. Not yet exercised live |
+
+### Sweep of the CLI against the bookmarklet (2026-10-15)
+
+Everything the CLI did in `packages/cli/src` has a web equivalent, except the items below, which are deliberate:
+
+- **Differences kept on purpose:** a category the child's scholarship is not eligible for *holds the item back* in the plan (the
+  CLI only warned); the CLI's "Status list must contain Submitted" pre-check is not repeated (the workbook write would simply
+  set the word); resyncing buttons are not needed because a walk always re-reads the page.
+- **Maintainer tools, not user features:** `browser`, `discover`, `inspect` (replaced by the form map, recorder and spike),
+  `reference:*` (kept, §7.8).
+- **Not ported, because StepUp is not read through its API any more:** the CLI's draft-snapshot fetch (it asked StepUp whether a
+  remembered draft had been submitted; the web app learns that from StepUp's list, which "Bring in" reads).
 
 ## 9. Testing and operating
 

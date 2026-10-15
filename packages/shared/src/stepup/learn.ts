@@ -82,6 +82,7 @@ export const STEPUP_PATTERNS = {
   /** The provider list behind "Who did you pay?". Older: `getbusinesssummarydropdown`; seen in 2026-10: `vendors/search`. */
   studentScholarship: /personapi-prod\.stepupforstudents\.org\/api\/guardian\/[0-9a-f-]{36}\/studentScholarship\/?(?:funded)?(?:[?#]|$)/i,
   balances: /infrastructureapi-prod\.stepupforstudents\.org\/api\/balancecheck\/bulk\/details/i,
+  preauthSearch: /reimbursementapi-prod\.stepupforstudents\.org\/api\/preauthorization\/search/i,
   vendorDropdown: /providerapi-prod\.stepupforstudents\.org\/api\/(?:businesssummary\/getbusinesssummarydropdown|vendors\/search)/i,
 } as const;
 

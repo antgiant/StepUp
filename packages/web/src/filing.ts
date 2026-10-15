@@ -1,5 +1,5 @@
 import {
-  appendTableRows, diffExcel, getTableHeaderRow, getTableRows, planWorkbookStatusSync, readExcelSnapshot, snapshotExcel, updateTableRowByIndex, writeExcelSnapshot, writeHistoryFile,
+  appendTableRows, diffExcel, getTableHeaderRow, getTableRows, planWorkbookPreauthSync, planWorkbookStatusSync, readExcelSnapshot, snapshotExcel, updateTableRowByIndex, writeExcelSnapshot, writeHistoryFile,
   type DriveItemRef, type FilingGroup, type HistoryChange, type StorageProvider,
 } from "@step-up/shared/web";
 import type { FilingJob } from "./agent/engine.js";
@@ -145,4 +145,13 @@ export async function syncWorkbookStatuses(
   await writeHistoryFile(storage, driveId, yearFolderId, "excel", mine).catch(() => undefined);
   if (!stored || mine.length) await writeExcelSnapshot(storage, driveId, yearFolderId, latest).catch(() => undefined);
   return outcome;
+}
+
+/** StepUp's pre-authorization list into the workbook's "Pre-Auth" column, as the command line did (rows with a "Pre-Auth #"). */
+export async function syncWorkbookPreauth(book: DriveItemRef, results: unknown[]): Promise<{ updated: number; unrecognised: string[] }> {
+  const headers = await getTableHeaderRow(book, TABLE);
+  const rows = await getTableRows(book, TABLE);
+  const plan = planWorkbookPreauthSync(headers, rows, results);
+  for (const u of plan.updates) await updateTableRowByIndex(book, TABLE, u.rowIndex, rows[u.rowIndex]!, headers, u.changes);
+  return { updated: plan.updates.length, unrecognised: plan.unrecognised };
 }

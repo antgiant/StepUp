@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapApiStatus, planWorkbookStatusSync } from "../src/stepup/workbookSync.js";
+import { mapApiStatus, planWorkbookPreauthSync, planWorkbookStatusSync } from "../src/stepup/workbookSync.js";
 
 const headers = ["ID", "Status", "Reimbursement ID", "Line Number", "Amount", "Reim. $", "Reimbursed Amount", "Notes"];
 const row = (over: Partial<Record<string, string | number>> = {}): unknown[] => {
@@ -54,5 +54,18 @@ describe("planWorkbookStatusSync", () => {
 
   it("refuses a layout without the matching columns", () => {
     expect(() => planWorkbookStatusSync(["ID", "Status"], [], valid, [])).toThrow(/missing/);
+  });
+});
+
+describe("planWorkbookPreauthSync", () => {
+  const h = ["ID", "Pre-Auth #", "Pre-Auth"];
+  it("sets Approved for a completed pre-authorization and leaves unknown statuses alone", () => {
+    const rows = [["1", "77", ""], ["2", "78", ""], ["3", "", ""]];
+    const plan = planWorkbookPreauthSync(h, rows, [{ SequenceNumber: 77, ExternalStatus: "Complete" }, { SequenceNumber: 78, ExternalStatus: "OnHold" }]);
+    expect(plan.updates).toEqual([{ rowIndex: 0, changes: { "Pre-Auth": "Approved" } }]);
+    expect(plan.unrecognised).toEqual(["OnHold"]);
+  });
+  it("refuses a workbook without the columns", () => {
+    expect(() => planWorkbookPreauthSync(["ID"], [], [])).toThrow(/Pre-Auth/);
   });
 });
