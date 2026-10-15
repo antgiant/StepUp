@@ -4,8 +4,8 @@ title = "Step Up Helper"
 useDefault = true
 
 # The Google Picker's API key is a public browser key by design: it is restricted to this site's origin and to the
-# Picker API in Google Cloud, and ships in the page. Only that one rule in that one file is excused.
-[[allowlists]]
+# Picker API in Google Cloud, and ships in the page. Only this exact value is excused.
+# (The plain [allowlist] table is used because the gitleaks version bundled with gitleaks-action ignores [[allowlists]].)
+[allowlist]
 description = "Public Google Picker browser API key"
-targetRules = ["gcp-api-key"]
-paths = ['''packages/web/src/googleAuth\.ts''']
+regexes = ['''AIzaSyDdMIyikVPdKSiY-neSUmP4B1jTaYTZgcs''']
