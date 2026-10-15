@@ -11,8 +11,8 @@ export const googleConfigured = GOOGLE_CLIENT_ID !== "";
  * Picker API, and the Cloud project's number. With `drive.file` the Picker is how the app is given a folder it did not create.
  * Leave empty until they exist: the "Choose with Google Drive" button is then not offered.
  */
-export const GOOGLE_API_KEY: string = "";
-export const GOOGLE_APP_ID: string = "";
+export const GOOGLE_API_KEY: string = "AIzaSyDdMIyikVPdKSiY-neSUmP4B1jTaYTZgcs";
+export const GOOGLE_APP_ID: string = "786911806780";
 export const pickerConfigured = googleConfigured && GOOGLE_API_KEY !== "" && GOOGLE_APP_ID !== "";
 
 /**
