@@ -1702,8 +1702,8 @@ function spikePanel(): string {
   return `<div class="note spike"><strong>Spike tools are on.</strong> Use a throwaway draft with made-up values. <button data-agent="spike-off">Turn off</button>
     <p class="row"><label>Test <select data-spike="kind">${(["text", "date", "pick", "file"] as const).map((v) => `<option value="${v}"${k === v ? " selected" : ""}>${v === "text" ? "Type into a field" : v === "date" ? "Set a date" : v === "pick" ? "Choose from a dropdown" : "Attach a file"}</option>`).join("")}</select></label>
       <label>Control <select data-spike="target">${opts}</select></label>
-      ${k === "file" ? "" : `<label>Item number <input data-spike="index" value="${esc(spikeForm.index)}" size="2"></label>`}</p>
-    <p class="row">${k === "text" || k === "date" ? `<label>Value <input data-spike="value" value="${esc(spikeForm.value)}" placeholder="${k === "date" ? "2026-01-31" : "a made-up value"}"></label>
+      ${k === "file" ? "" : `<label>Which item on the page (1 = the first) <input data-spike="index" value="${esc(spikeForm.index)}" size="2"></label>`}</p>
+    <p class="row">${k === "text" || k === "date" ? `<label>What to type into the field <input data-spike="value" value="${esc(spikeForm.value)}" placeholder="${k === "date" ? "2026-01-31" : "a made-up value"}"></label>
         <label>Method <select data-spike="method"><option value="events"${spikeForm.method === "events" ? " selected" : ""}>set value, then input / change / blur</option><option value="typed"${spikeForm.method === "typed" ? " selected" : ""}>type it character by character</option></select></label>`
       : k === "pick" ? `<label>Entry to choose (exact words) <input data-spike="option" value="${esc(spikeForm.option)}" size="40"></label>`
       : `<label>A throwaway receipt <input type="file" data-spike="file" accept=".pdf,.png,.jpg,.jpeg"></label> <small>${spikeFile ? esc(spikeFile.name) : "none chosen"}</small>`}</p>
@@ -3320,6 +3320,16 @@ root.addEventListener("click", async (ev) => {
     else if (what === "spike-run") {
       const index = Math.max(0, Math.floor(Number(spikeForm.index) || 1) - 1);
       let test: SpikeTest | undefined;
+      if ((spikeForm.kind === "text" || spikeForm.kind === "date") && spikeForm.value.trim() === "") {
+        spikeResults = [{ test: spikeForm.kind, ok: false, lines: ["Type what to put in the field first (the second box). Nothing was sent."] }, ...spikeResults];
+        render();
+        return;
+      }
+      if (spikeForm.kind === "pick" && spikeForm.option.trim() === "") {
+        spikeResults = [{ test: "pick", ok: false, lines: ["Type the exact words of the entry to choose first. Nothing was sent."] }, ...spikeResults];
+        render();
+        return;
+      }
       if (spikeForm.kind === "text") test = { kind: "text", target: spikeForm.target as never, index, value: spikeForm.value, method: spikeForm.method };
       else if (spikeForm.kind === "date") test = { kind: "date", target: spikeForm.target as never, index, value: spikeForm.value, method: spikeForm.method };
       else if (spikeForm.kind === "pick") test = { kind: "pick", target: spikeForm.target as never, index, option: spikeForm.option };
