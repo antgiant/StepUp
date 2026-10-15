@@ -44,6 +44,14 @@ copy has not caught up, so the newer local change stands until the next read.
   Playwright flow. The agent may navigate the intermediate steps; it **never presses the final Submit** (legally binding) and
   blocks a person's Submit while there is clear evidence something is wrong. `docs/EXTENSION_PLAN.md` is kept for the extension option only.
 
+## Filing from the bookmarklet
+
+The bookmarklet agent fills StepUp's form (`packages/web/src/agent/engine.ts`, `dom.ts`, `signatures.ts`; the state of the work
+is `docs/AGENT_PLAN.md`). It is **fail-closed and never presses Submit**: `FilingOps` has no operation for it, `press` refuses
+a button whose words begin "Submit", and a guard holds the button while a check is red. Do not add one. An Excel year is
+filed from the same "Ready to file" panel; its click handler and `READ_ONLY_KEEP` both name the filing controls, and a new
+control there needs both.
+
 ## History
 
 The History tab lists every change from every source, newest first: the ledger's (derived from its event log by

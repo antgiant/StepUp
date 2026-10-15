@@ -77,10 +77,57 @@ SortOrder: 0 }`. Only `Filters` differs between calls. Responses repeat it under
 
 ## 5. Not yet known
 
-- How a **service provider** (a person) is written, and what `ServiceProviderPersonIdString` holds.
+- How a **service provider** (a person) is written in the API, and what `ServiceProviderPersonIdString` holds (the form's
+  individual-provider dropdown is known, §6).
 - Whether the page makes up an item's `Id` itself (it does for drafts and receipts).
-- The **submit** call and anything that happens after it.
-- Anything about the form's **DOM** (labels, ids, placeholders, which controls accept scripted input): the CLI's
-  `packages/cli/src/form/reimbursementFlow.ts` encodes selectors known when it was written (`#Student__Select`,
-  `ul.dropdown-menu.show`, `#inputDrop__`, `[placeholder="Enter Quantity"]`, random per-session button ids found by text,
-  repeated ids across item blocks), but they have not been re-verified. This is what the planned **form map** is for.
+- The **submit** call and anything that happens after it (the agent never makes it; the person presses Submit).
+- Whether StepUp's terms of use say anything about automated assistance (the owner should read them).
+- What the read-error page looks like live (its wording is known from the command line, not yet seen by the agent).
+
+## 6. The form (DOM), verified October 2026 from recorded form maps and live runs
+
+Same rule as above: true when recorded, re-check with the form map. Only names, types and words of labels are recorded.
+
+**The wizard.** URL `/SubmitReimbursement` (student), then `/SubmitReimbursement/<guid>/1` upload, `/2` item selection, `/3` item
+details, `/4` additional documents, `/5` summary, and `/SubmitReimbursement/Confirmation/<guid>`. A step indicator (six
+buttons with random per-session ids, words "Student Selection" ... "Summary") is on every step; Back and Continue have
+random ids and are found by their words. Continue holds two spans (desktop and mobile words, for example "CONTINUE TO
+ITEM/SERVICE DETAILS" and "CONTINUE"), so match on words that **begin** with "Continue".
+
+| Step | What identifies it | Controls |
+|---|---|---|
+| Student | URL without a step number | `#Student__Select` (dropdown; entries read "Name LastName : PROGRAM") |
+| Upload | URL `/1`, heading "Upload a receipt or invoice for <student>" | `#inputDrop__` (file), BROWSE, BACK, Continue (disabled until a file is attached). Attached: `#fileName` (disabled, holds the name), `#fileDeleteButton`, a Quick View button |
+| Item selection | URL `/2` | Scanning: heading "One moment while we read your document..." and nothing to press. Detected: heading "Item(s) and/or service(s) detected!", checkboxes `select-all` and `item_0` (every item box shares that id), receipt viewer buttons (`zoom_in`, `zoom_out`, `open_in_new`), and, once ticked, an editable name and an amount (`$0.00` placeholder). None found: heading "We were not able to detect items or services...", UPLOAD A DIFFERENT DOCUMENT. Read error: "Something went wrong on our end..." with a retry |
+| Item details | URL `/3`, heading "Confirm details for each reimbursable item or service for <student>" | One block per item, container `#collapseOne____item_N` (N from 1). See below |
+| Additional documents | URL `/4`, heading "Want to add additional documents?" | `#inputDrop__` again, BROWSE, BACK, Continue ("CONTINUE TO SUMMARY"). An attached file is a row of two **links**: `delete_Document_<guid>` ("Delete") and `display_Document_<guid>` (the file's name) |
+| Summary | URL `/5`, heading "Review your purchase(s) for <student>" | Item lines as text ("2 x $12.98 + $1.82 Tax/Shipping", with the category's description), a heading "Total" then the amount, `editButton_N`, `#backButton`, and a button "Submit for approval" (random id) above an attestation under penalty of law |
+
+**Item details block.** Fields (ids and placeholders): `#purchaseDate` (date input, set as ISO), `#invoiceNumber`, `#category`
+then `#categoryType` then `#categoryDetail` (each appears when the level above is chosen), `#serviceDate` (only for categories
+that require it), placeholders "Enter Quantity", "Enter Cost per Item", "Enter Additional Costs" (Radzen numeric with up/down
+buttons; money is reformatted, `5` becomes `$5.00`), `#educationalBenefit` (textarea), `#itemServiceUrl`. The block shows its
+own running total ("$15.50 total") that StepUp recomputes: quantity x cost + tax/shipping. Buttons: View/Hide Details, Delete
+(two per block, disabled for a single item), Add an Item, Back, Continue. Deleting asks first: `#confirm-button` "Delete Item",
+`#deny-button` "Cancel", `#close_button`.
+
+**The payee ("Who did you pay?").** The dropdown always exists. In a **vendor** category it has no id (about 116 entries
+including "Provider not Listed"); in a **provider** category it is `#provider` (a filtered list, about 45). Choosing "Provider
+not Listed" reveals a free-text field: `#vendorName` ("Vendor Name") for a vendor category, `#otherServiceProviderName`
+("Provider Name") for a provider category. Choosing a listed provider may reveal `#individualProvider` ("Provider Name", a few
+people) and, if none fits, `#otherIndividualProvider` ("Service Provider Name"). The vendor list is loaded from the server
+**after** the dropdown opens (in pages), so read it only once it has stopped growing.
+
+**Behaviour.**
+
+- StepUp **saves at step changes** (and when a receipt or item is added), not per edit. An edit took when the field shows it
+  and the block's total recomputed.
+- A script's input is accepted: `input.files` from a `DataTransfer` then `input` and `change` (files); the element's own value
+  setter then `input`, `change`, `blur` (text, numbers, dates); a plain DOM `.click()` on a dropdown's own toggle and then on
+  the entry whose words match (the list can sit outside the window, where a pointer click cannot reach).
+- A heading "Loading..." is **in the page all the time** and visible only while a file uploads.
+- Limits stated on the upload steps: 5 MB per document, no passwords, PNG/JPG/JPEG/PDF, 50 files at most.
+- The scan can take up to a minute. A scanned page offers an item name and amount it read; the item details step is where
+  the values are set.
+- Leaving a required field empty (for example no category) and pressing Continue shows a red "Some required data is
+  missing" banner and does not move on.
