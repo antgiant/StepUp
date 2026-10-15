@@ -18,12 +18,11 @@ import {
   type VendorEntry,
 } from "@step-up/shared/web";
 import type { Observed } from "./observe.js";
-import type { AgentToApp, AppToAgent, RecordingReport } from "./protocol.js";
+import { AGENT_PROTOCOL, type AgentToApp, type AppToAgent, type RecordingReport } from "./protocol.js";
 import { Recorder } from "./recorder.js";
 import { findAccessToken, tokenFresh, PERSON_SCOPE, PROVIDER_SCOPE, type StepUpToken } from "./token.js";
 
-/** Bumped when the messages between the agent and the app change in a way an older open app tab would not understand. */
-export const AGENT_PROTOCOL = 1;
+export { AGENT_PROTOCOL };
 
 const API = "https://reimbursementapi-prod.stepupforstudents.org/api/reimbursements/V2/search";
 const CATEGORIES_SEARCH = "https://reimbursementapi-prod.stepupforstudents.org/api/categories/search";
@@ -49,6 +48,7 @@ const CHUNK_DELAY_MS = 400;
 const HANDSHAKE_TRIES = 75;
 const HANDSHAKE_MS = 400;
 const QUEUE_LIMIT = 100;
+const HEARTBEAT_MS = 20_000;
 
 /**
  * The only requests the agent ever makes itself, and the only methods it may use: reads. Every one is a call StepUp's own
@@ -82,6 +82,8 @@ export interface AgentHost {
   say(text: string, keep?: boolean): void;
   now(): number;
   sleep(ms: number): Promise<void>;
+  /** Calls `fn` every `ms` until the returned function is called. Optional: without it the agent sends no "alive" messages. */
+  every?(ms: number, fn: () => void): () => void;
   /** Where the app lives, with a trailing slash. */
   appHome: string;
   currentPage(): string;
@@ -114,6 +116,7 @@ export class StepUpAgent {
   /** Off until the app says so: the agent then only watches the page, plus the one list a click asks for. */
   private activeReads = false;
   private unlisten: (() => void) | undefined;
+  private stopBeat: (() => void) | undefined;
   private disposed = false;
   private readonly appOrigin: string;
 
@@ -136,7 +139,27 @@ export class StepUpAgent {
 
   dispose(): void {
     this.disposed = true;
+    this.stopBeat?.();
     this.unlisten?.();
+  }
+
+  /** Tells the app this page is going away (a reload or a closed tab), so it shows that at once instead of after a wait. */
+  goodbye(): void {
+    this.sendLive({ type: "stepup-bye" });
+  }
+
+  /** Straight to the app's window or nowhere: a late "alive" is worthless, so these are never queued. */
+  private sendLive(m: AgentToApp): void {
+    if (!this.win || !this.ready || this.win.closed) return;
+    try {
+      this.win.postMessage(m, this.appOrigin);
+    } catch {
+      /* the window is gone */
+    }
+  }
+
+  private beat(): void {
+    this.sendLive({ type: "stepup-alive", version: AGENT_PROTOCOL, page: this.host.currentPage() });
   }
 
   /** The bookmark was clicked: connect to the app and bring the current list in. Opens the app's window before anything else. */
@@ -175,6 +198,9 @@ export class StepUpAgent {
 
     say(`Got ${results.length} reimbursements. Waiting for Step Up Helper…`, true);
     if (!(await connected)) return say("Step Up Helper did not answer. Open it, sign in, and click again.");
+    this.stopBeat?.();
+    this.stopBeat = this.host.every?.(HEARTBEAT_MS, () => this.beat());
+    this.beat();
     this.lastListSignature = signatureOf(results);
     this.post({ type: "stepup-list", results });
     say(`Sent ${results.length} reimbursements to Step Up Helper. Switch to its tab to see what changed.`);

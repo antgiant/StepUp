@@ -63,6 +63,10 @@ declare global {
     say,
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    every: (ms, fn) => {
+      const id = setInterval(fn, ms);
+      return () => clearInterval(id);
+    },
     appHome,
     currentPage: () => normalizeUrl(location.href),
   };
@@ -94,9 +98,14 @@ declare global {
     /* not available: uploads are simply not listed */
   }
 
+  // A reload or a closed tab takes the agent with it: say so while there is still a window to say it to.
+  const bye = (): void => agent?.goodbye();
+  window.addEventListener("pagehide", bye);
+
   window.__stepUpHelper = {
     agent,
     dispose: () => {
+      window.removeEventListener("pagehide", bye);
       observers.dispose();
       timing?.disconnect();
       history.pushState = origPush;

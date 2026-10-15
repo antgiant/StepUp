@@ -1,8 +1,19 @@
 import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@step-up/shared/web";
 
+/**
+ * Bumped when the agent's messages change in a way an older copy of the script (or an older open app tab) would not
+ * understand. The app compares it with the version an agent reports and tells the person to click the bookmark again when
+ * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages.
+ */
+export const AGENT_PROTOCOL = 2;
+
 /** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
 export type AgentToApp =
   | { type: "stepup-hello"; version: number }
+  /** Sent every so often while the agent is connected: it is how the app tells a live StepUp page from a closed or reloaded one. */
+  | { type: "stepup-alive"; version: number; page: string }
+  /** The StepUp page is being closed or reloaded; the agent goes with it. */
+  | { type: "stepup-bye" }
   | { type: "stepup-list"; results: unknown[] }
   | { type: "stepup-learned"; kind: "categories"; cache: CategoryCache }
   | { type: "stepup-learned"; kind: "vendors"; entries: VendorEntry[] }

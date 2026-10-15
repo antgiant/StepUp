@@ -146,6 +146,7 @@ import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, read
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
+import { connectionState, connectionWords, type AgentSeen } from "./agentConnection.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
@@ -1427,6 +1428,17 @@ let bookmarkletOpen = false;
 // ---- the agent running on StepUp's page (see src/agent): lists, what it learned, and what it recorded
 
 let agentWin: { win: Window; origin: string } | undefined;
+/** The last thing heard from the agent (hello, alive or bye): what the connection panel's wording comes from. */
+let agentSeen: AgentSeen | undefined;
+/** Re-evaluated every few seconds while the panel is open, so a closed or reloaded StepUp page shows up without a click. */
+let lastConnectionKind = "";
+setInterval(() => {
+  const kind = connectionState(Date.now(), Boolean(agentWin?.win.closed), agentSeen).kind;
+  if (kind !== lastConnectionKind) {
+    lastConnectionKind = kind;
+    if (bookmarkletOpen) render();
+  }
+}, 5000);
 /** True once the person has said yes to a list this session: later lists from the same page are then applied without asking. */
 let agentTrusted = false;
 let recordingOn = false;
@@ -1521,7 +1533,25 @@ window.addEventListener("message", (ev) => {
   const m = agentMessageFrom(ev.origin, ev.data);
   if (!m) return;
   switch (m.type) {
+    case "stepup-alive":
+      agentSeen = { at: Date.now(), version: m.version, page: m.page };
+      // This tab was reloaded since the agent connected: it still has our window, we only lost it. Take it back, and tell it
+      // what it would otherwise only hear after a bookmark click (ready, its settings, what is already known).
+      if (!agentWin || agentWin.win !== ev.source) {
+        agentWin = { win: ev.source as Window, origin: ev.origin };
+        (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
+        sendSettings();
+        sendAgentCache();
+        if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
+        render();
+      }
+      break;
+    case "stepup-bye":
+      if (agentSeen) agentSeen = { ...agentSeen, gone: true };
+      render();
+      break;
     case "stepup-hello":
+      agentSeen = { at: Date.now(), version: m.version, page: "" };
       agentWin = { win: ev.source as Window, origin: ev.origin };
       (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
       sendSettings();
@@ -1602,14 +1632,17 @@ function shortReport(r: RecordingReport): unknown {
 let recordingShort = true;
 
 function agentSection(): string {
-  const connected = Boolean(agentWin && !agentWin.win.closed);
+  const conn = connectionState(Date.now(), Boolean(agentWin?.win.closed), agentSeen);
+  lastConnectionKind = conn.kind;
+  const connected = conn.kind === "connected";
+  const heard = conn.kind === "none" ? "" : ` Last heard from the StepUp page at ${new Date(conn.seenAt).toLocaleTimeString()}.`;
   const known = `${Object.keys(learned.categories.categories).length} categories, ${Object.keys(learned.categories.types).length} types, ${Object.keys(learned.categories.details).length} details and ${Object.keys(learned.vendors).length} providers are known.`;
   const report = recordingReport ? esc(JSON.stringify(recordingShort ? shortReport(recordingReport) : recordingReport, null, 1)) : "";
   return `<h4>StepUp connection</h4>
     <p class="note">Asking StepUp for the category list, providers and students itself is <strong>${activeReads ? "on" : "off"}</strong>.
       ${activeReads ? "About 40 small requests, at most once a day, each one a request StepUp's own pages make." : "Off, the only request this makes itself is the reimbursements list when you click; everything else is learned from what StepUp's page loads while you use it."}
       <button data-agent="active-toggle">${activeReads ? "Turn off" : "Turn on"}</button></p>
-    <p class="note">${connected ? "A StepUp page is connected: while it stays open, this app learns from what you do there." : "No StepUp page is connected. Click the bookmark on StepUp's Dashboard."} ${esc(known)}</p>
+    <p class="note">${esc(connectionWords(conn))}${esc(heard)} ${esc(known)}</p>
     ${connected ? `<p class="row">${recordingOn
       ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
       : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>

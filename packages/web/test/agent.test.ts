@@ -599,3 +599,21 @@ describe("tokens and signatures", () => {
     expect(signatureOf([{ a: 1 }])).not.toBe(signatureOf([{ a: 2 }]));
   });
 });
+
+describe("staying in touch", () => {
+  it("says it is alive on a timer after connecting, and says goodbye", async () => {
+    let tick: (() => void) | undefined;
+    const r = make();
+    (r.host as { every?: unknown }).every = (_ms: number, fn: () => void) => ((tick = fn), () => { tick = undefined; });
+    await r.agent.start();
+    const alive = () => r.sent.filter((s) => s.data.type === "stepup-alive").length;
+    const first = alive();
+    expect(first).toBeGreaterThan(0);
+    tick?.();
+    expect(alive()).toBe(first + 1);
+    r.agent.goodbye();
+    expect(typesOf(r)).toContain("stepup-bye");
+    r.agent.dispose();
+    expect(tick).toBeUndefined();
+  });
+});

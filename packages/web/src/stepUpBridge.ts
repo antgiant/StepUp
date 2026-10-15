@@ -35,6 +35,10 @@ export function agentMessageFrom(origin: string, data: unknown): AgentToApp | un
   switch (m["type"]) {
     case "stepup-hello":
       return { type: "stepup-hello", version: Number(m["version"]) || 0 };
+    case "stepup-alive":
+      return { type: "stepup-alive", version: Number(m["version"]) || 0, page: typeof m["page"] === "string" ? m["page"].slice(0, 200) : "" };
+    case "stepup-bye":
+      return { type: "stepup-bye" };
     case "stepup-list":
       return Array.isArray(m["results"]) && m["results"].length > 0 ? { type: "stepup-list", results: m["results"] } : undefined;
     case "stepup-learned":
