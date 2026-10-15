@@ -235,6 +235,18 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     return { status: "stopped", kind: "stepUpChanged", reason: `An unexpected error: ${err instanceof Error ? err.message : String(err)}`, matched, notes };
   }
 
+  /** The open dropdown's entries, once the list has stopped growing (StepUp loads a long list in pages). */
+  async function readMenu(): Promise<string[]> {
+    let last = ops.menu();
+    for (let i = 0; i < 12; i++) {
+      await env.sleep(250);
+      const now = ops.menu();
+      if (now.length === last.length && now.length > 0 && i >= 1) return now;
+      last = now;
+    }
+    return last;
+  }
+
   async function backTo(step: WizardStep): Promise<void> {
     for (let i = 0; i < 8 && ops.map().step !== step; i++) {
       const was = ops.map().step;
@@ -322,8 +334,7 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} dropdown is not on the page.`);
         break;
       }
-      await env.sleep(350);
-      const choice = chooseEntry(ops.menu(), levels[k]!);
+      const choice = chooseEntry(await readMenu(), levels[k]!);
       if (choice.how === "none" || choice.how === "ambiguous") {
         flags.push(`Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}".`);
         ops.open(b, target); // close it again
@@ -356,32 +367,40 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
 
     // Who was paid: the dropdown always; "not listed" reveals a text field.
     const name = (d["Service Provider"] || d["Vendor"] || "").trim();
-    const payeeTarget: PickTarget = ops.hasPicker(b, "provider") ? "provider" : "payee";
     await waitFor("the payee control", () => ops.hasPicker(b, "provider") || ops.hasPicker(b, "payee"), 10_000).catch(() => undefined);
+    const payeeTarget: PickTarget = ops.hasPicker(b, "provider") ? "provider" : "payee";
     if (name) {
-      const target: PickTarget = ops.hasPicker(b, "provider") ? "provider" : payeeTarget;
-      if (!ops.open(b, target)) {
+      if (!ops.open(b, payeeTarget)) {
         flags.push(`Item ${n} (${item}): "Who did you pay?" is not on the page.`);
       } else {
-        await env.sleep(350);
-        const choice = chooseEntry(ops.menu(), name, [PROVIDER_NOT_LISTED]);
+        const entries = await readMenu();
+        const choice = chooseEntry(entries, name, [PROVIDER_NOT_LISTED]);
         if (choice.how === "exact" || choice.how === "normalized" || choice.how === "partial") {
+          env.report(`Paying "${choice.text}" (${choice.how === "exact" ? "listed" : `matched "${name}"`}).`);
           ops.choose(choice.text);
           await env.sleep(700);
-          if (!(ops.shown(b, target) ?? "").includes(choice.text)) flags.push(`Item ${n} (${item}): the payee did not take "${choice.text}".`);
+          if (!(ops.shown(b, payeeTarget) ?? "").includes(choice.text)) flags.push(`Item ${n} (${item}): the payee did not take "${choice.text}".`);
         } else {
-          ops.choose(PROVIDER_NOT_LISTED);
-          await env.sleep(700);
-          const field = ops.has(b, SEL.providerName) ? SEL.providerName : SEL.vendorName;
-          await put(field, name, "the payee's name");
+          // Say what the list held, so a person can tell a wording difference from a list that did not load.
+          const first = name.toLowerCase().split(/\s+/)[0] ?? "";
+          const near = entries.filter((e) => e.toLowerCase().includes(first)).slice(0, 5);
+          const seen = `${entries.length} entr${entries.length === 1 ? "y" : "ies"} read from the ${payeeTarget === "provider" ? "provider" : "vendor"} list; ${choice.how === "ambiguous" ? `${choice.count} contain "${name}"` : `none matches "${name}"`}${near.length ? `; nearest: ${near.map((e) => `"${e}"`).join(", ")}` : ""}`;
+          env.report(`"${name}" is not in the list (${seen}). Choosing "${PROVIDER_NOT_LISTED}".`);
+          if (!ops.choose(PROVIDER_NOT_LISTED)) {
+            flags.push(`Item ${n} (${item}): "${name}" is not in StepUp's list (${seen}), and "${PROVIDER_NOT_LISTED}" could not be chosen.`);
+          } else {
+            await env.sleep(800);
+            const field = ops.has(b, SEL.providerName) ? SEL.providerName : ops.has(b, SEL.vendorName) ? SEL.vendorName : undefined;
+            if (!field) flags.push(`Item ${n} (${item}): "${name}" is not in StepUp's list (${seen}); after "${PROVIDER_NOT_LISTED}" no name field appeared.`);
+            else await put(field, name, "the payee's name");
+          }
         }
         // A listed business may list people under it: choose one only when its words match exactly.
         if (ops.hasPicker(b, "individualProvider")) {
           const person = (d["Service Provider"] ?? "").trim();
           let done = false;
           if (person && ops.open(b, "individualProvider")) {
-            await env.sleep(350);
-            const c = chooseEntry(ops.menu(), person);
+            const c = chooseEntry(await readMenu(), person);
             if (c.how === "exact" || c.how === "normalized") {
               ops.choose(c.text);
               await env.sleep(600);

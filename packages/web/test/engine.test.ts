@@ -249,6 +249,15 @@ describe("filing one group, start to finish", () => {
     expect(s.guard).toMatch(/total/);
   });
 
+  it("says what the payee list held when the name is not in it, instead of only saying it failed", async () => {
+    const { ops, s, clock } = site();
+    s.blocks[0]!.scan = { cost: "5.00" };
+    const out = await run(job([row("a", { ...book.data, Vendor: "Nonesuch Mart" })]), ops, clock);
+    expect(out).toMatchObject({ status: "ready" });
+    // not listed: the name is typed into the field that appears, and nothing is guessed from a near entry
+    expect(s.blocks[0]!.payee).toBe("Nonesuch Mart");
+  });
+
   it("stops at once when asked", async () => {
     const { ops, s, clock } = site();
     const out = await run(job([book]), ops, clock, () => true);
