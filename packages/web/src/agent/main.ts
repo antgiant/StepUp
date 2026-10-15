@@ -69,6 +69,8 @@ declare global {
     },
     appHome,
     currentPage: () => normalizeUrl(location.href),
+    readPage: () => document,
+    currentUrl: () => location.href,
   };
   agent = new StepUpAgent(host, carried);
 

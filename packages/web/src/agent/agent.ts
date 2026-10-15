@@ -19,6 +19,7 @@ import {
 } from "@step-up/shared/web";
 import type { Observed } from "./observe.js";
 import { AGENT_PROTOCOL, type AgentToApp, type AppToAgent, type RecordingReport } from "./protocol.js";
+import { mapForm, type FormRoot } from "./form.js";
 import { Recorder } from "./recorder.js";
 import { findAccessToken, tokenFresh, PERSON_SCOPE, PROVIDER_SCOPE, type StepUpToken } from "./token.js";
 
@@ -87,6 +88,10 @@ export interface AgentHost {
   /** Where the app lives, with a trailing slash. */
   appHome: string;
   currentPage(): string;
+  /** The page's document, for reading the form on it. Optional: without it a form map is empty. */
+  readPage?(): FormRoot;
+  /** The page's full address (the wizard step is in it). */
+  currentUrl?(): string;
 }
 
 /** What survives replacing the agent with a newer copy of itself (a second click loads the latest script). */
@@ -328,6 +333,9 @@ export class StepUpAgent {
       case "stepup-record":
         if (m.on) this.recorder.start(new Date(this.host.now()).toISOString(), this.host.currentPage(), m.values === true);
         else this.recorder.stop();
+        break;
+      case "stepup-formmap":
+        this.post({ type: "stepup-formmap", map: mapForm(this.host.readPage?.() ?? { querySelectorAll: () => [] }, this.host.currentUrl?.() ?? this.host.currentPage()) });
         break;
       case "stepup-report":
         this.post({ type: "stepup-recording", report: this.recorder.report() });

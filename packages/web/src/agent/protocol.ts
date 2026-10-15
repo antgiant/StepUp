@@ -1,11 +1,12 @@
+import type { FormMap } from "./form.js";
 import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@step-up/shared/web";
 
 /**
  * Bumped when the agent's messages change in a way an older copy of the script (or an older open app tab) would not
  * understand. The app compares it with the version an agent reports and tells the person to click the bookmark again when
- * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages.
+ * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map.
  */
-export const AGENT_PROTOCOL = 2;
+export const AGENT_PROTOCOL = 3;
 
 /** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
 export type AgentToApp =
@@ -19,7 +20,9 @@ export type AgentToApp =
   | { type: "stepup-learned"; kind: "vendors"; entries: VendorEntry[] }
   | { type: "stepup-learned"; kind: "students"; students: StepUpStudent[] }
   | { type: "stepup-learned"; kind: "balances"; balances: Record<string, StepUpBalance[]> }
-  | { type: "stepup-recording"; report: RecordingReport };
+  | { type: "stepup-recording"; report: RecordingReport }
+  /** The map of the controls on the page's current wizard step: names and types, never values. */
+  | { type: "stepup-formmap"; map: FormMap };
 
 export type AppToAgent =
   | { type: "stepup-ready" }
@@ -33,7 +36,9 @@ export type AppToAgent =
    */
   | { type: "stepup-settings"; activeReads: boolean }
   | { type: "stepup-record"; on: boolean; /** Also keep the values typed into items; only when the person is entering made-up ones. */ values?: boolean }
-  | { type: "stepup-report" };
+  | { type: "stepup-report" }
+  /** Ask for the map of the step StepUp's page is on. Read-only: nothing on the page is touched. */
+  | { type: "stepup-formmap" };
 
 /** The shapes (never values) of the calls StepUp's page made while recording: enough to build the next feature from. */
 export interface RecordingReport {

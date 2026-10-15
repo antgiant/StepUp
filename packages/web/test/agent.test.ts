@@ -617,3 +617,15 @@ describe("staying in touch", () => {
     expect(tick).toBeUndefined();
   });
 });
+
+describe("mapping the form on request", () => {
+  it("answers a map request with the page's controls and changes nothing", async () => {
+    const r = make();
+    (r.host as { readPage?: unknown }).readPage = () => ({ querySelectorAll: () => [] });
+    (r.host as { currentUrl?: unknown }).currentUrl = () => "https://apply.example/SubmitReimbursement/00000000-0000-4000-8000-000000000000/2";
+    await r.agent.start();
+    r.fromApp({ type: "stepup-formmap" });
+    const reply = r.sent.find((s) => s.data.type === "stepup-formmap");
+    expect(reply?.data["map"]).toMatchObject({ step: "itemSelection", controls: [] });
+  });
+});

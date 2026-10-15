@@ -51,6 +51,8 @@ export function agentMessageFrom(origin: string, data: unknown): AgentToApp | un
       if (m["kind"] === "students" && Array.isArray(m["students"])) return { type: "stepup-learned", kind: "students", students: m["students"] as never };
       if (m["kind"] === "balances" && m["balances"] && typeof m["balances"] === "object") return { type: "stepup-learned", kind: "balances", balances: m["balances"] as never };
       return undefined;
+    case "stepup-formmap":
+      return m["map"] && typeof m["map"] === "object" && Array.isArray((m["map"] as { controls?: unknown }).controls) ? { type: "stepup-formmap", map: m["map"] as never } : undefined;
     case "stepup-recording":
       return m["report"] && typeof m["report"] === "object" ? { type: "stepup-recording", report: m["report"] as never } : undefined;
     default:

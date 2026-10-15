@@ -148,6 +148,7 @@ import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { connectionState, connectionWords, type AgentSeen } from "./agentConnection.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
+import type { FormMap } from "./agent/form.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
@@ -1586,6 +1587,10 @@ window.addEventListener("message", (ev) => {
         }).catch(() => undefined);
       }
       break;
+    case "stepup-formmap":
+      formMapReport = m.map;
+      render();
+      break;
     case "stepup-recording":
       recordingReport = m.report;
       recordingOn = m.report.on;
@@ -1630,6 +1635,8 @@ function shortReport(r: RecordingReport): unknown {
   return { ...r, calls, omittedCalls: omitted };
 }
 let recordingShort = true;
+/** The last form map the agent sent (names and types of one wizard step; never values). */
+let formMapReport: FormMap | undefined;
 
 function agentSection(): string {
   const conn = connectionState(Date.now(), Boolean(agentWin?.win.closed), agentSeen);
@@ -1647,6 +1654,8 @@ function agentSection(): string {
       ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
       : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>
          <br><button data-agent="record-values">Record, keeping what I type into an item</button> <small>(use made-up amounts, dates and names: it keeps those fields' values so the arithmetic can be learned)</small>`}</p>` : ""}
+    ${connected ? `<p class="row"><button data-agent="formmap">Map the form on this StepUp step</button> <small>(reads the names and types of the controls on the page; never what is in them, and changes nothing)</small></p>` : ""}
+    ${formMapReport ? `<p class="note">Step: ${esc(formMapReport.step ?? "not a wizard step")}. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${esc(JSON.stringify(formMapReport, null, 1))}</textarea><p class="row"><button data-agent="copy-formmap">Copy</button></p>` : ""}
     ${report ? `<p class="note">This is only the shape of the calls. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${report}</textarea>
       <p class="row"><button data-agent="copy">Copy</button> <button data-agent="short-toggle">${recordingShort ? "Show everything" : "Show the short version"}</button> <small>${report.length.toLocaleString()} characters shown</small></p>` : ""}`;
 }
@@ -3185,6 +3194,10 @@ root.addEventListener("click", async (ev) => {
     if (what === "record-on" || what === "record-values") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true, values: what === "record-values" }); }
     else if (what === "record-off") { toAgent({ type: "stepup-record", on: false }); toAgent({ type: "stepup-report" }); recordingOn = false; }
     else if (what === "report") toAgent({ type: "stepup-report" });
+    else if (what === "formmap") { formMapReport = undefined; toAgent({ type: "stepup-formmap" }); }
+    else if (what === "copy-formmap" && formMapReport) {
+      try { await navigator.clipboard.writeText(JSON.stringify(formMapReport, null, 1)); status = "Copied."; } catch { status = "Your browser would not let this page copy; select the text and copy it."; }
+    }
     else if (what === "short-toggle") recordingShort = !recordingShort;
     else if (what === "active-toggle") {
       activeReads = !activeReads;
