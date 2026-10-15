@@ -146,7 +146,7 @@ import { cacheKey, clearCache, deleteCache, listQueuedUploads, queueUpload, read
 import { copyFromPreviousYear, hasEarlierYear, loadPointer, openFromCache, openWorkspace, revalidate, snapshotFor, NoLedgerYearError, isDeadPointer, pointerFromFolder, workspaceFolder, forgetLocalPointer, savePointer, startYear, type Pointer, type OpenWorkspace } from "./workspace.js";
 import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
-import { connectionState, connectionWords, type AgentSeen } from "./agentConnection.js";
+import { chooseAgent, connectionState, connectionWords, type AgentEntry, type AgentSeen } from "./agentConnection.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import type { SpikeResult, SpikeTest } from "./agent/spike.js";
 import type { FormMap } from "./agent/form.js";
@@ -1451,9 +1451,27 @@ const setBookmarkletOpen = (open: boolean): void => {
 let agentWin: { win: Window; origin: string } | undefined;
 /** The last thing heard from the agent (hello, alive or bye): what the connection panel's wording comes from. */
 let agentSeen: AgentSeen | undefined;
+/** Every StepUp page that has spoken to this app, by its window. `agentWin` and `agentSeen` are the one in use. */
+const agents = new Map<Window, AgentEntry>();
+/** Picks the page to talk to; when it is a different one than before, it is told the app's settings, cache and switches. */
+function useBestAgent(announce: boolean): void {
+  for (const [w, e] of agents) e.closed = w.closed;
+  const key = chooseAgent(agents, Date.now());
+  const e = key ? agents.get(key) : undefined;
+  const changed = key !== agentWin?.win;
+  agentWin = key && e ? { win: key, origin: e.origin } : undefined;
+  agentSeen = e?.seen;
+  if (announce && changed && agentWin) {
+    sendSettings();
+    sendAgentCache();
+    toAgent({ type: "stepup-spike-enable", on: spikeOn });
+    if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
+  }
+}
 /** Re-evaluated every few seconds while the panel is open, so a closed or reloaded StepUp page shows up without a click. */
 let lastConnectionKind = "";
 setInterval(() => {
+  useBestAgent(true);
   const kind = connectionState(Date.now(), Boolean(agentWin?.win.closed), agentSeen).kind;
   if (kind !== lastConnectionKind) {
     lastConnectionKind = kind;
@@ -1555,32 +1573,28 @@ window.addEventListener("message", (ev) => {
   if (!m) return;
   switch (m.type) {
     case "stepup-alive":
-      agentSeen = { at: Date.now(), version: m.version, page: m.page };
-      // This tab was reloaded since the agent connected: it still has our window, we only lost it. Take it back, and tell it
-      // what it would otherwise only hear after a bookmark click (ready, its settings, what is already known).
-      if (!agentWin || agentWin.win !== ev.source) {
-        agentWin = { win: ev.source as Window, origin: ev.origin };
-        (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
-        sendSettings();
-        sendAgentCache();
-        if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
-        render();
-      }
-      break;
-    case "stepup-bye":
-      if (agentSeen) agentSeen = { ...agentSeen, gone: true };
+    case "stepup-hello": {
+      // Several StepUp pages can be talking to this app (a second tab, an older script still running). Each is kept
+      // by itself and the best one is used, so they do not take the connection from one another.
+      const win = ev.source as Window | null;
+      if (!win) break;
+      const now = Date.now();
+      const had = agents.get(win);
+      const seen: AgentSeen = { at: now, version: m.version, page: m.type === "stepup-alive" ? m.page : "" };
+      agents.set(win, { origin: ev.origin, seen, helloAt: m.type === "stepup-hello" ? now : had?.helloAt ?? 0, closed: false });
+      // A page this app has not met since it loaded (the tab here was reloaded): tell it what a click would have.
+      if (!had || m.type === "stepup-hello") win.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
+      useBestAgent(true);
       render();
       break;
-    case "stepup-hello":
-      agentSeen = { at: Date.now(), version: m.version, page: "" };
-      agentWin = { win: ev.source as Window, origin: ev.origin };
-      (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
-      sendSettings();
-      sendAgentCache();
-      toAgent({ type: "stepup-spike-enable", on: spikeOn });
-      if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
+    }
+    case "stepup-bye": {
+      const e = agents.get(ev.source as Window);
+      if (e) e.seen = { ...e.seen, gone: true };
+      useBestAgent(false);
       render();
       break;
+    }
     case "stepup-list":
       if (agentTrusted && workspace) void guarded(() => bringInStepUpList(m.results), "Bringing in StepUp's list…");
       else {
@@ -1685,7 +1699,7 @@ function spikePanel(): string {
     ? `<ul>${spikeResults.slice(0, 15).map((r) => `<li><strong>${r.ok ? "PASS" : "FAIL"}</strong> ${esc(r.test)}<br>${r.lines.map((l) => `<small>${esc(l)}</small>`).join("<br>")}</li>`).join("")}</ul>
        <p class="row"><button data-agent="spike-copy">Copy results</button> <button data-agent="spike-clear">Clear</button></p>`
     : "";
-  return `<div class="note"><strong>Spike tools are on.</strong> Use a throwaway draft with made-up values. <button data-agent="spike-off">Turn off</button>
+  return `<div class="note spike"><strong>Spike tools are on.</strong> Use a throwaway draft with made-up values. <button data-agent="spike-off">Turn off</button>
     <p class="row"><label>Test <select data-spike="kind">${(["text", "date", "pick", "file"] as const).map((v) => `<option value="${v}"${k === v ? " selected" : ""}>${v === "text" ? "Type into a field" : v === "date" ? "Set a date" : v === "pick" ? "Choose from a dropdown" : "Attach a file"}</option>`).join("")}</select></label>
       <label>Control <select data-spike="target">${opts}</select></label>
       ${k === "file" ? "" : `<label>Item number <input data-spike="index" value="${esc(spikeForm.index)}" size="2"></label>`}</p>
@@ -1714,13 +1728,15 @@ function agentSection(): string {
   lastConnectionKind = conn.kind;
   const connected = conn.kind === "connected";
   const heard = conn.kind === "none" ? "" : ` Last heard from the StepUp page at ${new Date(conn.seenAt).toLocaleTimeString()}.`;
+  const alive = [...agents.values()].filter((e) => !e.closed && !e.seen.gone && Date.now() - e.seen.at <= 65_000).length;
+  const several = alive > 1 ? ` ${alive} StepUp pages are connected: this uses the newest. Close or reload the others.` : "";
   const known = `${Object.keys(learned.categories.categories).length} categories, ${Object.keys(learned.categories.types).length} types, ${Object.keys(learned.categories.details).length} details and ${Object.keys(learned.vendors).length} providers are known.`;
   const report = recordingReport ? esc(JSON.stringify(recordingShort ? shortReport(recordingReport) : recordingReport, null, 1)) : "";
   return `<h4>StepUp connection</h4>
     <p class="note">Asking StepUp for the category list, providers and students itself is <strong>${activeReads ? "on" : "off"}</strong>.
       ${activeReads ? "About 40 small requests, at most once a day, each one a request StepUp's own pages make." : "Off, the only request this makes itself is the reimbursements list when you click; everything else is learned from what StepUp's page loads while you use it."}
       <button data-agent="active-toggle">${activeReads ? "Turn off" : "Turn on"}</button></p>
-    <p class="note">${esc(connectionWords(conn))}${esc(heard)} ${esc(known)}</p>
+    <p class="note">${esc(connectionWords(conn))}${esc(heard)}${esc(several)} ${esc(known)}</p>
     ${connected ? `<p class="row">${recordingOn
       ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
       : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>

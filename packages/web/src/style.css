@@ -262,3 +262,7 @@ details.more.inline > button.danger { margin-top: 8px; }
 .history-stepup { border: 1px solid var(--ok); }
 .history-excel { border: 1px solid var(--warn); }
 .history-details { margin: 6px 0 0; padding-left: 18px; font-size: 0.9em; }
+
+/* The spike form's fields sit in column labels inside a .row: the row's flex-basis would otherwise become their height. */
+.spike label > input, .spike label > select { flex: 0 0 auto; width: 100%; }
+.spike .row label { flex: 1 1 200px; }
