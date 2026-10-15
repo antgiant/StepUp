@@ -51,6 +51,11 @@ export function agentMessageFrom(origin: string, data: unknown): AgentToApp | un
       if (m["kind"] === "students" && Array.isArray(m["students"])) return { type: "stepup-learned", kind: "students", students: m["students"] as never };
       if (m["kind"] === "balances" && m["balances"] && typeof m["balances"] === "object") return { type: "stepup-learned", kind: "balances", balances: m["balances"] as never };
       return undefined;
+    case "stepup-spike-result": {
+      const r = m["result"] as { test?: unknown; ok?: unknown; lines?: unknown } | undefined;
+      if (!r || typeof r.test !== "string" || typeof r.ok !== "boolean" || !Array.isArray(r.lines)) return undefined;
+      return { type: "stepup-spike-result", result: { test: r.test.slice(0, 120), ok: r.ok, lines: r.lines.filter((l): l is string => typeof l === "string").slice(0, 20).map((l) => l.slice(0, 300)) } };
+    }
     case "stepup-formmap":
       return m["map"] && typeof m["map"] === "object" && Array.isArray((m["map"] as { controls?: unknown }).controls) ? { type: "stepup-formmap", map: m["map"] as never } : undefined;
     case "stepup-recording":

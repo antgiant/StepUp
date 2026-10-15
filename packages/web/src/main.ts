@@ -148,6 +148,7 @@ import { enforceReadOnly } from "./readOnly.js";
 import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { connectionState, connectionWords, type AgentSeen } from "./agentConnection.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
+import type { SpikeResult, SpikeTest } from "./agent/spike.js";
 import type { FormMap } from "./agent/form.js";
 import { recognise } from "./agent/signatures.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
@@ -1576,6 +1577,7 @@ window.addEventListener("message", (ev) => {
       (ev.source as Window | null)?.postMessage({ type: "stepup-ready" } satisfies AppToAgent, ev.origin);
       sendSettings();
       sendAgentCache();
+      toAgent({ type: "stepup-spike-enable", on: spikeOn });
       if (recordingOn) toAgent({ type: "stepup-record", on: true, values: recordingReport?.values === true });
       render();
       break;
@@ -1605,6 +1607,10 @@ window.addEventListener("message", (ev) => {
           render();
         }).catch(() => undefined);
       }
+      break;
+    case "stepup-spike-result":
+      spikeResults = [m.result, ...spikeResults].slice(0, 30);
+      render();
       break;
     case "stepup-formmap":
       formMapReport = m.map;
@@ -1654,6 +1660,41 @@ function shortReport(r: RecordingReport): unknown {
   return { ...r, calls, omittedCalls: omitted };
 }
 let recordingShort = true;
+
+// ---- the spike session: deliberate test actions on StepUp's page, with a read-back (never Continue, Back or Submit)
+let spikeOn = false;
+let spikeResults: SpikeResult[] = [];
+const spikeForm: { kind: "text" | "date" | "pick" | "file"; target: string; index: string; value: string; method: "events" | "typed"; option: string } = { kind: "text", target: "quantity", index: "1", value: "", method: "events", option: "" };
+let spikeFile: { name: string; mime: string; bytes: ArrayBuffer } | undefined;
+const SPIKE_TARGETS: Record<string, Array<[string, string]>> = {
+  text: [["quantity", "Quantity"], ["cost", "Cost per item"], ["additionalCosts", "Tax, shipping, etc"], ["invoiceNumber", "Invoice number"], ["benefit", "Benefit message"], ["url", "Item URL"], ["vendorName", "Vendor name"], ["providerName", "Provider name (not listed)"], ["serviceProviderName", "Service provider name (not listed)"], ["itemAmount", "Item amount (item selection step)"]],
+  date: [["purchaseDate", "Purchase date"], ["serviceDate", "Service date"]],
+  pick: [["student", "Student"], ["category", "Category"], ["categoryType", "Type"], ["categoryDetail", "Description"], ["provider", "Who did you pay? (listed provider)"], ["payee", "Who did you pay? (vendor)"], ["individualProvider", "Provider name (individual)"]],
+  file: [["receipt", "Receipt (upload step)"], ["additional", "Additional document (additional documents step)"]],
+};
+const setSpike = (on: boolean): void => {
+  spikeOn = on;
+  toAgent({ type: "stepup-spike-enable", on });
+};
+
+function spikePanel(): string {
+  if (!spikeOn) return `<p class="row"><button data-agent="spike-on">Turn on spike tools</button> <small>(test actions on a throwaway draft only; never presses Continue, Back or Submit)</small></p>`;
+  const k = spikeForm.kind;
+  const opts = (SPIKE_TARGETS[k] ?? []).map(([v, l]) => `<option value="${v}"${spikeForm.target === v ? " selected" : ""}>${esc(l)}</option>`).join("");
+  const results = spikeResults.length
+    ? `<ul>${spikeResults.slice(0, 15).map((r) => `<li><strong>${r.ok ? "PASS" : "FAIL"}</strong> ${esc(r.test)}<br>${r.lines.map((l) => `<small>${esc(l)}</small>`).join("<br>")}</li>`).join("")}</ul>
+       <p class="row"><button data-agent="spike-copy">Copy results</button> <button data-agent="spike-clear">Clear</button></p>`
+    : "";
+  return `<div class="note"><strong>Spike tools are on.</strong> Use a throwaway draft with made-up values. <button data-agent="spike-off">Turn off</button>
+    <p class="row"><label>Test <select data-spike="kind">${(["text", "date", "pick", "file"] as const).map((v) => `<option value="${v}"${k === v ? " selected" : ""}>${v === "text" ? "Type into a field" : v === "date" ? "Set a date" : v === "pick" ? "Choose from a dropdown" : "Attach a file"}</option>`).join("")}</select></label>
+      <label>Control <select data-spike="target">${opts}</select></label>
+      ${k === "file" ? "" : `<label>Item number <input data-spike="index" value="${esc(spikeForm.index)}" size="2"></label>`}</p>
+    <p class="row">${k === "text" || k === "date" ? `<label>Value <input data-spike="value" value="${esc(spikeForm.value)}" placeholder="${k === "date" ? "2026-01-31" : "a made-up value"}"></label>
+        <label>Method <select data-spike="method"><option value="events"${spikeForm.method === "events" ? " selected" : ""}>set value, then input / change / blur</option><option value="typed"${spikeForm.method === "typed" ? " selected" : ""}>type it character by character</option></select></label>`
+      : k === "pick" ? `<label>Entry to choose (exact words) <input data-spike="option" value="${esc(spikeForm.option)}" size="40"></label>`
+      : `<label>A throwaway receipt <input type="file" data-spike="file" accept=".pdf,.png,.jpg,.jpeg"></label> <small>${spikeFile ? esc(spikeFile.name) : "none chosen"}</small>`}</p>
+    <p class="row"><button class="primary" data-agent="spike-run">Run this one test</button></p>${results}</div>`;
+}
 /** The last form map the agent sent (names and types of one wizard step; never values). */
 let formMapReport: FormMap | undefined;
 
@@ -1684,6 +1725,7 @@ function agentSection(): string {
       ? `<button data-agent="record-off">Stop recording</button> <button data-agent="report">Show what was recorded</button>`
       : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>
          <br><button data-agent="record-values">Record, keeping what I type into an item</button> <small>(use made-up amounts, dates and names: it keeps those fields' values so the arithmetic can be learned)</small>`}</p>` : ""}
+    ${connected ? spikePanel() : ""}
     ${connected ? `<p class="row"><button data-agent="formmap">Map the form on this StepUp step</button> <small>(reads the names and types of the controls on the page; never what is in them, and changes nothing)</small></p>` : ""}
     ${formMapReport ? `<p class="note">${formMapRecognition(formMapReport)} Check the map, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${esc(JSON.stringify(formMapReport, null, 1))}</textarea><p class="row"><button data-agent="copy-formmap">Copy</button></p>` : ""}
     ${report ? `<p class="note">This is only the shape of the calls. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${report}</textarea>
@@ -2331,6 +2373,34 @@ const collapsedPanels = new Set<string>();
 function panel(key: string, title: string, body: string, cls = ""): string {
   return `<details class="panel${cls ? " " + cls : ""}" data-panel="${key}"${collapsedPanels.has(key) ? "" : " open"}><summary class="panel-title">${title}</summary>${body}</details>`;
 }
+/** The spike form's fields: kept as they change (no redraw, which would lose focus), a kind change redraws. */
+const onSpikeField = (ev: Event): void => {
+  const t = ev.target;
+  if (!(t instanceof HTMLElement)) return;
+  const key = t.dataset["spike"];
+  if (!key) return;
+  const v = (t as HTMLInputElement | HTMLSelectElement).value;
+  if (key === "kind") {
+    spikeForm.kind = v as typeof spikeForm.kind;
+    spikeForm.target = SPIKE_TARGETS[v]?.[0]?.[0] ?? "";
+    render();
+  } else if (key === "target") spikeForm.target = v;
+  else if (key === "index") spikeForm.index = v;
+  else if (key === "value") spikeForm.value = v;
+  else if (key === "option") spikeForm.option = v;
+  else if (key === "method") spikeForm.method = v as "events" | "typed";
+  else if (key === "file" && t instanceof HTMLInputElement && ev.type === "change") {
+    const f = t.files?.[0];
+    if (!f) return;
+    void f.arrayBuffer().then((bytes) => {
+      spikeFile = { name: f.name, mime: f.type || "application/octet-stream", bytes };
+      render();
+    });
+  }
+};
+root.addEventListener("input", onSpikeField);
+root.addEventListener("change", onSpikeField);
+
 root.addEventListener("toggle", (ev) => {
   const el = ev.target;
   if (el instanceof HTMLDetailsElement && el.classList.contains("menu")) menuOpen = el.open;
@@ -3225,6 +3295,22 @@ root.addEventListener("click", async (ev) => {
     if (what === "record-on" || what === "record-values") { recordingOn = true; recordingReport = undefined; toAgent({ type: "stepup-record", on: true, values: what === "record-values" }); }
     else if (what === "record-off") { toAgent({ type: "stepup-record", on: false }); toAgent({ type: "stepup-report" }); recordingOn = false; }
     else if (what === "report") toAgent({ type: "stepup-report" });
+    else if (what === "spike-on") setSpike(true);
+    else if (what === "spike-off") setSpike(false);
+    else if (what === "spike-clear") spikeResults = [];
+    else if (what === "spike-copy") {
+      try { await navigator.clipboard.writeText(spikeResults.map((r) => `${r.ok ? "PASS" : "FAIL"} ${r.test}\n  ${r.lines.join("\n  ")}`).join("\n")); status = "Copied."; } catch { status = "Your browser would not let this page copy."; }
+    }
+    else if (what === "spike-run") {
+      const index = Math.max(0, Math.floor(Number(spikeForm.index) || 1) - 1);
+      let test: SpikeTest | undefined;
+      if (spikeForm.kind === "text") test = { kind: "text", target: spikeForm.target as never, index, value: spikeForm.value, method: spikeForm.method };
+      else if (spikeForm.kind === "date") test = { kind: "date", target: spikeForm.target as never, index, value: spikeForm.value, method: spikeForm.method };
+      else if (spikeForm.kind === "pick") test = { kind: "pick", target: spikeForm.target as never, index, option: spikeForm.option };
+      else if (spikeFile) test = { kind: "file", target: spikeForm.target as never, name: spikeFile.name, mime: spikeFile.mime, bytes: spikeFile.bytes };
+      if (test) toAgent({ type: "stepup-spike", test });
+      else spikeResults = [{ test: "file", ok: false, lines: ["Choose a file first."] }, ...spikeResults];
+    }
     else if (what === "formmap") { formMapReport = undefined; toAgent({ type: "stepup-formmap" }); }
     else if (what === "copy-formmap" && formMapReport) {
       try { await navigator.clipboard.writeText(JSON.stringify(formMapReport, null, 1)); status = "Copied."; } catch { status = "Your browser would not let this page copy; select the text and copy it."; }

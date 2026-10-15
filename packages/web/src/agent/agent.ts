@@ -20,6 +20,7 @@ import {
 import type { Observed } from "./observe.js";
 import { AGENT_PROTOCOL, type AgentToApp, type AppToAgent, type RecordingReport } from "./protocol.js";
 import { mapForm, type FormRoot } from "./form.js";
+import { runSpike, type PageOps } from "./spike.js";
 import { Recorder } from "./recorder.js";
 import { findAccessToken, tokenFresh, PERSON_SCOPE, PROVIDER_SCOPE, type StepUpToken } from "./token.js";
 
@@ -92,6 +93,8 @@ export interface AgentHost {
   readPage?(): FormRoot;
   /** The page's full address (the wizard step is in it). */
   currentUrl?(): string;
+  /** What the spike tests may do to the page. Optional: without it every spike test is refused. */
+  pageOps?: PageOps;
   /** The text a stylesheet adds before or after an element (it counts towards a button's name). */
   pseudoText?(el: unknown, which: "::before" | "::after"): string | undefined;
 }
@@ -124,6 +127,9 @@ export class StepUpAgent {
   private activeReads = false;
   private unlisten: (() => void) | undefined;
   private stopBeat: (() => void) | undefined;
+  private spikeOn = false;
+  private spikeBusy = false;
+  private saveCount = 0;
   private disposed = false;
   private readonly appOrigin: string;
 
@@ -336,6 +342,12 @@ export class StepUpAgent {
         if (m.on) this.recorder.start(new Date(this.host.now()).toISOString(), this.host.currentPage(), m.values === true);
         else this.recorder.stop();
         break;
+      case "stepup-spike-enable":
+        this.spikeOn = m.on === true;
+        break;
+      case "stepup-spike":
+        void this.spike(m.test);
+        break;
       case "stepup-formmap":
         this.post({ type: "stepup-formmap", map: mapForm(this.host.readPage?.() ?? { querySelectorAll: () => [] }, this.host.currentUrl?.() ?? this.host.currentPage(), { pseudo: (el, which) => this.host.pseudoText?.(el, which) }) });
         break;
@@ -350,6 +362,29 @@ export class StepUpAgent {
       case "stepup-settings":
         this.activeReads = m.activeReads === true;
         break;
+    }
+  }
+
+  /** One spike test; refused unless tools are on and a page to act on exists. One at a time. */
+  private async spike(test: Parameters<typeof runSpike>[0]): Promise<void> {
+    const reply = (ok: boolean, line: string): void => this.sendLive({ type: "stepup-spike-result", result: { test: "spike", ok, lines: [line] } });
+    if (!this.spikeOn) return reply(false, "Spike tools are off.");
+    if (!this.host.pageOps || !this.host.readPage) return reply(false, "This page cannot be acted on.");
+    if (this.spikeBusy) return reply(false, "A test is already running.");
+    this.spikeBusy = true;
+    try {
+      const result = await runSpike(test, {
+        ops: this.host.pageOps,
+        root: this.host.readPage(),
+        url: this.host.currentUrl?.() ?? this.host.currentPage(),
+        sleep: (ms) => this.host.sleep(ms),
+        saves: () => this.saveCount,
+      });
+      this.sendLive({ type: "stepup-spike-result", result });
+    } catch (err) {
+      reply(false, `The test stopped: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.spikeBusy = false;
     }
   }
 
@@ -378,6 +413,8 @@ export class StepUpAgent {
   observed(o: Observed): void {
     if (this.disposed) return;
     this.recorder.note(o);
+    // StepUp's own save of the reimbursement is the best sign that a change was committed.
+    if (o.method.toUpperCase() === "PUT" && /\/api\/reimbursements\/v2\//i.test(o.url) && o.status >= 200 && o.status < 300) this.saveCount++;
     if (o.status < 200 || o.status >= 300 || !o.responseText) return;
     const url = o.url;
     const P = STEPUP_PATTERNS;
