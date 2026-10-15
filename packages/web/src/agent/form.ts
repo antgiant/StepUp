@@ -79,8 +79,17 @@ const clean = (s: string | null | undefined, max = 60): string | undefined => {
   const t = (s ?? "").replace(/\s+/g, " ").trim();
   return t ? t.slice(0, max) : undefined;
 };
-/** "Item 1 : Some product name" keeps only "Item 1": what follows the colon is read from the receipt. */
-const wordsOnly = (s: string | undefined): string | undefined => (s === undefined ? s : s.split(/\s:\s|:\s/)[0]?.trim() || undefined);
+/**
+ * "Item 1 : Some product name" keeps only "Item 1": what follows the colon is read from the receipt. Headings also greet
+ * people by name ("Upload a receipt or invoice for <student>."), so a capitalised run after "for", "Hello" or "Welcome" is
+ * replaced with a placeholder: a name must never leave the page in a map.
+ */
+export const wordsOnly = (s: string | undefined): string | undefined => {
+  if (s === undefined) return s;
+  const head = s.split(/\s:\s|:\s/)[0]?.trim() ?? "";
+  const NAME = "[A-Z][\\w'\u2019.-]*(?:\\s+[A-Z][\\w'\u2019.-]*)*";
+  return head.replace(new RegExp(`\\b(for|to|Hello,?|Hi,?|Welcome,?)\\s+${NAME}`, "g"), "$1 <name>") || undefined;
+};
 
 function labelOf(el: FormEl): string | undefined {
   const aria = clean(el.getAttribute("aria-label"));

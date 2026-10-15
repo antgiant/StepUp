@@ -101,6 +101,13 @@ describe("mapping a step's controls", () => {
     expect(map.headings).toEqual(["Item 1"]);
   });
 
+  it("never lets a person's name out of a heading", () => {
+    const h = (t: string) => bare("H3", t);
+    const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);
+    expect(JSON.stringify(map)).not.toMatch(/Pat|Example/);
+    expect(map.headings[0]).toBe("Upload a receipt or invoice for <name>");
+  });
+
   it("is empty and unnamed off the wizard", () => {
     const map = mapForm(page([]), "https://apply.example/Dashboard");
     expect(map.step).toBeUndefined();
