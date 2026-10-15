@@ -75,6 +75,15 @@ describe("recognising the recorded steps", () => {
     expect(recognise(typed).problems).toEqual([]);
   });
 
+  it("item details with the delete question open is its own variant", () => {
+    const m = map(
+      "itemDetails",
+      [...detailsCommon, { kind: "dropdown", label: "Who did you pay?*", block, options: 116 }, { kind: "text", id: "vendorName", block, hasValue: true }, { kind: "link", id: "close_button" }, { kind: "button", id: "deny-button", text: "Cancel" }, { kind: "button", id: "confirm-button", text: "Delete Item" }],
+      ["Item 1", "Are you sure you want to delete \"Item 1"],
+    );
+    expect(recognise(m)).toMatchObject({ variant: "confirmDelete", problems: [] });
+  });
+
   it("additional documents, with documents attached", () => {
     const m = map("additionalDocuments", [
       btn("BROWSE"),

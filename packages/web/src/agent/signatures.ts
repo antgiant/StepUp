@@ -44,6 +44,7 @@ const NOT_DETECTED = /not able to detect items or services/i;
 const READ_ERROR = /something went wrong on our end/i;
 const DETECTED = /item\(s\) and\/or service\(s\) detected/i;
 const LOADING = /^loading\.{3}$/i;
+const CONFIRM_DELETE = /are you sure you want to delete/i;
 
 function rulesFor(step: WizardStep, headings: string[]): { variant: string; busy: boolean; rules: Rule[] } {
   const has = (re: RegExp): boolean => headings.some((h) => re.test(h));
@@ -100,9 +101,13 @@ function rulesFor(step: WizardStep, headings: string[]): { variant: string; busy
     }
     case "itemDetails":
       return {
-        variant: "default",
+        // While StepUp asks "Are you sure you want to delete…" the page behind it is not for filling or continuing.
+        variant: has(CONFIRM_DELETE) ? "confirmDelete" : "default",
         busy,
         rules: [
+          { name: "close the delete question", match: byId("link", "close_button") },
+          { name: "cancel the delete", match: (c) => c.kind === "button" && c.id === "deny-button" && /^cancel$/i.test(c.text ?? "") },
+          { name: "confirm the delete", match: (c) => c.kind === "button" && c.id === "confirm-button" && /^delete item$/i.test(c.text ?? "") },
           { name: "purchase date", match: byId("date", "purchaseDate"), required: true },
           { name: "category", match: byId("dropdown", "category"), required: true },
           { name: "quantity", match: byPlaceholder(/^Enter Quantity$/i), required: true },
