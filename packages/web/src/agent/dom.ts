@@ -135,10 +135,31 @@ export const pageOps: PageOps = {
   clickMenuItem: clickMenu,
 };
 
-/** The Submit guard: while a reason is set, a click on (or Enter on) a Submit button, and a form submit, go nowhere. */
+/**
+ * The Submit guard: while a reason is set, a click on (or Enter on) a Submit button, and a form submit, go nowhere.
+ * Its listeners live on the page, not in the script, so a script that is replaced (the bookmark clicked again) must take
+ * the earlier script's guard away with it, or that guard keeps holding Submit with a reason from a run long over.
+ */
+declare global {
+  interface Window {
+    __stepUpGuard?: { remove(): void };
+  }
+}
 let guardReason: string | undefined;
 let guardInstalled = false;
 let guardSay: ((text: string) => void) | undefined;
+
+/** Takes any guard this page has away (this script's own, or one a replaced script left). */
+export function removeGuard(): void {
+  guardReason = undefined;
+  guardInstalled = false;
+  try {
+    window.__stepUpGuard?.remove();
+  } catch {
+    /* nothing to remove */
+  }
+  window.__stepUpGuard = undefined;
+}
 const isSubmitButton = (t: EventTarget | null): boolean => {
   const b = (t as Element | null)?.closest?.("button, [role='button'], input[type='submit']");
   return Boolean(b && /^\s*submit\b/i.test((b as HTMLElement).textContent ?? (b as HTMLInputElement).value ?? ""));
@@ -152,14 +173,25 @@ function installGuard(): void {
     ev.stopImmediatePropagation();
     guardSay?.(`Submit is held. ${guardReason}`);
   };
-  document.addEventListener("click", (ev) => isSubmitButton(ev.target) && stop(ev), true);
-  document.addEventListener("keydown", (ev) => (ev.key === "Enter" || ev.key === " ") && isSubmitButton(ev.target) && stop(ev), true);
+  const onClick = (ev: Event): void => void (isSubmitButton(ev.target) && stop(ev));
+  const onKey = (ev: KeyboardEvent): void => void ((ev.key === "Enter" || ev.key === " ") && isSubmitButton(ev.target) && stop(ev));
+  document.addEventListener("click", onClick, true);
+  document.addEventListener("keydown", onKey, true);
   document.addEventListener("submit", stop, true);
+  window.__stepUpGuard = {
+    remove: () => {
+      document.removeEventListener("click", onClick, true);
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("submit", stop, true);
+    },
+  };
 }
 
 /** The engine's view of the page (engine.ts). `say` is how a held Submit explains itself. */
 export function makeFilingOps(say: (text: string) => void): FilingOps {
   guardSay = say;
+  // A new script starts with nothing held: whatever an earlier one left on this page is from a run that is over.
+  removeGuard();
   const buttons = (): HTMLButtonElement[] => Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter((b) => visible(b));
   const words = (b: Element): string => (b.textContent ?? "").replace(/\s+/g, " ").trim();
   const press = (what: PressTarget, i = 0): boolean => {

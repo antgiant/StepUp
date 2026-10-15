@@ -1,7 +1,7 @@
 import { StepUpAgent, type AgentHost, type AgentState } from "./agent.js";
 import { observeTraffic } from "./observe.js";
 import { normalizeUrl } from "./recorder.js";
-import { isVisible, makeFilingOps, pageOps, pseudoText } from "./dom.js";
+import { isVisible, makeFilingOps, pageOps, pseudoText, removeGuard } from "./dom.js";
 
 /**
  * The script the bookmark loads (`stepup-bookmarklet.js`). Clicking the bookmark again loads the latest copy: the old agent
@@ -113,6 +113,7 @@ declare global {
     agent,
     dispose: () => {
       window.removeEventListener("pagehide", bye);
+      removeGuard();
       observers.dispose();
       timing?.disconnect();
       history.pushState = origPush;
