@@ -16,7 +16,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Nothing goes live unless the whole history passes the secret scan (rules: .gitleaks.toml).
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: scan
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

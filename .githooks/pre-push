@@ -1,0 +1,17 @@
+#!/bin/sh
+# Blocks a push whose new commits contain a secret (same rules as the CI "Secret scan": .gitleaks.toml + gitleaks defaults).
+# Enabled once per clone with:  git config core.hooksPath .githooks      (needs gitleaks: brew install gitleaks)
+zero=0000000000000000000000000000000000000000
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-push: gitleaks is not installed, so the push cannot be checked. Install it (brew install gitleaks) and try again." >&2
+  exit 1
+fi
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue # deleting a branch
+  if [ "$remote_sha" = "$zero" ]; then range="$local_sha --not --remotes"; else range="$remote_sha..$local_sha"; fi
+  if ! gitleaks git --redact --no-banner --log-opts="$range" . ; then
+    echo "pre-push: secret scan failed for $local_ref; push blocked. Remove the secret, or allowlist it in .gitleaks.toml if it is meant to be public." >&2
+    exit 1
+  fi
+done
+exit 0
