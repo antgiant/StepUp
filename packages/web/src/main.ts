@@ -1706,6 +1706,27 @@ interface FilingRun {
 }
 let filing: FilingRun | undefined;
 
+/** The run is kept across a reload of this tab, so a number that arrives later can still be put on the right rows. */
+const FILING_KEY = "stepup.filingRun";
+function persistFiling(): void {
+  try {
+    if (!filing || !workspace || filing.submitted) localStorage.removeItem(FILING_KEY);
+    else localStorage.setItem(FILING_KEY, JSON.stringify({ year: workspace.year.label, at: Date.now(), purchaseId: filing.purchaseId, title: filing.title, itemIds: filing.itemIds, matched: filing.matched }));
+  } catch {
+    /* kept for this visit only */
+  }
+}
+function restoreFiling(): void {
+  if (filing || !workspace) return;
+  try {
+    const raw = JSON.parse(localStorage.getItem(FILING_KEY) ?? "null") as { year?: string; at?: number; purchaseId?: string; title?: string; itemIds?: string[]; matched?: string[] } | null;
+    if (!raw || raw.year !== workspace.year.label || !raw.purchaseId || !Array.isArray(raw.itemIds) || Date.now() - (raw.at ?? 0) > 3 * 24 * 3_600_000) return;
+    filing = { purchaseId: raw.purchaseId, title: raw.title ?? "Filing", itemIds: raw.itemIds, lines: ["Picked up from before this page was reloaded."], running: false, ...(raw.matched ? { matched: raw.matched } : {}) };
+  } catch {
+    /* nothing kept */
+  }
+}
+
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 async function startFiling(purchaseId: string): Promise<void> {
@@ -1725,6 +1746,7 @@ async function startFiling(purchaseId: string): Promise<void> {
     const driveId = workspace.driveId;
     const title = `${g.child}: ${g.receipt.filename ?? g.receipt.id}`;
     filing = { purchaseId, title, itemIds: g.rows.map((r) => r.itemId), lines: ["Reading the files…"], running: true };
+    persistFiling();
     render();
     const made = await buildJob(g, (id) => storage.download(driveId, id, "Reading a document…"));
     if ("problem" in made) {
@@ -1745,6 +1767,7 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
   filing.running = false;
   filing.outcome = outcome;
   filing.matched = outcome.matched;
+  persistFiling();
   if (outcome.status === "stopped" && outcome.kind === "missingServiceDate" && workspace) {
     const note = `${todayIso()}: Missing Service Date: required for this category, needs filling in.`;
     try {
@@ -1763,7 +1786,14 @@ async function onFilingResult(outcome: FilingOutcome): Promise<void> {
 
 /** The person submitted and StepUp named the reimbursement: record it as the command line always did. */
 async function onFilingSubmitted(number: string, guid: string | undefined): Promise<void> {
-  if (!filing || !workspace) return;
+  restoreFiling();
+  if (!workspace) return;
+  if (!filing) {
+    status = `StepUp's confirmation named reimbursement #${number}, but no filing run is on record to put it on. On the Summary tab, use "Already submitted?" beside the right submission.`;
+    render();
+    return;
+  }
+  if (filing.submitted === number) return;
   const ids = filing.matched?.length ? filing.matched : filing.itemIds;
   filing.submitted = number;
   try {
@@ -1778,10 +1808,30 @@ async function onFilingSubmitted(number: string, guid: string | undefined): Prom
   } catch (err) {
     status = `Reimbursement #${number} was submitted, but recording it failed: ${err instanceof Error ? err.message : String(err)}. Update the rows by hand.`;
   }
+  persistFiling();
   render();
 }
 
+/** The person says a group was submitted (the number is on StepUp's confirmation): record it as a submitted walk would. */
+async function recordByHand(purchaseId: string, raw: string): Promise<void> {
+  const number = raw.trim().replace(/^#/, "");
+  if (!/^\d{4,12}$/.test(number)) {
+    status = "That does not look like a reimbursement number (digits only, as on StepUp's confirmation).";
+    render();
+    return;
+  }
+  const g = filingGroups(ledger.state, ctx()).groups.find((x) => x.purchaseId === purchaseId);
+  if (!g) {
+    status = "That submission is not in the list any more.";
+    render();
+    return;
+  }
+  filing = { purchaseId, title: `${g.child}: ${g.receipt.filename ?? g.receipt.id}`, itemIds: g.rows.map((r) => r.itemId), lines: [], running: false };
+  await onFilingSubmitted(number, undefined);
+}
+
 function filingPanel(): string {
+  restoreFiling();
   if (!filing) return "";
   const f = filing;
   const o = f.outcome;
@@ -1971,7 +2021,8 @@ function planPanel(): string {
       <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
       ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
-      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p></li>`).join("");
+      <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p>
+      <p class="row"><label>Already submitted in StepUp? Its reimbursement number <input id="file-record-${esc(g.purchaseId)}" inputmode="numeric" size="12"></label> <button data-file-record="${esc(g.purchaseId)}">Record it</button></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
   return `${filingPanel()}<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
     ${groups ? `<ul>${groups}</ul>` : `<p class="note">Nothing is ready yet.</p>`}
@@ -3332,7 +3383,7 @@ root.addEventListener("click", async (ev) => {
       const picked = legacy.legacy!.year.result.report.ambiguousReceipts.find((a) => a.resolvedFromCache && legacy.legacy!.ledger.state.items[a.itemId]?.purchaseId === id);
       const candidates = un?.candidates ?? picked?.candidates;
       if (candidates) await guarded(async () => { const now = await chooseReceipt(legacy, candidates, d["legacyPick"] ? candidates[Number(d["fileIndex"])] : undefined, id); if (now && view.name === "purchase") view = { name: "purchase", id: now }; persist(); }, "Saving your answer…");
-    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined) {
+    } else if (d["fileGroup"] !== undefined || d["fileStop"] !== undefined || d["fileRelease"] !== undefined || d["fileRecord"] !== undefined) {
       // Filing from an Excel year (the owner's exception): handled by the shared handlers below.
     } else if (d["go"] || d["historyMore"] !== undefined || d["pivotReset"] !== undefined || d["drillClear"] !== undefined || d["pcell"] !== undefined || d["open"] || d["preview"] || d["statement"] || t.id === "close-preview" || t.id === "dismiss-status" || t.id === "sign-out" || t.id === "disconnect" || t.id === "share" || t.id === "new-year" || t.id === "reload-app" || t.id === "toggle-detail" || t.id === "stepup-apply" || t.id === "stepup-ignore" || t.dataset["agent"] !== undefined || t.id === "stepup-result-close" || t.dataset["stepupYear"] !== undefined || t.id === "show-bookmarklet" || t.id === "close-bookmarklet" || t.id === "copy-bookmarklet") {
       // fall through to the shared handlers below
@@ -3461,6 +3512,10 @@ root.addEventListener("click", async (ev) => {
     render();
   } else if (t.dataset["fileGroup"] !== undefined) {
     await startFiling(t.dataset["fileGroup"] ?? "");
+  } else if (t.dataset["fileRecord"] !== undefined) {
+    const id = t.dataset["fileRecord"] ?? "";
+    const input = root.querySelector<HTMLInputElement>(`input[id="file-record-${CSS.escape(id)}"]`);
+    await recordByHand(id, input?.value ?? "");
   } else if (t.dataset["fileStop"] !== undefined) {
     toAgent({ type: "stepup-file-stop" });
   } else if (t.dataset["fileRelease"] !== undefined) {

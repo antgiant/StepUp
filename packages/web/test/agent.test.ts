@@ -629,3 +629,17 @@ describe("mapping the form on request", () => {
     expect(reply?.data["map"]).toMatchObject({ step: "itemSelection", controls: [] });
   });
 });
+
+describe("noticing a submission", () => {
+  it("reports the reimbursement number once, from the confirmation page, without a walk having run", async () => {
+    const r = make();
+    const host = r.host as { filingOps?: unknown; currentUrl?: unknown };
+    const url = "https://apply.example/SubmitReimbursement/Confirmation/00000000-0000-4000-8000-000000000000";
+    host.currentUrl = () => url;
+    host.filingOps = { confirmationNumber: () => "36534695" };
+    await r.agent.start();
+    const seen = r.sent.filter((s) => s.data.type === "stepup-file-submitted");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.data).toMatchObject({ number: "36534695", guid: "00000000-0000-4000-8000-000000000000" });
+  });
+});

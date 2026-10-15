@@ -135,6 +135,7 @@ export class StepUpAgent {
   private stopBeat: (() => void) | undefined;
   private spikeOn = false;
   private filing = false;
+  private watching = false;
   private filingStop = false;
   private spikeBusy = false;
   private saveCount = 0;
@@ -222,6 +223,10 @@ export class StepUpAgent {
     this.stopBeat?.();
     this.stopBeat = this.host.every?.(HEARTBEAT_MS, () => this.beat());
     this.beat();
+    if (!this.watching) {
+      this.watching = true;
+      void this.watchConfirmations();
+    }
     this.lastListSignature = signatureOf(results);
     this.post({ type: "stepup-list", results });
     say(`Connected. Sent ${results.length} reimbursements to Step Up Helper: switch to its tab to see what changed.`);
@@ -397,32 +402,30 @@ export class StepUpAgent {
         cancelled: () => this.filingStop,
       });
       this.sendLive({ type: "stepup-file-result", outcome });
-      if (outcome.status === "ready") void this.watchForSubmission();
     } finally {
       this.filing = false;
     }
   }
 
-  /** After a walk ends at the Summary: when the person submits, StepUp's confirmation names the reimbursement. */
-  private async watchForSubmission(): Promise<void> {
+  /**
+   * While connected, StepUp's confirmation page names a reimbursement the moment one is submitted: report it once. It does not
+   * depend on a walk having been run from this script, so a reload and a fresh click of the bookmark still notice it.
+   */
+  private async watchConfirmations(): Promise<void> {
     const ops = this.host.filingOps;
-    if (!ops) return;
-    const until = this.host.now() + 40 * 60_000;
+    if (!ops || !this.host.currentUrl) return;
+    let reported: string | undefined;
+    // A click of the bookmark starts a fresh watch, so a long one is never needed.
+    const until = this.host.now() + 8 * 3_600_000;
     while (!this.disposed && this.host.now() < until) {
-      await this.host.sleep(1000);
-      const step = ops.map().step;
-      if (step === "summary" || step === undefined || step === "itemDetails") continue;
-      if (step !== "confirmation") continue;
-      for (let i = 0; i < 20; i++) {
-        const number = ops.confirmationNumber();
-        if (number) {
-          const guid = /\/SubmitReimbursement\/Confirmation\/([0-9a-f-]{36})/i.exec(this.host.currentUrl?.() ?? "")?.[1];
-          this.sendLive({ type: "stepup-file-submitted", number, ...(guid ? { guid } : {}) });
-          return;
-        }
-        await this.host.sleep(500);
+      await this.host.sleep(1500);
+      const guid = /\/SubmitReimbursement\/Confirmation\/([0-9a-f-]{36})/i.exec(this.host.currentUrl())?.[1];
+      if (!guid) continue;
+      const number = ops.confirmationNumber();
+      if (number && number !== reported) {
+        reported = number;
+        this.sendLive({ type: "stepup-file-submitted", number, guid });
       }
-      return;
     }
   }
 
