@@ -71,6 +71,14 @@ declare global {
     currentPage: () => normalizeUrl(location.href),
     readPage: () => document,
     currentUrl: () => location.href,
+    pseudoText: (el, which) => {
+      try {
+        const c = getComputedStyle(el as Element, which).content;
+        return !c || c === "none" || c === "normal" ? undefined : c.replace(/^["']|["']$/g, "");
+      } catch {
+        return undefined;
+      }
+    },
   };
   agent = new StepUpAgent(host, carried);
 

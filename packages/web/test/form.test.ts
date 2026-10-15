@@ -108,6 +108,12 @@ describe("mapping a step's controls", () => {
     expect(map.controls.map((c) => c.text)).toEqual(["Continue", "Continue to Item/Service Details"]);
   });
 
+  it("describes a wordless button by how it is built, including text a stylesheet adds", () => {
+    const btn = el({ tag: "button", attrs: { class: "btn btn-primary next-step", "aria-labelledby": "x" } });
+    const map = mapForm(page([btn]), url, { pseudo: (_e, w) => (w === "::after" ? "Continue" : undefined) });
+    expect(map.controls[0]!.build).toEqual({ classes: ["btn", "btn-primary", "next-step"], points: ["aria-labelledby"], after: "Continue" });
+  });
+
   it("never lets a person's name out of a heading", () => {
     const h = (t: string) => bare("H3", t);
     const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);

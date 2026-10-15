@@ -92,6 +92,8 @@ export interface AgentHost {
   readPage?(): FormRoot;
   /** The page's full address (the wizard step is in it). */
   currentUrl?(): string;
+  /** The text a stylesheet adds before or after an element (it counts towards a button's name). */
+  pseudoText?(el: unknown, which: "::before" | "::after"): string | undefined;
 }
 
 /** What survives replacing the agent with a newer copy of itself (a second click loads the latest script). */
@@ -335,7 +337,7 @@ export class StepUpAgent {
         else this.recorder.stop();
         break;
       case "stepup-formmap":
-        this.post({ type: "stepup-formmap", map: mapForm(this.host.readPage?.() ?? { querySelectorAll: () => [] }, this.host.currentUrl?.() ?? this.host.currentPage()) });
+        this.post({ type: "stepup-formmap", map: mapForm(this.host.readPage?.() ?? { querySelectorAll: () => [] }, this.host.currentUrl?.() ?? this.host.currentPage(), { pseudo: (el, which) => this.host.pseudoText?.(el, which) }) });
         break;
       case "stepup-report":
         this.post({ type: "stepup-recording", report: this.recorder.report() });

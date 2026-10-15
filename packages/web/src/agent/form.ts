@@ -56,12 +56,14 @@ export interface MappedControl {
   hasValue?: boolean;
   /** How many choices a dropdown lists (their words are not kept: they can be names). */
   options?: number;
+  /** For a button with no words of its own: how it is built, so it can still be told apart (class names, child tags, pointers to a label). */
+  build?: { classes?: string[]; children?: string[]; points?: string[]; before?: string; after?: string };
   /** The same control repeated this many times (item blocks repeat ids). */
   count?: number;
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 4;
+export const FORM_MAP_VERSION = 5;
 
 export interface FormMap {
   mapVersion: number;
@@ -103,7 +105,18 @@ function labelOf(el: FormEl): string | undefined {
   return wordsOnly(clean(label?.textContent));
 }
 
-export function mapForm(root: FormRoot, url: string): FormMap {
+/**
+ * `pseudo` reads the text a stylesheet puts before or after an element (the page's own `getComputedStyle`), which is part
+ * of a button's name to a screen reader and to the command line's lookup but is not in its text content.
+ */
+export interface MapOptions {
+  pseudo?(el: FormEl, which: "::before" | "::after"): string | undefined;
+}
+
+const classWords = (el: FormEl): string[] =>
+  (el.getAttribute("class") ?? "").split(/\s+/).filter((w) => w && w.length <= 30 && !/[0-9]/.test(w)).slice(0, 8);
+
+export function mapForm(root: FormRoot, url: string, options: MapOptions = {}): FormMap {
   const step = detectStep(url);
   const path = url.replace(/^https?:\/\/[^/]+/i, "").replace(/[?#].*$/, "").replace(new RegExp(UUID, "ig"), "<id>");
   const seen = new Map<string, MappedControl>();
@@ -128,6 +141,20 @@ export function mapForm(root: FormRoot, url: string): FormMap {
       // what a person using a screen reader, and the command line's name-based lookup, would be told it is.
       const named = clean(el.textContent) ?? clean(el.getAttribute("title")) ?? clean(el.querySelectorAll("img")[0]?.getAttribute("alt")) ?? clean(el.querySelectorAll("title")[0]?.textContent);
       if (named && plainButtonText(named)) c.text = named;
+      if (!c.text) {
+        const build: NonNullable<MappedControl["build"]> = {};
+        const classes = classWords(el);
+        if (classes.length) build.classes = classes;
+        const children = Array.from(el.querySelectorAll("*")).map((k) => k.tagName.toLowerCase()).slice(0, 6);
+        if (children.length) build.children = children;
+        const points = ["aria-labelledby", "aria-describedby", "data-bs-target", "form", "type"].filter((a) => el.getAttribute(a) !== null);
+        if (points.length) build.points = points;
+        for (const which of ["::before", "::after"] as const) {
+          const words = clean(options.pseudo?.(el, which));
+          if (words && plainButtonText(words)) build[which === "::before" ? "before" : "after"] = words;
+        }
+        if (Object.keys(build).length) c.build = build;
+      }
     }
     const block = el.closest("[id^='collapseOne____item_']")?.getAttribute("id");
     if (block) c.block = block;
@@ -136,7 +163,7 @@ export function mapForm(root: FormRoot, url: string): FormMap {
     if (tag === "input" || tag === "textarea" || tag === "select") c.hasValue = kind === "checkbox" || kind === "radio" ? Boolean(el.checked) : (el.value ?? "").length > 0;
     if (toggles) c.options = el.closest(".dropdown")?.querySelectorAll("li, .dropdown-item").length ?? 0;
     // Repeats of the same control in other item blocks collapse into one line with a count (the block id is left out of the key).
-    const key = JSON.stringify([c.kind, c.id, c.name, c.placeholder, c.label, c.text, c.required, c.disabled, c.hasValue, c.options]);
+    const key = JSON.stringify([c.kind, c.id, c.name, c.placeholder, c.label, c.text, c.required, c.disabled, c.hasValue, c.options, c.build]);
     const had = seen.get(key);
     if (had) had.count = (had.count ?? 1) + 1;
     else seen.set(key, c);

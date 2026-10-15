@@ -218,3 +218,9 @@ owner present (value entry, file attach) → M3 → M4 → M5. No reordering; no
 **Spike session checklist** (one sitting on a throwaway draft, owner present): value entry accepted by Blazor/Radzen
 controls; file attach through the file control; **providers learned** (open "Who did you pay?", then the connection panel's
 provider count rises above 0 and `_stepup-cache` has them); the recorded form map.
+
+**Observed on item selection (2026-10-14, recorded maps):** after an item is ticked StepUp shows an editable name and an
+amount (`$0.00` placeholder, with up/down buttons). The CLI never touched them; it set name and amount on Item/Service
+Details. **Owner preference:** make the edits on this step where possible (a nicer flow). Needs a spike: do these fields
+accept scripted entry, and does StepUp save them to the line item? Until proven, Item/Service Details stays the place
+that is verified and read back.
