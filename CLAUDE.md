@@ -4,7 +4,9 @@
 
 A school year still kept in Excel (`workspace.legacy`) is drawn by the **same screens** as a ledger year
 (`queueView`, `purchaseView`, `summaryView`, `statementsView`, `statementReview` in `packages/web/src/main.ts`), so layout and
-styling match. It is read-only: no buttons that act, no editable fields.
+styling match. It is read-only: no buttons that act, no editable fields. **One exception, decided by the owner (2026-10-14):** the
+workbook writes the CLI already makes (Status, Submitted, Reimbursement ID, Line Number, Notes, Category fixes, the status
+sync; see `packages/cli/src/filing/excelStore.ts`) stay allowed. Anything beyond them is discussed with the owner first.
 
 - Change the ledger screens and the Excel view follows. Do not build separate Excel-only screens.
 - `enforceReadOnly` (`packages/web/src/readOnly.ts`) runs over the Excel view and removes every control that is not on the
@@ -35,8 +37,9 @@ copy has not caught up, so the newer local change stands until the next read.
   (Advanced → Bring in StepUp's list). Keep it environment-agnostic: no Node imports.
 - The plan to replace the CLI is `docs/AGENT_PLAN.md` (the bookmarklet agent in `packages/web/src/agent`); what is known
   about StepUp's sign-in, calls and drafts is `docs/STEPUP_FINDINGS.md`. **Nothing may write to StepUp through its API:** the
-  agent makes a short allow-list of reads only (`isAllowedOwnRead`), and filing is fail-closed form autofill with a person
-  pressing every Continue and Submit. `docs/EXTENSION_PLAN.md` is kept for the extension option only.
+  agent makes a short allow-list of reads only (`isAllowedOwnRead`), and filing is form autofill that replicates the CLI's
+  Playwright flow. The agent may navigate the intermediate steps; it **never presses the final Submit** (legally binding) and
+  blocks a person's Submit while there is clear evidence something is wrong. `docs/EXTENSION_PLAN.md` is kept for the extension option only.
 
 ## History
 
