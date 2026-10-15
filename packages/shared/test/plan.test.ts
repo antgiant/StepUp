@@ -55,6 +55,20 @@ describe("planSubmissions", () => {
     expect(plan.skipped).toBe(2);
   });
 
+  it("keeps an item whose run only started a draft in the plan, and says the draft exists", () => {
+    const st = state();
+    st.submissions["s9"] = { id: "s9", reimbursementId: "36000001" };
+    st.items["i1"] = item("i1", "c1", 1, { submissionId: "s9" });
+    st.submissions["s1"] = { id: "s1", reimbursementId: "36000002", submittedAt: "2026-09-02" };
+    st.items["i5"] = item("i5", "c1", 5, { submissionId: "s1" });
+    const plan = planSubmissions(st, ctx);
+    const a = plan.groups.find((g) => g.childName === "Child A")!;
+    expect(a.items.map((i) => i.id)).toContain("i1");
+    expect(a.items.map((i) => i.id)).not.toContain("i5");
+    expect(a.existingDrafts).toEqual(["36000001"]);
+    expect(plan.skipped).toBe(1);
+  });
+
   it("skips items past the deadline as forfeited", () => {
     const plan = planSubmissions(state(), { ...ctx, today: "2027-07-01" });
     expect(plan.groups).toEqual([]);

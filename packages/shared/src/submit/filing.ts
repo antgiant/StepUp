@@ -20,6 +20,8 @@ export interface FilingGroup {
   additionalDocs: DocumentRec[];
   /** Statements that would be sent un-redacted (file names). */
   unredactedStatements: string[];
+  /** Drafts StepUp already holds for these items (see planSubmissions). */
+  existingDrafts: string[];
   rows: FilingRow[];
 }
 
@@ -75,6 +77,7 @@ export function filingGroups(state: LedgerState, ctx: RulesContext): { groups: F
       receipt: g.receipt,
       additionalDocs: g.additionalDocs,
       unredactedStatements: g.unredactedStatements,
+      existingDrafts: g.existingDrafts,
       rows: g.items.map((i) => filingRow(state, i, ctx)),
     })),
   };

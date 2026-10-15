@@ -12,6 +12,11 @@ export interface SubmissionGroup {
   /** Statements sent as they are because no redacted copy exists yet (file names): a person should look before filing. */
   unredactedStatements: string[];
   items: LineItem[];
+  /**
+   * Reimbursement numbers of drafts StepUp already holds for these items (a run that was started and not finished). Filing
+   * again starts a new request, so a person should see this first.
+   */
+  existingDrafts: string[];
 }
 
 export interface BlockedItem {
@@ -46,7 +51,11 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
     if (item.archived) continue;
     // An Excel year viewed read-only carries the sheet's own status on every row as an override. A row whose sheet says it
     // is still unfiled ("Unfiled (Ready to Submit)", "Unfiled (Missing Things)") is not filed, so it stays in the plan.
-    if (isFiled(item) || (item.statusOverride && !UNFILED_ECHO.test(item.statusOverride))) {
+    // A draft number written onto an item (the run that started it never finished) is not a filing: no submission date,
+    // and no StepUp status that says it was submitted. Such an item is still to be filed, and says a draft exists.
+    const submission = item.submissionId ? state.submissions[item.submissionId] : undefined;
+    const draftOnly = Boolean(submission && !submission.submittedAt && !isFiled({ ...item, submissionId: undefined }));
+    if ((isFiled(item) && !draftOnly) || (item.statusOverride && !UNFILED_ECHO.test(item.statusOverride))) {
       skipped++;
       continue;
     }
@@ -67,10 +76,11 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
     const key = `${purchase.id}|${child.id}`;
     let group = groups.get(key);
     if (!group) {
-      group = { purchaseId: purchase.id, childId: child.id, childName: child.name ?? child.id, receipt, additionalDocs: [], unredactedStatements: [], items: [] };
+      group = { purchaseId: purchase.id, childId: child.id, childName: child.name ?? child.id, receipt, additionalDocs: [], unredactedStatements: [], items: [], existingDrafts: [] };
       groups.set(key, group);
     }
     group.items.push(item);
+    if (draftOnly && submission?.reimbursementId && !group.existingDrafts.includes(submission.reimbursementId)) group.existingDrafts.push(submission.reimbursementId);
     for (const a of additionalDocsFor(state, item, purchase)) {
       const original = a.documentId ? state.documents[a.documentId] : undefined;
       const doc = original ? redactedCopyOf(state, original) ?? original : undefined;

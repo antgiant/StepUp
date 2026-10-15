@@ -2021,6 +2021,7 @@ function planPanel(): string {
       <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
       ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
+      ${g.existingDrafts.length ? `<p class="warn">StepUp already holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. Filing again starts a new request: finish or delete that draft in StepUp first, or you will have two.</p>` : ""}
       <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "In StepUp, start a new reimbursement (the student page), then press this." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p>
       <p class="row"><label>Already submitted in StepUp? Its reimbursement number <input id="file-record-${esc(g.purchaseId)}" inputmode="numeric" size="12"></label> <button data-file-record="${esc(g.purchaseId)}">Record it</button></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
