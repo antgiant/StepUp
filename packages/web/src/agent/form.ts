@@ -63,7 +63,7 @@ export interface MappedControl {
 }
 
 /** Bumped whenever what a map keeps or how it is written changes, so a pasted map says which build made it. */
-export const FORM_MAP_VERSION = 5;
+export const FORM_MAP_VERSION = 6;
 
 export interface FormMap {
   mapVersion: number;
@@ -77,8 +77,8 @@ export interface FormMap {
 }
 
 const CONTROLS = "input, select, textarea, button, [role='button'], [role='combobox'], [role='checkbox'], [role='switch']";
-/** Button words are kept when short and plainly a label: not a sentence, and nothing with digits or an @ (an id, an amount, an address). */
-const plainButtonText = (t: string): boolean => t.length <= 40 && !/[0-9@]/.test(t) && t.split(" ").length <= 6;
+/** Button words are kept when short and plainly a label (a button can hold a desktop and a mobile wording, so it is not tiny): not a sentence, and nothing with digits or an @ (an id, an amount, an address). */
+const plainButtonText = (t: string): boolean => t.length <= 70 && !/[0-9@]/.test(t) && t.split(" ").length <= 9;
 const GUID_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOTICE_WORDS = /(one moment while we read your document|not able to detect items or services|something went wrong on our end|reimbursement request for reimbursement #)/i;
 const clean = (s: string | null | undefined, max = 60): string | undefined => {

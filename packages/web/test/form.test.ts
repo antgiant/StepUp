@@ -114,6 +114,11 @@ describe("mapping a step's controls", () => {
     expect(map.controls[0]!.build).toEqual({ classes: ["btn", "btn-primary", "next-step"], points: ["aria-labelledby"], after: "Continue" });
   });
 
+  it("keeps a button's desktop and mobile wording together", () => {
+    const map = mapForm(page([el({ tag: "button", text: "CONTINUE TO ITEM/SERVICE DETAILS  CONTINUE" })]), url);
+    expect(map.controls[0]!.text).toBe("CONTINUE TO ITEM/SERVICE DETAILS CONTINUE");
+  });
+
   it("never lets a person's name out of a heading", () => {
     const h = (t: string) => bare("H3", t);
     const map = mapForm(page([], { "h1, h2, h3, h4": [h("Upload a receipt or invoice for Pat Example."), h("Welcome Pat Example"), h("Review for Pat O'Example Jr.")] }), url);
