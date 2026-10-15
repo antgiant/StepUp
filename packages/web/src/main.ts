@@ -149,6 +149,7 @@ import { STEPUP_ORIGIN, agentMessageFrom, loaderHref } from "./stepUpBridge.js";
 import { connectionState, connectionWords, type AgentSeen } from "./agentConnection.js";
 import type { AppToAgent, RecordingReport } from "./agent/protocol.js";
 import type { FormMap } from "./agent/form.js";
+import { recognise } from "./agent/signatures.js";
 import { UNCLEAR_FILTER, chooseReceipt, clearableSearch, clearDrill, drillInto, getDrill, legacyBanner, listControls, listCount, listRowAttrs, legacySpreadsheet, pivotTables, resetPivots, setPivot } from "./legacyYear.js";
 import { loadBaseline as loadReference, loadProviders } from "./reference.js";
 import { ocrLanguageName, ocrLanguages, onOcrProgress, ocrImage, setOcrLanguages } from "./ocr.js";
@@ -1656,6 +1657,16 @@ let recordingShort = true;
 /** The last form map the agent sent (names and types of one wizard step; never values). */
 let formMapReport: FormMap | undefined;
 
+/** What the step signatures say about a map: recognised exactly, still working, or what is missing or unexpected. */
+function formMapRecognition(map: FormMap): string {
+  const r = recognise(map);
+  const where = esc(r.step ?? "not a wizard step");
+  if (!r.step) return `<strong>${where}.</strong>`;
+  if (r.busy) return `<strong>${where} (${esc(r.variant)}):</strong> the page says it is still working; map again when it is done.`;
+  if (r.problems.length === 0) return `<strong>${where} (${esc(r.variant)}):</strong> recognised, nothing unexpected.`;
+  return `<strong>${where} (${esc(r.variant)}):</strong> not recognised exactly:<br>${r.problems.map((p) => `· ${esc(p)}`).join("<br>")}`;
+}
+
 function agentSection(): string {
   const conn = connectionState(Date.now(), Boolean(agentWin?.win.closed), agentSeen);
   lastConnectionKind = conn.kind;
@@ -1673,7 +1684,7 @@ function agentSection(): string {
       : `<button data-agent="record-on">Record StepUp's traffic</button> <small>(only which calls StepUp makes and the names of their fields, never values)</small>
          <br><button data-agent="record-values">Record, keeping what I type into an item</button> <small>(use made-up amounts, dates and names: it keeps those fields' values so the arithmetic can be learned)</small>`}</p>` : ""}
     ${connected ? `<p class="row"><button data-agent="formmap">Map the form on this StepUp step</button> <small>(reads the names and types of the controls on the page; never what is in them, and changes nothing)</small></p>` : ""}
-    ${formMapReport ? `<p class="note">Step: ${esc(formMapReport.step ?? "not a wizard step")}. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${esc(JSON.stringify(formMapReport, null, 1))}</textarea><p class="row"><button data-agent="copy-formmap">Copy</button></p>` : ""}
+    ${formMapReport ? `<p class="note">${formMapRecognition(formMapReport)} Check the map, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${esc(JSON.stringify(formMapReport, null, 1))}</textarea><p class="row"><button data-agent="copy-formmap">Copy</button></p>` : ""}
     ${report ? `<p class="note">This is only the shape of the calls. Check it, then copy it.</p><textarea readonly rows="10" style="width:100%;font:12px monospace">${report}</textarea>
       <p class="row"><button data-agent="copy">Copy</button> <button data-agent="short-toggle">${recordingShort ? "Show everything" : "Show the short version"}</button> <small>${report.length.toLocaleString()} characters shown</small></p>` : ""}`;
 }
