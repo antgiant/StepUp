@@ -8,6 +8,7 @@ import { OneDriveProvider,
   detectLayout,
   filesByIdPrefix,
   filesByNameHints,
+  linkRowFiles,
   gardinerRow,
   readReceiptFiles,
   listLooseFiles,
@@ -153,6 +154,14 @@ describe("older workbook layouts", () => {
     const files = [{ name: "7 - Hats.jpeg" }, { name: "6,7,8 - Citi August.pdf" }, { name: "17 - Other.pdf" }, { name: "70 - Other.pdf" }];
     expect(filesByIdPrefix("7", files)).toEqual(["7 - Hats.jpeg", "6,7,8 - Citi August.pdf"]);
     expect(filesByIdPrefix("", files)).toEqual([]);
+  });
+
+  it("adds the folder's files named for a row to what a stale workbook lists, and never drops a listed one", () => {
+    const files = [{ name: "7 - Hats.jpeg" }, { name: "6,7,8 - Citi August.pdf" }, { name: "17 - Other.pdf" }, { name: "7 - Hats receipt 2.pdf" }];
+    expect(linkRowFiles([], "7", files)).toEqual(["7 - Hats.jpeg", "6,7,8 - Citi August.pdf", "7 - Hats receipt 2.pdf"]);
+    expect(linkRowFiles(["6,7,8 - Citi August.pdf", "elsewhere.pdf"], "7", files)).toEqual(["6,7,8 - Citi August.pdf", "elsewhere.pdf", "7 - Hats.jpeg", "7 - Hats receipt 2.pdf"]);
+    expect(linkRowFiles(["7 - hats.JPEG"], "7", files)).not.toContain("7 - Hats.jpeg");
+    expect(linkRowFiles([], "", files)).toEqual([]);
   });
 
   it("takes a row's own numbered file as the receipt and the shared one as proof, instead of calling it unclear", () => {

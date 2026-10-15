@@ -69,6 +69,18 @@ export function filesByIdPrefix(id: string, files: ReadonlyArray<{ name: string 
 }
 
 /**
+ * A row's files for a workbook whose "Documentation File" columns name them: what the columns say, then any file in the
+ * folder that carries the row's ID in its name and is not listed. The columns are Excel's own scan of the folder and are
+ * stale until the workbook is refreshed, so a receipt saved since then would otherwise look missing. Never removes a
+ * file the columns name, and never links by anything but the "NN - " naming habit.
+ */
+export function linkRowFiles(listed: readonly string[], id: string, files: ReadonlyArray<{ name: string }>): string[] {
+  const have = new Set(listed.map((n) => n.toLowerCase()));
+  const extra = filesByIdPrefix(id, files).filter((n) => !have.has(n.toLowerCase()));
+  return [...listed, ...extra];
+}
+
+/**
  * The Gardiner year has nothing that ties a row to a file, only the habit of naming receipts "Vendor MM DD YY thing (Child)".
  * A file is offered for a row only when its date matches the row's and its vendor word appears in the row's vendor, and
  * it does not name another student. Anything less certain stays unlinked, so nothing is ever attached on a guess.
@@ -156,7 +168,10 @@ export async function readLegacyWorkbook(storage: StorageProvider, book: DriveIt
   }
   const rows: LegacyRow[] = table1.map((values, r) => {
     const record = Object.fromEntries(headers.map((h, i) => [h, values[i]]));
-    const docFiles = layout === "step-up-2025" ? docIdx.map((i) => text(used!.rows[r]?.[i])).filter(Boolean) : filesByIdPrefix(text(record["ID"]), files);
+    const docFiles =
+      layout === "step-up-2025"
+        ? linkRowFiles(docIdx.map((i) => text(used!.rows[r]?.[i])).filter(Boolean), text(record["ID"]), files)
+        : filesByIdPrefix(text(record["ID"]), files);
     return { values: record, docFiles };
   });
 
