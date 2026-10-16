@@ -766,9 +766,10 @@ function note(label: string, local = false): void {
   fallbackLocal = local;
   paintBusy();
 }
-function showBusy(label: string): void {
+/** `local` shows the label as written; otherwise it reads as a storage refresh (see paintBusy). Sign-in labels are the former. */
+function showBusy(label: string, local = false): void {
   pending++;
-  note(label);
+  note(label, local);
 }
 function hideBusy(): void {
   pending = Math.max(0, pending - 1);
@@ -3640,13 +3641,14 @@ root.addEventListener("click", async (ev) => {
   else if (t.id === "sign-in") {
     // Microsoft is the default storage: forget any other choice, then go to Microsoft (the page leaves).
     rememberStorage(undefined);
-    note("Redirecting to Microsoft to sign in…");
-    showBusy("Redirecting to Microsoft to sign in…");
+    showBusy("Redirecting to Microsoft to sign in…", true);
     await microsoftAuth.signIn();
   }
   else if (t.id === "sign-in-google") {
     // Google signs in in a window opened by this click; once it succeeds the page restarts on Google Drive.
     await guarded(async () => {
+      // Storage is still the default (OneDrive) here, so left to itself the spinner would say it is refreshing OneDrive.
+      note("Signing in to Google…", true);
       await googleAuth.signIn();
       switchStorage("google");
     }, "Signing in to Google…");
@@ -3655,7 +3657,7 @@ root.addEventListener("click", async (ev) => {
     // Local storage has no account to leave: this just stops using it. Everything stays on this device for next time.
     if (storage.kind === "browser") { switchStorage(undefined); return; }
     if (ledger.unflushedCount > 0 && !confirm(`${ledger.unflushedCount} change(s) have not been saved to ${storage.label} and will be lost if you sign out. Sign out anyway?`)) return;
-    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy(`Signing out of ${storage.kind === "google" ? "Google" : "Microsoft"}…`); await storage.auth.signOut();
+    forgetLocalPointer(); await clearCache(); await clearCachedDocuments(); showBusy(`Signing out of ${storage.kind === "google" ? "Google" : "Microsoft"}…`, true); await storage.auth.signOut();
     // Google signs out without leaving the page; start over so the first screen asks again.
     if (storage.kind === "google") switchStorage(undefined);
   }
