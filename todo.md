@@ -76,7 +76,3 @@ deploys.
     eventual reimbursement: that is the mechanism behind Table1's `Pre-Auth #` column.
   - **Blocked on** the Summary/Submit step and confirmation screen: neither can be seen without a real future Pre-Auth need
     (it requires a genuine e-signature). Revisit when that happens.
-- [ ] Excel dependent-dropdown validation (Category list filtered by Scholarship) — parked. No automatable approach exists:
-      Data Validation rejects structured/array formulas outright, and Power Query's refresh can't be triggered via Graph
-      API. No practical effect today since every child has the same single scholarship. Revisit only if a second
-      scholarship shows up (try a relative-named-range formula then).
