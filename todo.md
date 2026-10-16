@@ -14,9 +14,9 @@ deploys.
 - [ ] Open an existing workspace the app created earlier; it should still load
 - [ ] Use the picker on a folder that already has files, **including files added by hand**. If they look empty, a different
       approach is needed (pick the files themselves, or import them)
-- [ ] Create a new workspace folder from the app and add a school year
-- [ ] Download a receipt from a Google workspace for filing (the "Google storage" item in AGENT_PLAN §12)
-- [ ] Invite a second Google account, then join with the picker
+- [x] Create a new workspace folder from the app and add a school year
+- [ ] Download a receipt from a Google workspace for filing (the "Google storage" item in AGENT_PLAN §12); previewing one works
+- [x] Invite a second Google account, then join with the picker
 - [ ] CLI with `STEPUP_STORAGE=google`: re-consent with the new scopes (delete `.cache/google-token.json` first)
 
 ## 2. Validate the bookmarklet
