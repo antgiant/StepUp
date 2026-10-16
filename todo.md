@@ -4,22 +4,7 @@ Last updated 2026-10-15. The detail behind the bookmarklet items is in `docs/AGE
 verified live). Test locally first (`npm run dev -w @step-up/web`, a dev bookmark on `localhost:5173`); a merge to `main`
 deploys.
 
-## 1. Validate the Google Drive changes
-
-- [x] Replace the `drive` scope with `drive.file` (consent screen, web app and CLI)
-- [x] Confirm the project number used for `GOOGLE_APP_ID` is right
-- [x] Add `http://localhost:5173` as a Microsoft redirect URI
-- [x] Picker API key's website and API restrictions are saved, including `http://localhost:5173/*` for local testing
-- [ ] Sign in with Google on the live site; the consent screen should show only the new, non-sensitive scopes
-- [x] Open a folder created earlier in Google Drive; it opened fine
-- [x] A file added by hand in Google Drive (by another account, app not open) shows up as unattached after a refresh, so
-      `drive.file` does not hide files in a folder the app was given
-- [x] Create a new workspace folder from the app and add a school year
-- [ ] Download a receipt from a Google workspace for filing (the "Google storage" item in AGENT_PLAN §12); previewing one works
-- [x] Invite a second Google account, then join with the picker
-- [ ] CLI with `STEPUP_STORAGE=google`: re-consent with the new scopes (delete `.cache/google-token.json` first)
-
-## 2. Validate the bookmarklet
+## 1. Validate the bookmarklet
 
 - [x] Rename existing bookmarks to "Step Up Helper"
 - [ ] Set up the dev bookmark at `localhost:5173` and confirm it connects
@@ -41,7 +26,7 @@ deploys.
 - [ ] Item-selection edits: do the name and amount fields accept scripted entry?
 - [ ] Mobile (Safari on iPhone/iPad)
 
-## 3. Filing and housekeeping
+## 2. Filing and housekeeping
 
 - [ ] Delete or finish any old CLI drafts in StepUp before filing the same rows again
 - [ ] Check rows that share a date and amount before filing both (one purchase duplicated?)
@@ -49,7 +34,7 @@ deploys.
 - [ ] Confirm the earlier live filing was recorded in the workbook
 - [ ] Read StepUp's terms about automated assistance
 
-## 4. Engineering backlog
+## 3. Engineering backlog
 
 - [ ] Retire the CLI: keep `reference:*`; remove Playwright, MSAL device-code sign-in and the commands with web equivalents
 - [ ] README intro and privacy page: say the bookmark fills StepUp's form and writes to the workbook
@@ -60,7 +45,7 @@ deploys.
 - [ ] The flaky `publishYearMirror` test in `cli-support.test.ts` (times out on a slow disk, passes alone)
 - [ ] Add a "Testing locally" section to the README
 
-## 5. UI improvements
+## 4. UI improvements
 
 - [ ] The bookmark shows a visual indicator of its status on the StepUp website and on the helper website
 - [ ] Reorganize the clutter across the screens
