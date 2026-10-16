@@ -12,8 +12,8 @@ deploys.
 - [x] Picker API key's website and API restrictions are saved, including `http://localhost:5173/*` for local testing
 - [ ] Sign in with Google on the live site; the consent screen should show only the new, non-sensitive scopes
 - [x] Open a folder created earlier in Google Drive; it opened fine
-- [ ] Use the picker on a folder that already has files, **including files added by hand**. If they look empty, a different
-      approach is needed (pick the files themselves, or import them)
+- [x] A file added by hand in Google Drive (by another account, app not open) shows up as unattached after a refresh, so
+      `drive.file` does not hide files in a folder the app was given
 - [x] Create a new workspace folder from the app and add a school year
 - [ ] Download a receipt from a Google workspace for filing (the "Google storage" item in AGENT_PLAN §12); previewing one works
 - [x] Invite a second Google account, then join with the picker
