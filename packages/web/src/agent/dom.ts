@@ -199,7 +199,7 @@ export function makeFilingOps(say: (text: string) => void): FilingOps {
     if (what === "confirmDelete") target = document.querySelector<HTMLElement>("#confirm-button") ?? undefined;
     else if (what === "cancelDelete") target = document.querySelector<HTMLElement>("#deny-button") ?? undefined;
     else if (what === "deleteItem") target = Array.from((block(i) ?? document).querySelectorAll<HTMLButtonElement>("button")).find((b) => /^delete$/i.test(words(b)) && !b.disabled && visible(b));
-    else if (what === "navReimbursements") target = Array.from(document.querySelectorAll<HTMLElement>("#sidenav a")).find((a) => /^reimbursements?$/i.test(words(a)) && visible(a));
+    else if (what === "navReimbursements") target = Array.from(document.querySelectorAll<HTMLElement>("#sidenav a")).find((a) => /^reimbursements?$/i.test(words(a)) && visible(a)) ?? document.querySelector<HTMLElement>("#sidenav > div.nav-items > div:nth-child(5) > a") ?? undefined;
     else if (what === "newReimbursement") target = document.querySelector<HTMLElement>("#New__Reimbursement__Button") ?? undefined;
     else if (what === "requestAnother") {
       const scope = document.querySelector("#Content__Wrapper .confirmation-container") ?? document;
@@ -260,6 +260,13 @@ export function makeFilingOps(say: (text: string) => void): FilingOps {
       return m && m[1] !== "0" ? m[1] : undefined;
     },
     press,
+    openDraft: (guid, step) => {
+      // Moves StepUp's own single-page router, which is what a link does; a page load would end this script.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(guid) || !Number.isInteger(step) || step < 1 || step > 5) return false;
+      history.pushState(history.state, "", `/SubmitReimbursement/${guid}/${step}`);
+      window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+      return true;
+    },
     guard: (reason) => {
       installGuard();
       guardReason = reason;

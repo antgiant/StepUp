@@ -1752,7 +1752,7 @@ let fileQueue: string[] = [];
 
 async function fileAllReady(): Promise<void> {
   if (!workspace || filing?.running) return;
-  const ready = filingGroups(ledger.state, ctx()).groups.filter((g) => !g.existingDrafts.length).map((g) => g.purchaseId);
+  const ready = filingGroups(ledger.state, ctx()).groups.filter((g) => !g.existingDrafts.length || g.draftGuids.length === 1).map((g) => g.purchaseId);
   if (ready.length === 0) return;
   fileQueue = ready.slice(1);
   await startFiling(ready[0]!);
@@ -1798,7 +1798,7 @@ async function startFiling(purchaseId: string): Promise<void> {
     if (!g) return refuse("Filing", "That submission is no longer ready: it may have changed since this page was drawn. Refresh and try again.");
     // A draft StepUp already holds: the walk carries on from whatever step StepUp's page is showing, so a draft that is open
     // is continued, but a new, empty request would make a second one. Only the person can tell which, so ask.
-    if (g.existingDrafts.length && !confirm(`StepUp already holds a draft for this (#${g.existingDrafts.join(", #")}).\n\nIf StepUp's page is showing that draft (open it from StepUp's Drafts list), the walk carries on from the step it is on.\nIf the page is a new, empty request, you will end up with two.\n\nGo on?`)) {
+    if (g.existingDrafts.length && g.draftGuids.length !== 1 && !confirm(`StepUp already holds a draft for this (#${g.existingDrafts.join(", #")}).\n\nIf StepUp's page is showing that draft (open it from StepUp's Drafts list), the walk carries on from the step it is on.\nIf the page is a new, empty request, you will end up with two.\n\nGo on?`)) {
       return refuse("Filing", "Not started: StepUp already holds a draft for this. Open it in StepUp and press this again, or delete it first.");
     }
     const driveId = workspace.driveId;
@@ -2231,12 +2231,12 @@ function planPanel(): string {
       <ul>${g.items.map((i) => `<li>${esc(i.description ?? i.id)} <small>${formatCents(i.amountCents ?? 0)}</small></li>`).join("")}</ul>
       ${g.additionalDocs.length ? `<small>Also sends: ${g.additionalDocs.map((d) => esc(d.filename ?? d.id)).join(", ")}</small>` : ""}
       ${g.unredactedStatements.length ? `<small class="warn">Statement sent unredacted: ${g.unredactedStatements.map(esc).join(", ")}</small>` : ""}
-      ${g.existingDrafts.length ? `<p class="warn">StepUp already holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. To carry on with it, open it in StepUp (its Drafts list) before pressing the button: the walk continues from the step it is on. A new, empty request would make a second one, so delete the draft first in that case.</p>` : ""}
+      ${g.existingDrafts.length && g.draftGuids.length === 1 ? `<p class="note">StepUp holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. Pressing the button opens it and carries on from its step.</p>` : g.existingDrafts.length ? `<p class="warn">StepUp already holds a draft for this (#${g.existingDrafts.map(esc).join(", #")}), left by a run that did not finish. To carry on with it, open it in StepUp (its Drafts list) before pressing the button: the walk continues from the step it is on. A new, empty request would make a second one, so delete the draft first in that case.</p>` : ""}
       <p class="row"><button data-file-group="${esc(g.purchaseId)}" class="primary">File this on StepUp</button> <small>${canFile ? "StepUp's page can be anywhere (the dashboard, or the last confirmation): the walk opens a new reimbursement itself." : filing?.running ? "A walk is already running: see Filing on StepUp above." : "Not connected yet: click the Step Up Helper bookmark on StepUp's page, then press this."}</small></p>
       <p class="row"><label>Already submitted in StepUp? Its reimbursement number <input id="file-record-${esc(g.purchaseId)}" inputmode="numeric" size="12"></label> <button data-file-record="${esc(g.purchaseId)}">Record it</button></p></li>`).join("");
   const blocked = plan.blocked.map((b) => `<li>${esc(b.item.description ?? b.item.id)} <small>(${esc(b.status)}): ${b.reasons.map((r) => esc(r.message)).join("; ")}</small></li>`).join("");
   return `${filingPanel()}<section class="panel"><h3 class="panel-title">Ready to file<small>${plan.groups.length} submission(s) ready, ${plan.blocked.length} item(s) held back, ${plan.skipped} already filed</small></h3>
-    ${plan.groups.filter((g) => !g.existingDrafts.length).length > 1 ? `<p class="row"><button data-file-all ${canFile ? "" : "disabled"}>File all ready, one after another</button> <small>${fileQueue.length ? `${fileQueue.length} more waiting after the one in progress. ` : ""}Each one stops at StepUp's Summary for you to submit; the next starts after you do. Anything that stops it ends the run.</small></p>` : ""}
+    ${plan.groups.filter((g) => !g.existingDrafts.length || g.draftGuids.length === 1).length > 1 ? `<p class="row"><button data-file-all ${canFile ? "" : "disabled"}>File all ready, one after another</button> <small>${fileQueue.length ? `${fileQueue.length} more waiting after the one in progress. ` : ""}Each one stops at StepUp's Summary for you to submit; the next starts after you do. Anything that stops it ends the run.</small></p>` : ""}
     ${groups ? `<ul>${groups}</ul>` : `<p class="note">Nothing is ready yet.</p>`}
     ${blocked ? `<details><summary>Held back (${plan.blocked.length})</summary><ul>${blocked}</ul></details>` : ""}</section>`;
 }

@@ -24,6 +24,8 @@ export interface FilingJob {
   receipt: FileData;
   additional: FileData[];
   rows: FilingRow[];
+  /** StepUp's id of a draft to carry on with: the walk opens it itself rather than starting a new request. */
+  resumeDraft?: string;
 }
 
 export type PressTarget = "continue" | "back" | "addItem" | "deleteItem" | "confirmDelete" | "cancelDelete" | "navReimbursements" | "newReimbursement" | "requestAnother";
@@ -61,6 +63,8 @@ export interface FilingOps {
   itemTotal(block: number): string | undefined;
   /** One of the few buttons; false when it is not there or is disabled. */
   press(button: PressTarget, block?: number): boolean;
+  /** Opens a step of an existing draft the way a click on a link would (no page load). Only an address inside the reimbursement wizard. */
+  openDraft?(guid: string, step: number): boolean;
   /** Stops a person's Submit from going through while a reason is given; undefined lets it through. */
   guard(reason: string | undefined): void;
   /** On the confirmation page after a submission: StepUp's reimbursement number, once it is a real one. */
@@ -158,8 +162,15 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     for (;;) {
       if (env.cancelled()) throw new Stop("cancelled", "Stopped at your request.");
       if (ops.now() > deadline) throw new Stop("stepUpChanged", "This took too long; stopping.");
-      const map = ops.map();
-      const rec = recognise(map);
+      let map = ops.map();
+      let rec = recognise(map);
+      // A step's heading shows before its controls do (the student picker after "New Reimbursement"): look again for a few
+      // seconds before calling the form unexpected.
+      for (let look = 0; look < 10 && rec.step && !rec.busy && rec.problems.length > 0; look++) {
+        await env.sleep(500);
+        map = ops.map();
+        rec = recognise(map);
+      }
       if (!rec.step) throw new Stop("stepUpChanged", "StepUp's reimbursement form is not showing. Open a new reimbursement and start again.");
       if (rec.busy) {
         await env.sleep(500);
@@ -258,6 +269,21 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
    */
   async function reachForm(): Promise<void> {
     const first = ops.map();
+    if (job.resumeDraft && ops.openDraft && recognise(first).step === undefined) {
+      env.report("Opening the draft StepUp already holds.");
+      // Details first (StepUp remembers chosen items), then Item/Service Selection, as the command line did.
+      for (const n of [3, 2]) {
+        if (!ops.openDraft(job.resumeDraft, n)) break;
+        try {
+          await waitFor("the draft", () => recognise(ops.map()).step !== undefined, 15_000);
+          return;
+        } catch (err) {
+          if (err instanceof Stop && err.kind === "cancelled") throw err;
+          /* StepUp would not open that step directly: try an earlier one */
+        }
+      }
+      env.report("Could not open the draft; starting a new request instead.");
+    }
     if (first.step === "confirmation") {
       env.report("Starting another request.");
       if (!(await pressWhenEnabled("requestAnother"))) throw new Stop("stepUpChanged", "\"Request Another Reimbursement\" is not on the page.", first.step);
@@ -375,10 +401,16 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} dropdown is not on the page.`);
         break;
       }
-      const entries = await readMenu();
-      const choice = chooseEntry(entries, levels[k]!);
+      let entries = await readMenu();
+      let choice = chooseEntry(entries, levels[k]!);
+      // A long list loads in pages, and a pause between pages can look like the end: look again before saying it is missing.
+      for (let again = 0; again < 4 && choice.how === "none"; again++) {
+        await env.sleep(1000);
+        entries = await readMenu();
+        choice = chooseEntry(entries, levels[k]!);
+      }
       if (choice.how === "none" || choice.how === "ambiguous") {
-        const unmatched = `Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}".`;
+        const unmatched = `Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}" (the list read had ${entries.length} entries${entries.length ? `, from "${entries[0]}" to "${entries[entries.length - 1]}"` : ""}).`;
         if (!env.pick) {
           flags.push(unmatched);
           ops.open(b, target); // close it again
