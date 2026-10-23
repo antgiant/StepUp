@@ -40,9 +40,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build -w @step-up/web
-      - uses: actions/upload-pages-artifact@v5
+      # upload-pages-artifact leaves out dot-folders, and Microsoft's publisher-domain check reads
+      # /.well-known/microsoft-identity-association.json, so the artifact is packed the way that action does, hidden files kept.
+      - run: tar --dereference --hard-dereference -C packages/web/dist -cf "$RUNNER_TEMP/artifact.tar" .
+      - uses: actions/upload-artifact@v4
         with:
-          path: packages/web/dist
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
 
   deploy:
     needs: build
