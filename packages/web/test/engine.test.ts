@@ -274,7 +274,22 @@ describe("filing one group, start to finish", () => {
     expect((out as { reason: string }).reason).toMatch(/Skipped/);
   });
 
-  it("does not guess when the scan's items cannot be matched to the rows", async () => {
+  it("does not guess when the scan's items cannot be matched; it waits for the person's Continue and carries on", async () => {
+    const { ops, s, clock } = site({ boxes: ["Receipt total", "Math book", "Fee"] });
+    const said: string[] = [];
+    const out = await runFiling(job([book]), {
+      ops, report: (m) => void said.push(m), cancelled: () => false,
+      sleep: async (ms) => {
+        clock.t += ms;
+        if (s.step === "itemSelection" && clock.t > 60_000) s.step = "itemDetails"; // the person ticked and pressed Continue
+      },
+    });
+    expect(out, JSON.stringify(out)).toMatchObject({ status: "ready" });
+    expect(s.ticked).toEqual([]);
+    expect(said.some((m) => /cannot be matched/.test(m))).toBe(true);
+  });
+
+  it("stops, without ticking anything, when nobody continues after unmatched items", async () => {
     const { ops, s, clock } = site({ boxes: ["Receipt total", "Math book", "Fee"] });
     const out = await run(job([book]), ops, clock);
     expect(out).toMatchObject({ status: "stopped", kind: "needsYou", step: "itemSelection" });
