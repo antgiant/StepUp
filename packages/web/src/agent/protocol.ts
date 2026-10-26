@@ -6,9 +6,9 @@ import type { CategoryCache, StepUpBalance, StepUpStudent, VendorEntry } from "@
 /**
  * Bumped when the agent's messages change in a way an older copy of the script (or an older open app tab) would not
  * understand. The app compares it with the version an agent reports and tells the person to click the bookmark again when
- * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back). 6: adds the person's answer when a category cannot be matched (need-pick and pick), and the draft's number once StepUp names it.
+ * the script on StepUp's page is older. 2: adds the periodic "alive" and the "bye" messages. 3: adds the form map. 4: adds the spike tests. 5: adds filing (a job in, progress and an outcome back). 6: adds the person's answer when a category cannot be matched (need-pick and pick), and the draft's number once StepUp names it. 7: the walk waits for the person at steps it cannot decide, instead of stopping (an older script on StepUp's page still stops).
  */
-export const AGENT_PROTOCOL = 6;
+export const AGENT_PROTOCOL = 7;
 
 /** Messages between the agent (running on StepUp's page) and this app, over `postMessage`. Both sides check the origin. */
 export type AgentToApp =
