@@ -2873,7 +2873,7 @@ function purchaseView(id: string, draft = false): string {
   };
   // Marking ready is always a person's call: it is offered once the minimum is there, and can be taken back.
   const markButton = (i: (typeof items)[number], ev: ReturnType<typeof evaluateItem>): string => {
-    if (i.stepUpStatus || i.submissionId || filing[i.id]) return "";
+    if (readOnly() || i.stepUpStatus || i.submissionId || filing[i.id]) return "";
     if (i.readyToSubmit) return `<button data-unready="${esc(i.id)}">Not ready</button> `;
     return awaitingReview(ev) ? `<button data-ready="${esc(i.id)}" class="primary">Mark ready to submit</button> ` : "";
   };
