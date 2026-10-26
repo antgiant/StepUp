@@ -24,6 +24,8 @@ export interface FilingJob {
   receipt: FileData;
   additional: FileData[];
   rows: FilingRow[];
+  /** StepUp's id of a draft to carry on with: the walk opens it itself rather than starting a new request. */
+  resumeDraft?: string;
 }
 
 export type PressTarget = "continue" | "back" | "addItem" | "deleteItem" | "confirmDelete" | "cancelDelete" | "navReimbursements" | "newReimbursement" | "requestAnother";
@@ -61,6 +63,8 @@ export interface FilingOps {
   itemTotal(block: number): string | undefined;
   /** One of the few buttons; false when it is not there or is disabled. */
   press(button: PressTarget, block?: number): boolean;
+  /** Opens a step of an existing draft the way a click on a link would (no page load). Only an address inside the reimbursement wizard. */
+  openDraft?(guid: string, step: number): boolean;
   /** Stops a person's Submit from going through while a reason is given; undefined lets it through. */
   guard(reason: string | undefined): void;
   /** On the confirmation page after a submission: StepUp's reimbursement number, once it is a real one. */
@@ -126,7 +130,9 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
   const categoryFixes: CategoryFix[] = [];
   let scanFailed = false;
   let refills = 0;
-  const deadline = ops.now() + 25 * MINUTES;
+  /** Flags that are a decision (no category on the row, a category the person skipped): the walk stops rather than waits. */
+  const holds: string[] = [];
+  let deadline = ops.now() + 25 * MINUTES;
   // Until the walk has checked everything, a Submit must not go through.
   ops.guard("Step Up Helper is still checking this reimbursement.");
 
@@ -153,19 +159,49 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     return false;
   };
 
+  /**
+   * As the command line did: the person fixes what the walk cannot decide in StepUp itself and presses StepUp's Continue,
+   * and the walk carries on from the next step. Submit stays held and the summary check still has to pass.
+   */
+  const handOver = async (message: string, from: WizardStep): Promise<void> => {
+    env.report(`${message} Do it in StepUp and press its Continue; the walk carries on from there.`);
+    const began = ops.now();
+    try {
+      await waitFor("you to finish this step and press Continue", () => ops.map().step !== from, 10 * MINUTES);
+    } catch (err) {
+      // Nobody did: stop with what was asked, not with a bare timeout.
+      if (err instanceof Stop && err.kind === "stepUpChanged") throw new Stop("needsYou", message, from);
+      throw err;
+    }
+    deadline += ops.now() - began;
+  };
+
   try {
     await reachForm();
     for (;;) {
       if (env.cancelled()) throw new Stop("cancelled", "Stopped at your request.");
       if (ops.now() > deadline) throw new Stop("stepUpChanged", "This took too long; stopping.");
-      const map = ops.map();
-      const rec = recognise(map);
+      let map = ops.map();
+      let rec = recognise(map);
+      // A step's heading shows before its controls do (the student picker after "New Reimbursement"): look again for a few
+      // seconds before calling the form unexpected.
+      for (let look = 0; look < 10 && rec.step && !rec.busy && rec.problems.length > 0; look++) {
+        await env.sleep(500);
+        map = ops.map();
+        rec = recognise(map);
+      }
       if (!rec.step) throw new Stop("stepUpChanged", "StepUp's reimbursement form is not showing. Open a new reimbursement and start again.");
       if (rec.busy) {
         await env.sleep(500);
         continue;
       }
-      if (rec.variant === "confirmDelete") throw new Stop("needsYou", "StepUp is asking whether to delete an item. Answer it, then start again.", rec.step);
+      if (rec.variant === "confirmDelete") {
+        env.report("StepUp is asking whether to delete an item. Answer it in StepUp; the walk carries on after.");
+        const began = ops.now();
+        await waitFor("you to answer StepUp's question", () => recognise(ops.map()).variant !== "confirmDelete", 10 * MINUTES);
+        deadline += ops.now() - began;
+        continue;
+      }
       if (rec.problems.length) throw new Stop("stepUpChanged", `StepUp's form is not as expected on this step: ${rec.problems.slice(0, 4).join("; ")}.`, rec.step);
 
       switch (rec.step) {
@@ -175,7 +211,10 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
           await env.sleep(400);
           const re = new RegExp(`^${escapeRe(job.child)}\\b.*:\\s*${escapeRe(job.program)}\\s*$`, "i");
           const hits = ops.menu().filter((e) => re.test(e));
-          if (hits.length !== 1) throw new Stop("needsYou", `${hits.length === 0 ? "No student" : "More than one student"} in StepUp's list matches ${job.child} (${job.program}).`, rec.step);
+          if (hits.length !== 1) {
+            await handOver(`${hits.length === 0 ? "No student" : "More than one student"} in StepUp's list matches ${job.child} (${job.program}). Choose the right one`, "studentSelection");
+            break;
+          }
           ops.choose(hits[0]!);
           await env.sleep(600);
           if (!(ops.shown(0, "student") ?? "").includes(hits[0]!)) throw new Stop("stepUpChanged", "The student did not take.", rec.step);
@@ -199,7 +238,12 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
             notes.push("StepUp found no items on the receipt; the items were filled in from the rows, in order.");
           } else if (rec.variant === "detected") {
             const picks = boxesToCheck(ops.boxLabels(), job.rows);
-            if (!picks) throw new Stop("needsYou", "StepUp found items that cannot be matched to the rows. Tick the right ones yourself, then start again.", rec.step);
+            if (!picks) {
+              // As the command line did: the person ticks the right boxes and presses Continue in StepUp, and the walk
+              // carries on from the next step. Submit stays held, and the summary check still has to pass.
+              await handOver("StepUp found items that cannot be matched to the rows. Tick the right ones", "itemSelection");
+              break;
+            }
             for (const i of picks) ops.check(i);
             await env.sleep(500);
           }
@@ -207,7 +251,7 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
           break;
         }
         case "itemDetails": {
-          await fillDetails();
+          if (!(await fillDetails())) break; // the person finished this step in StepUp
           await advance("itemDetails");
           break;
         }
@@ -258,6 +302,21 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
    */
   async function reachForm(): Promise<void> {
     const first = ops.map();
+    if (job.resumeDraft && ops.openDraft && recognise(first).step === undefined) {
+      env.report("Opening the draft StepUp already holds.");
+      // Details first (StepUp remembers chosen items), then Item/Service Selection, as the command line did.
+      for (const n of [3, 2]) {
+        if (!ops.openDraft(job.resumeDraft, n)) break;
+        try {
+          await waitFor("the draft", () => recognise(ops.map()).step !== undefined, 15_000);
+          return;
+        } catch (err) {
+          if (err instanceof Stop && err.kind === "cancelled") throw err;
+          /* StepUp would not open that step directly: try an earlier one */
+        }
+      }
+      env.report("Could not open the draft; starting a new request instead.");
+    }
     if (first.step === "confirmation") {
       env.report("Starting another request.");
       if (!(await pressWhenEnabled("requestAnother"))) throw new Stop("stepUpChanged", "\"Request Another Reimbursement\" is not on the page.", first.step);
@@ -311,7 +370,8 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     return "ok";
   }
 
-  async function fillDetails(): Promise<void> {
+  /** True when the fields were filled and the walk may continue; false when the person took the step over. */
+  async function fillDetails(): Promise<boolean> {
     // 1. surplus blocks left by an earlier attempt: unnamed ones, only when a named one is kept.
     for (let guard = 0; guard < 10; guard++) {
       const { named } = ops.blocks();
@@ -335,6 +395,7 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
     // 3. fill each block from a row.
     const remaining = [...job.rows];
     const flags: string[] = [];
+    holds.length = 0;
     let missingServiceDate: string | undefined;
     matched.length = 0;
     for (let b = 0; b < blocks; b++) {
@@ -345,7 +406,10 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         flags.push(`Item block ${b + 1} has no row left; fill it or delete it yourself.`);
         continue;
       }
-      if (m.how === "ambiguous") throw new Stop("needsYou", `Item block ${b + 1} cannot be matched to one row (the scan read cost ${sc.cost || "nothing"} and name "${sc.name || ""}").`, "itemDetails");
+      if (m.how === "ambiguous") {
+        await handOver(`Item block ${b + 1} cannot be matched to one row (the scan read cost ${sc.cost || "nothing"} and name "${sc.name || ""}"). Fill in the item blocks`, "itemDetails");
+        return false;
+      }
       remaining.splice(remaining.indexOf(m.row), 1);
       matched.push(m.row.id);
       env.report(`Filling item ${b + 1}: ${m.row.data["Item"] ?? m.row.id}.`);
@@ -354,7 +418,13 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
       missingServiceDate ??= r.missingServiceDate;
     }
     if (missingServiceDate) throw new Stop("missingServiceDate", missingServiceDate, "itemDetails");
-    if (flags.length) throw new Stop("needsYou", `Some fields need you: ${flags.join(" ")}`, "itemDetails");
+    // A row with no Category, or a choice the person made to skip one, is a decision: it stops here instead of carrying on.
+    if (holds.length) throw new Stop("needsYou", `Some fields need you: ${flags.join(" ")}`, "itemDetails");
+    if (flags.length) {
+      await handOver(`Some fields need you: ${flags.join(" ")}`, "itemDetails");
+      return false;
+    }
+    return true;
   }
 
   async function fillBlock(b: number, row: FilingRow): Promise<{ flags: string[]; missingServiceDate?: string }> {
@@ -365,7 +435,10 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
 
     // Category, Type, Description: each level by its words. StepUp requires one, so a row without it stops the walk.
     const levels = categoryLevels(d["Category"] ?? "");
-    if (levels.length === 0) flags.push(`Item ${n} (${item}): the row has no Category, which StepUp requires. Add it in the workbook.`);
+    if (levels.length === 0) {
+      flags.push(`Item ${n} (${item}): the row has no Category, which StepUp requires. Add it in the workbook.`);
+      holds.push("no category");
+    }
     const chosen: string[] = [];
     let loosely = false;
     for (let k = 0; k < levels.length && k < LEVELS.length; k++) {
@@ -375,10 +448,16 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         flags.push(`Item ${n} (${item}): the ${LEVEL_WORDS[k]} dropdown is not on the page.`);
         break;
       }
-      const entries = await readMenu();
-      const choice = chooseEntry(entries, levels[k]!);
+      let entries = await readMenu();
+      let choice = chooseEntry(entries, levels[k]!);
+      // A long list loads in pages, and a pause between pages can look like the end: look again before saying it is missing.
+      for (let again = 0; again < 4 && choice.how === "none"; again++) {
+        await env.sleep(1000);
+        entries = await readMenu();
+        choice = chooseEntry(entries, levels[k]!);
+      }
       if (choice.how === "none" || choice.how === "ambiguous") {
-        const unmatched = `Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}".`;
+        const unmatched = `Item ${n} (${item}): no single ${LEVEL_WORDS[k]} entry reads "${levels[k]}" (the list read had ${entries.length} entries${entries.length ? `, from "${entries[0]}" to "${entries[entries.length - 1]}"` : ""}).`;
         if (!env.pick) {
           flags.push(unmatched);
           ops.open(b, target); // close it again
@@ -397,6 +476,7 @@ export async function runFiling(job: FilingJob, env: FilingEnv): Promise<FilingO
         }
         if (picked === undefined) {
           flags.push(`${unmatched} Skipped, so fill it in StepUp yourself.`);
+          holds.push("skipped");
           break;
         }
         chosen.push(picked);

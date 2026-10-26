@@ -6,3 +6,4 @@ dist/
 data/
 *.log
 .DS_Store
+.certs/

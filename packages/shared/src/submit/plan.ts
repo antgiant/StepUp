@@ -17,6 +17,8 @@ export interface SubmissionGroup {
    * again starts a new request, so a person should see this first.
    */
   existingDrafts: string[];
+  /** StepUp's own ids for those drafts (the id in the wizard's address), when StepUp's list has been read. */
+  draftGuids: string[];
 }
 
 export interface BlockedItem {
@@ -76,11 +78,12 @@ export function planSubmissions(state: LedgerState, ctx: RulesContext): Submissi
     const key = `${purchase.id}|${child.id}`;
     let group = groups.get(key);
     if (!group) {
-      group = { purchaseId: purchase.id, childId: child.id, childName: child.name ?? child.id, receipt, additionalDocs: [], unredactedStatements: [], items: [], existingDrafts: [] };
+      group = { purchaseId: purchase.id, childId: child.id, childName: child.name ?? child.id, receipt, additionalDocs: [], unredactedStatements: [], items: [], existingDrafts: [], draftGuids: [] };
       groups.set(key, group);
     }
     group.items.push(item);
     if (draftOnly && submission?.reimbursementId && !group.existingDrafts.includes(submission.reimbursementId)) group.existingDrafts.push(submission.reimbursementId);
+    if (draftOnly && submission?.guid && !group.draftGuids.includes(submission.guid)) group.draftGuids.push(submission.guid);
     for (const a of additionalDocsFor(state, item, purchase)) {
       const original = a.documentId ? state.documents[a.documentId] : undefined;
       const doc = original ? redactedCopyOf(state, original) ?? original : undefined;

@@ -22,6 +22,8 @@ export interface FilingGroup {
   unredactedStatements: string[];
   /** Drafts StepUp already holds for these items (see planSubmissions). */
   existingDrafts: string[];
+  /** StepUp's ids for those drafts, so the walk can open one itself. */
+  draftGuids: string[];
   rows: FilingRow[];
 }
 
@@ -78,6 +80,7 @@ export function filingGroups(state: LedgerState, ctx: RulesContext): { groups: F
       additionalDocs: g.additionalDocs,
       unredactedStatements: g.unredactedStatements,
       existingDrafts: g.existingDrafts,
+      draftGuids: g.draftGuids,
       rows: g.items.map((i) => filingRow(state, i, ctx)),
     })),
   };

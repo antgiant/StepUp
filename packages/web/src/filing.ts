@@ -36,7 +36,7 @@ export async function buildJob(group: FilingGroup, download: (itemId: string) =>
     if ("problem" in f) return f;
     additional.push(f);
   }
-  return { job: { child: group.child, program: group.program, receipt, additional, rows: group.rows.map((r) => ({ id: r.itemId, data: r.data })) } };
+  return { job: { child: group.child, program: group.program, receipt, additional, rows: group.rows.map((r) => ({ id: r.itemId, data: r.data })), ...(group.draftGuids.length === 1 ? { resumeDraft: group.draftGuids[0]! } : {}) } };
 }
 
 /** The workbook's own ID for a ledger item that came from it (`legacy-<ID>`); undefined for any other id. */
