@@ -56,6 +56,15 @@ describe("filing rows", () => {
   });
 });
 
+describe("tax/shipping for a quantity", () => {
+  it("is sent for the whole quantity, since StepUp totals quantity x cost + tax/shipping", () => {
+    const { l, p } = setup();
+    const id = addItem(l, p, { childId: "kid", categoryId: "books", benefitMessage: "learning", description: "Pencils", amountCents: 100, quantity: 10, taxShippingCents: 7 });
+    const row = filingRow(l.state, l.state.items[id]!, ctx);
+    expect(row.data).toMatchObject({ Quantity: "10", Amount: "1.00", "Tax, Shipping, etc.": "0.70", "Reim. $": "10.70" });
+  });
+});
+
 describe("an Excel year's own category path", () => {
   it("is sent when the reference tree knows the category id but has no path for it", () => {
     const { l, i1 } = setup();

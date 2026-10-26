@@ -1249,14 +1249,15 @@ function queueView(): string {
     : "";
 
   // Files that belong to nothing yet are kept apart: only purchases are listed under "Needs your attention".
-  const loose = all.filter((e) => e.kind === "unattached-document");
+  // A file marked as proof of payment lives on the Proof of payment tab, not here, until something is attached to it.
+  const loose = all.filter((e) => e.kind === "unattached-document" && state.documents[e.id]?.contentKind !== "statement");
   const looseRows = loose.map((e) => {
     const sugg = (e.suggestions ?? []).map((s) => {
       const name = s.target.kind === "purchase" ? (state.purchases[s.target.id] ? purchaseName(state.purchases[s.target.id]!) : s.target.id) : state.items[s.target.id]?.description ?? s.target.id;
       return `<button data-attach="${esc(e.id)}" data-kind="${s.target.kind}" data-target="${esc(s.target.id)}" data-role="${s.role}">${s.role === "receipt" ? "Receipt of" : "Attach to"} ${esc(name)}</button>`;
     }).join("");
     const doc = state.documents[e.id];
-    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}${doc?.contentKind !== "statement" ? `<button data-mark-statement="${esc(e.id)}">Mark as Proof of Payment</button>` : `<button data-statement="${esc(e.id)}">Open proof of payment</button>`}${sugg}<button class="danger" data-archive-doc="${esc(e.id)}" title="Hide this file (added by mistake). You can restore it.">Archive</button>`;
+    const actions = `<button data-start="${esc(e.id)}">Start purchase</button>${doc?.driveItemId && workspace ? `<button data-preview="${esc(e.id)}">Preview</button>` : ""}${/\.eml$/i.test(doc?.filename ?? "") && workspace ? `<button data-eml-attachments="${esc(e.id)}">Save its attachments</button>` : ""}<button data-mark-statement="${esc(e.id)}">Mark as Proof of Payment</button>${sugg}<button class="danger" data-archive-doc="${esc(e.id)}" title="Hide this file (added by mistake). You can restore it.">Archive</button>`;
     const hint = e.hints?.vendor || e.hints?.date ? `<small>Looks like: ${esc([e.hints.vendor, e.hints.date].filter(Boolean).join(", "))}</small>` : "";
     return `<li class="q"><div><strong>${esc(e.title)}</strong> ${hint}</div><div class="actions wide">${actions}</div></li>`;
   });
@@ -2381,7 +2382,8 @@ function statementReview(id: string): string {
     ${doc.driveItemId && workspace ? `<details><summary>Rename the file</summary><form id="rename-statement-form" class="row" data-doc="${esc(id)}"><label>File name<input name="name" value="${esc(statementDisplayName(doc).replace(/\.[^.]+$/, ""))}" required></label><button>Rename</button></form></details>` : ""}`;
   // Like a purchase's, the archive control sits at the very bottom of the screen.
   const linkedCount = new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.transactionId).map((a) => a.transactionId)).size;
-  const archive = `<hr><p><button data-archive-doc="${esc(id)}" data-linked="${linkedCount}" class="danger">Archive this proof of payment</button> <small>Hides it; you can restore it from the proof of payment list.</small></p>`;
+  const archive = `<hr><p><button data-archive-doc="${esc(id)}" data-linked="${linkedCount}" class="danger">Archive this proof of payment</button> <small>Hides it; you can restore it from the proof of payment list.</small></p>
+    <p><button data-unmark-statement="${esc(id)}" data-linked="${linkedCount}">Not proof of payment</button> <small>Marked by mistake? This takes it off this list and puts it back with your other files.</small></p>`;
   const proofOwners = [...new Set(Object.values(state.additionalDocs).filter((a) => a.documentId === id && a.kind === "payment-proof" && a.ownerId).map((a) => a.ownerId!))];
   const redactForm = data && proofOwners.length
     ? `<form id="redact-form" class="row" data-doc="${esc(id)}"><label>Pages<select name="pages"><option value="all">Every page that shows something</option><option value="matched">Only pages with the linked charges</option></select></label>
@@ -4097,6 +4099,20 @@ root.addEventListener("click", async (ev) => {
         status = notice;
         render();
       }
+    }
+  } else if (d["unmarkStatement"]) {
+    const id = d["unmarkStatement"];
+    const linkedCount = Number(d["linked"] ?? 0);
+    const message = linkedCount
+      ? `${linkedCount} charge(s) on this file are linked as proof for purchases, and those links stay. It goes back to your other files.`
+      : "It goes back to your other files and leaves the Proof of payment list.";
+    if (await confirmModal("This is not proof of payment?", message, "Not proof of payment")) {
+      ledger.set("document", id, { contentKind: "receipt-like" }, { label: "document.unmarkedStatement" });
+      await ledger.flush();
+      const notice = "Moved back to your other files.";
+      go({ name: "statements" });
+      status = notice;
+      await save();
     }
   } else if (d["unarchiveDoc"]) {
     await setArchived(d["unarchiveDoc"], false);

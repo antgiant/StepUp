@@ -7,10 +7,10 @@ deploys.
 ## 1. Validate the bookmarklet
 
 - [x] Rename existing bookmarks to "Step Up Helper"
-- [ ] Set up the dev bookmark at `localhost:5173` and confirm it connects
-- [ ] Automatic recording after Submit: Status, Submitted, Reimbursement ID and Line Number land on the workbook row
-- [ ] A multi-item receipt: block pairing, and checkboxes on the "detected" variant
-- [ ] A category that requires a service date, and the missing-service-date stop ("Unfiled (Missing Things)")
+- [x] Set up the dev bookmark at `localhost:5173` and confirm it connects
+- [x] Automatic recording after Submit: Status, Submitted, Reimbursement ID and Line Number land on the workbook row
+- [x] A multi-item receipt: block pairing, and checkboxes on the "detected" variant
+- [x] A category that requires a service date, and the missing-service-date stop ("Unfiled (Missing Things)")
 - [ ] "Provider not Listed" with a typed name; a listed provider with individual people
 - [ ] Several additional documents; a statement that has a redacted copy
 - [ ] A receipt StepUp cannot read: the read-error wording and the "none found" variant
@@ -42,6 +42,9 @@ deploys.
 - [ ] A regression fixture built from the recorded form shapes
 - [ ] C4: comments to per-item reasons
 - [ ] C5: pre-authorizations (dormant)
+- [ ] Pay Florida Prepaid via the marketplace: an entirely new flow, not a variation of reimbursement filing. Nothing is known yet about
+      its pages, fields or payments; start by recording what the marketplace shows (see `docs/STEPUP_FINDINGS.md`) before designing it.
+      The payment in the marketplace has to be made every month, before the 14th.
 - [ ] The flaky `publishYearMirror` test in `cli-support.test.ts` (times out on a slow disk, passes alone)
 - [ ] Add a "Testing locally" section to the README
 
