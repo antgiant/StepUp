@@ -2003,7 +2003,14 @@ async function onFilingSubmitted(number: string, guid: string | undefined): Prom
   try {
     if (workspace.legacy?.workbook) {
       const r = await writeWorkbookRows(workspace.legacy.workbook, ids, (n) => ({ Status: "Submitted", Submitted: todayIso(), "Reimbursement ID": number, "Line Number": String(n + 1) }));
-      status = `Reimbursement #${number}: recorded in the workbook (${r.written} row${r.written === 1 ? "" : "s"}${r.missing.length ? `, ${r.missing.length} not found` : ""}). Refresh to see it.`;
+      status = `Reimbursement #${number}: recorded in the workbook (${r.written} row${r.written === 1 ? "" : "s"}${r.missing.length ? `, ${r.missing.length} not found` : ""}).`;
+      // Read the workbook back, or the rows still look unfiled here and the same group is offered (and queued) again.
+      try {
+        await revalidate(workspace);
+        persist();
+      } catch {
+        status += " Refresh to see it.";
+      }
     } else if (!workspace.legacy) {
       recordSubmitted(ledger, ids, { reimbursementId: number, submittedAt: todayIso(), ...(guid ? { guid } : {}) });
       await save();
