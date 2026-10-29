@@ -1,5 +1,5 @@
 import type { DocumentRec, LedgerState, LineItem } from "../domain/types.js";
-import { effectiveDate, effectiveInvoice, effectiveVendor, requestedCents, type RulesContext } from "../rules/readiness.js";
+import { effectiveDate, effectiveInvoice, effectiveVendor, type RulesContext } from "../rules/readiness.js";
 import { planSubmissions, type BlockedItem } from "./plan.js";
 
 /** The status text the StepUp automation looks for; the ledger derives readiness, so this is only the label handed to it. */
@@ -38,6 +38,10 @@ export function filingRow(state: LedgerState, item: LineItem, ctx: RulesContext)
   // category id then resolves to an empty path), and that is the one to send.
   const resolved = item.categoryId ? ctx.category(item.categoryId)?.path : undefined;
   const path = resolved && resolved.length ? resolved : item.categoryPath;
+  // The ledger keeps tax/shipping per item, but StepUp's form wants it for the whole quantity (10 at $1.00 with $0.07 each
+  // is $0.70 there), and its total is quantity x cost + that.
+  const qty = item.quantity && item.quantity > 0 ? item.quantity : 1;
+  const taxForQuantity = item.taxShippingCents === undefined ? undefined : Math.round(item.taxShippingCents * qty);
   const data: Record<string, string> = {
     ID: item.id,
     Child: child?.name ?? "",
@@ -50,8 +54,8 @@ export function filingRow(state: LedgerState, item: LineItem, ctx: RulesContext)
     Category: path?.join(" - ") ?? "",
     Quantity: item.quantity === undefined ? "" : String(item.quantity),
     Amount: dollars(item.amountCents),
-    "Tax, Shipping, etc.": dollars(item.taxShippingCents),
-    "Reim. $": dollars(requestedCents(item)),
+    "Tax, Shipping, etc.": dollars(taxForQuantity),
+    "Reim. $": dollars(Math.round((item.amountCents ?? 0) * qty) + (taxForQuantity ?? 0)),
     Vendor: effectiveVendor(item, purchase) ?? "",
     "Service Provider": item.serviceProvider ?? "",
     "Payment Method": state.paymentMethods[purchase?.paymentMethodId ?? ""]?.label ?? "",
