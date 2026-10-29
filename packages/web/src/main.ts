@@ -781,7 +781,26 @@ const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "
 const val = (form: HTMLFormElement, name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null)?.value.trim() ?? "";
 
 /** The folder was deleted or access was removed while open: same as having no folder. */
+/**
+ * Whether a failure means the saved folder itself is gone. A not-found/forbidden/invalid answer can come from one file or
+ * subfolder (an expired sign-in, a locked or unwritable file), so the folder is asked about directly before the person is
+ * made to choose it again.
+ */
+async function folderIsGone(ws: OpenWorkspace, err: unknown): Promise<boolean> {
+  if (!isDeadPointer(err)) return false;
+  try {
+    await storage.stat(ws.pointer.driveId, ws.pointer.rootId);
+    return false;
+  } catch (probe) {
+    return isDeadPointer(probe);
+  }
+}
+
+/** The year that was open when the folder was dropped, so choosing the folder again comes back to it, not the default year. */
+let droppedYear: string | undefined;
+
 async function dropWorkspace(): Promise<void> {
+  droppedYear = workspace?.year.label;
   forgetCache();
   clearPreviews();
   await clearCachedDocuments();
@@ -882,7 +901,7 @@ async function refreshInBackground(ws: OpenWorkspace): Promise<void> {
     if ((changed || sinceLines.length) && !typing()) render(); // never replace a form someone is typing in; the next action shows the update
   } catch (err) {
     if (workspace !== ws) return;
-    if (isDeadPointer(err)) await dropWorkspace();
+    if (await folderIsGone(ws, err)) await dropWorkspace();
     else status = `Showing saved data; could not refresh from ${storage.label} (${err instanceof Error ? err.message : err}).`;
     render();
   } finally {
@@ -901,7 +920,7 @@ async function guarded(action: () => Promise<void>, label = `Waiting for ${stora
   try {
     await action();
   } catch (err) {
-    if (workspace && isDeadPointer(err)) {
+    if (workspace && (await folderIsGone(workspace, err))) {
       await dropWorkspace();
     } else {
       status = err instanceof Error ? err.message : String(err);
@@ -3415,8 +3434,11 @@ async function pickerOpen(path: FolderEntry[]): Promise<void> {
 async function useFolder(folder: FolderEntry): Promise<void> {
   const pointer = await pointerFromFolder(folder);
   try {
-    attach(await openWorkspace(pointer, store.clientId));
+    attach(await openWorkspace(pointer, store.clientId, pointer.year ? undefined : droppedYear));
+    droppedYear = undefined;
     pendingYear = undefined;
+    // The screen it was left on may belong to another year; a purchase or statement that is not here goes back to the list.
+    if ((view.name === "purchase" && !view.draft && !ledger.state.purchases[view.id]) || (view.name === "statement" && !ledger.state.documents[view.id])) view = { name: "queue" };
   } catch (err) {
     if (err instanceof NoLedgerYearError) pendingYear = pointer;
     else throw err;
